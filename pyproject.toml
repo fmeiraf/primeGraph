@@ -6,7 +6,8 @@ authors = ["Fernando Meira <fmeira.filho@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = "^3.11"
+graphviz = "^0.20.3"
 
 
 [build-system]
