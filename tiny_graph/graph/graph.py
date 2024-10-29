@@ -1,4 +1,17 @@
-from typing import Any, Callable, Dict, List, NamedTuple, Optional, Self, Set, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    NamedTuple,
+    Optional,
+    Self,
+    Set,
+    Tuple,
+    Union,
+)
+
+from pydantic import BaseModel
 
 from tiny_graph.constants import END, START
 
@@ -19,6 +32,7 @@ class Graph:
         self.nodes: Dict[str, Node] = {}
         self.edges: Set[Edge] = set()
         self.is_compiled: bool = False
+        self.state: Union[BaseModel, NamedTuple, None] = None
 
     @property
     def _all_nodes(self) -> List[str]:
