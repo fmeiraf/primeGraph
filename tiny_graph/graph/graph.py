@@ -17,7 +17,7 @@ class Node(NamedTuple):
 class Graph:
     def __init__(self):
         self.nodes: Dict[str, Node] = {}
-        self.edges: Set[Tuple[str, str]] = set()
+        self.edges: Set[Edge] = set()
         self.is_compiled: bool = False
 
     @property
@@ -40,12 +40,14 @@ class Graph:
             raise ValueError(f"Node {name} is reserved")
         if action is None:
             raise ValueError("Action cannot be None")
+        if not callable(action):
+            raise ValueError("Action must be a callable")
 
         self.nodes[name] = Node(name, action, metadata)
         return self
 
     def add_edge(self, start_node: str, end_node: str) -> Self:
-        self.edges.add((start_node, end_node))
+        self.edges.add(Edge(start_node, end_node))
         return self
 
     def visualize(self, output_file: str = "graph") -> None:
