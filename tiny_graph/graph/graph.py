@@ -33,6 +33,7 @@ class Graph:
         self.edges: Set[Edge] = set()
         self.is_compiled: bool = False
         self.state: Union[BaseModel, NamedTuple, None] = None
+        self.state_schema: Dict[str, type] = _get_schema(self.state)
 
     @property
     def _all_nodes(self) -> List[str]:
@@ -98,3 +99,15 @@ class Graph:
 
         # Render the graph
         dot.render(output_file, view=True, format="pdf", cleanup=True)
+
+
+def _get_schema(state: Union[BaseModel, NamedTuple, None]) -> Dict[str, type]:
+    if isinstance(state, BaseModel):
+        pydantic_schema = {
+            field_name: field_info.annotation
+            for field_name, field_info in state.model_fields.items()
+        }
+        return pydantic_schema
+    elif isinstance(state, NamedTuple):
+        return state.__annotations__
+    return None
