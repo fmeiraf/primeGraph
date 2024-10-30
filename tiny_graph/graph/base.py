@@ -13,8 +13,6 @@ from typing import (
 
 from pydantic import BaseModel
 
-from tiny_graph.constants import END, START
-
 
 class Edge(NamedTuple):
     start_node: str
@@ -32,6 +30,7 @@ class Graph:
         self.nodes: Dict[str, Node] = {}
         self.edges: Set[Edge] = set()
         self.is_compiled: bool = False
+        self.tasks: List[Callable[..., None]] = []
         self.state: Union[BaseModel, NamedTuple, None] = None
         self.state_schema: Dict[str, type] = _get_schema(self.state)
 
@@ -43,26 +42,52 @@ class Graph:
     def _all_edges(self) -> Set[Tuple[str, str]]:
         return self.edges
 
-    def add_node(
-        self,
-        name: str,
-        action: Optional[Callable[..., None]],
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Self:
-        if name in self.nodes:
-            raise ValueError(f"Node {name} already exists")
-        if name == START or name == END:
-            raise ValueError(f"Node {name} is reserved")
-        if action is None:
-            raise ValueError("Action cannot be None")
-        if not callable(action):
-            raise ValueError("Action must be a callable")
+    def node(
+        self, name: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None
+    ):
+        """Decorator to add a node to the graph
 
-        self.nodes[name] = Node(name, action, metadata)
-        return self
+        Args:
+            name: Optional name for the node. If None, uses the function name
+            metadata: Optional metadata dictionary
+        """
+
+        def decorator(func: Callable[..., None]):
+            if self.is_compiled:
+                raise ValueError("Cannot add nodes after compiling the graph")
+            node_name = name if name is not None else func.__name__
+            self.add_node(node_name, func, metadata)
+            return func
+
+        return decorator
+
+    # def add_node(
+    #     self,
+    #     name: str,
+    #     action: Optional[Callable[..., None]],
+    #     metadata: Optional[Dict[str, Any]] = None,
+    # ) -> Self:
+    #     if name in self.nodes:
+    #         raise ValueError(f"Node {name} already exists")
+    #     if name == START or name == END:
+    #         raise ValueError(f"Node {name} is reserved")
+    #     if action is None:
+    #         raise ValueError("Action cannot be None")
+    #     if not callable(action):
+    #         raise ValueError("Action must be a callable")
+
+    #     self.nodes[name] = Node(name, action, metadata)
+    #     return self
 
     def add_edge(self, start_node: str, end_node: str) -> Self:
         self.edges.add(Edge(start_node, end_node))
+        return self
+
+    def compile(self, state: Union[BaseModel, NamedTuple, None] = None) -> Self:
+        for _, end in self.edges:
+            self.tasks.append(self.nodes[end].action)
+
+        self.is_compiled = True
         return self
 
     def visualize(self, output_file: str = "graph") -> None:
