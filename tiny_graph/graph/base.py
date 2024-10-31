@@ -26,13 +26,13 @@ class Node(NamedTuple):
 
 
 class Graph:
-    def __init__(self):
+    def __init__(self, state: Union[BaseModel, NamedTuple, None] = None):
         self.nodes: Dict[str, Node] = {}
         self.edges: Set[Edge] = set()
         self.is_compiled: bool = False
         self.tasks: List[Callable[..., None]] = []
-        self.state: Union[BaseModel, NamedTuple, None] = None
-        self.state_schema: Dict[str, type] = _get_schema(self.state)
+        self.state: Union[BaseModel, NamedTuple, None] = state
+        self.state_schema: Dict[str, type] = _get_schema(state)
 
     @property
     def _all_nodes(self) -> List[str]:
