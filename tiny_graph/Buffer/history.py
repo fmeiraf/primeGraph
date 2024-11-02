@@ -18,7 +18,7 @@ class HistoryBuffer(BaseBuffer):
                     f"Expected value of type {self.field_type}, got {type(new_value)}"
                 )
             self.value = self.value + [new_value]
-            self.last_value = self.value[-1]
+            self.last_value = new_value
             self.add_history(self.value, execution_id)
 
     def get(self) -> Any:
