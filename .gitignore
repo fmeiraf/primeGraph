@@ -1,5 +1,8 @@
 .DS_Store
 
+# cache
 __pycache__
+.pytest_cache
 
+# docs
 *.pdf
