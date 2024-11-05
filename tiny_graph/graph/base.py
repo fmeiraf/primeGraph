@@ -35,6 +35,8 @@ class Node(NamedTuple):
 class Graph:
     def __init__(self, state: Union[BaseModel, NamedTuple, None] = None):
         self.nodes: Dict[str, Node] = {}
+        self.nodes[START] = Node(START, lambda: None, None, False, False, None)
+        self.nodes[END] = Node(END, lambda: None, None, False, False, None)
         self.edges: Set[Edge] = set()
         self.is_compiled: bool = False
         self.tasks: List[Callable[..., None]] = []
@@ -112,39 +114,39 @@ class Graph:
         return decorator
 
     def add_edge(self, start_node: str, end_node: str) -> Self:
+        if start_node not in self.nodes or end_node not in self.nodes:
+            raise ValueError(
+                f"Both start_node '{start_node}' and end_node '{end_node}' must be added to the graph before adding an edge"
+            )
         self.edges.add(Edge(start_node, end_node))
         return self
 
     def validate(self) -> Self:
-        """Validate that all nodes are on valid paths from start nodes.
+        """Validate that the graph starts with '__start__', ends with '__end__', and all nodes are on valid paths.
 
         Raises:
-            ValueError: If orphaned nodes are found or if there are cycles in the graph
+            ValueError: If start/end nodes are missing, orphaned nodes are found, or if there are cycles
         """
-        # Find start nodes (nodes with no incoming edges)
-        incoming_edges = {edge.end_node for edge in self.edges}
-        start_nodes = set(self.nodes.keys()) - incoming_edges
+        # Check for required start and end nodes
+        if START not in self.nodes:
+            raise ValueError("Graph must have a '__start__' node")
+        if END not in self.nodes:
+            raise ValueError("Graph must have an '__end__' node")
 
-        if not start_nodes:
-            raise ValueError(
-                "Graph must have at least one start node (node with no incoming edges)"
-            )
+        # Track visited nodes starting from __start__
+        visited = set()
+        stack = set()  # For cycle detection
+        self._dfs_validate(START, visited, stack)
 
-        # Track visited nodes from all start nodes
-        visited_nodes = set()
+        # Check if __end__ is reachable
+        if END not in visited:
+            raise ValueError("'__end__' node is not reachable from '__start__'")
 
-        # Check for cycles and track visited nodes from each start node
-        for start_node in start_nodes:
-            visited = set()
-            stack = set()  # For cycle detection
-            self._dfs_validate(start_node, visited, stack)
-            visited_nodes.update(visited)
-
-        # Check for orphaned nodes (nodes not reachable from any start node)
-        orphaned_nodes = set(self.nodes.keys()) - visited_nodes
+        # Check for orphaned nodes (nodes not reachable from __start__)
+        orphaned_nodes = set(self.nodes.keys()) - visited
         if orphaned_nodes:
             raise ValueError(
-                f"Found orphaned nodes not reachable from any start node: {orphaned_nodes}"
+                f"Found orphaned nodes not reachable from '__start__': {orphaned_nodes}"
             )
 
         return True
