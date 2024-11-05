@@ -125,7 +125,7 @@ class Graph:
         """Validate that the graph starts with '__start__', ends with '__end__', and all nodes are on valid paths.
 
         Raises:
-            ValueError: If start/end nodes are missing, orphaned nodes are found, or if there are cycles
+            ValueError: If start/end nodes are missing, orphaned nodes are found, dead ends exist, or if there are cycles
         """
         # Check for required start and end nodes
         if START not in self.nodes:
@@ -147,6 +147,14 @@ class Graph:
         if orphaned_nodes:
             raise ValueError(
                 f"Found orphaned nodes not reachable from '__start__': {orphaned_nodes}"
+            )
+
+        # Check for dead ends (nodes with no outgoing edges, except END)
+        nodes_with_outgoing_edges = {edge.start_node for edge in self.edges}
+        dead_ends = set(self.nodes.keys()) - nodes_with_outgoing_edges - {END}
+        if dead_ends:
+            raise ValueError(
+                f"Found dead-end nodes with no outgoing edges: {dead_ends}"
             )
 
         return True
