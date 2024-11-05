@@ -225,6 +225,10 @@ class Graph:
         """
         from graphviz import Digraph
 
+        if not self.is_compiled:
+            print("Graph is not compiled. Compiling now...")
+            self.compile()
+
         dot = Digraph(comment="Graph Visualization")
         dot.attr(rankdir="LR")  # Left to right layout
 
