@@ -1,5 +1,6 @@
 import ast
 import inspect
+from dataclasses import dataclass
 from typing import (
     Any,
     Callable,
@@ -18,9 +19,13 @@ from pydantic import BaseModel
 from tiny_graph.constants import END, START
 
 
-class Edge(NamedTuple):
+@dataclass(frozen=True)
+class Edge:
     start_node: str
     end_node: str
+
+    def __hash__(self):
+        return hash((self.start_node, self.end_node))
 
 
 class Node(NamedTuple):
@@ -157,6 +162,26 @@ class Graph:
                 f"Found dead-end nodes with no outgoing edges: {dead_ends}"
             )
 
+        # Validate router nodes
+        for node_name, node in self.nodes.items():
+            if node.is_router and node.possible_routes:
+                # Check if all possible routes exist as nodes
+                invalid_routes = node.possible_routes - set(self.nodes.keys())
+                if invalid_routes:
+                    raise ValueError(
+                        f"Router node '{node_name}' contains invalid routes: {invalid_routes}"
+                    )
+
+                # Check if all edges from this router point to declared possible routes
+                router_edges = {
+                    edge.end_node for edge in self.edges if edge.start_node == node_name
+                }
+                invalid_edges = router_edges - set(node.possible_routes)
+                if invalid_edges:
+                    raise ValueError(
+                        f"Router node '{node_name}' has edges to undeclared routes: {invalid_edges}"
+                    )
+
         return True
 
     def _dfs_validate(self, node: str, visited: Set[str], stack: Set[str]) -> None:
@@ -189,30 +214,126 @@ class Graph:
 
         stack.remove(node)
 
+    def _find_execution_paths(self) -> List[Any]:
+        """Identifies execution paths in the graph with parallel and nested parallel paths."""
+
+        def get_next_nodes(node: str) -> List[str]:
+            return [edge.end_node for edge in self.edges if edge.start_node == node]
+
+        def get_prev_nodes(node: str) -> List[str]:
+            return [edge.start_node for edge in self.edges if edge.end_node == node]
+
+        def find_convergence_point(start_nodes: List[str]) -> str:
+            """Find where multiple paths converge."""
+            visited_by_path = {start: set([start]) for start in start_nodes}
+            current_nodes = {start: [start] for start in start_nodes}
+
+            while True:
+                # For each path, get the next node
+                for start in start_nodes:
+                    if current_nodes[start][-1] != END:
+                        next_node = get_next_nodes(current_nodes[start][-1])[0]
+                        visited_by_path[start].add(next_node)
+                        current_nodes[start].append(next_node)
+
+                # Check if any node is visited by multiple paths
+                all_visited = set()
+                for nodes in visited_by_path.values():
+                    intersection = all_visited.intersection(nodes)
+                    if intersection:
+                        return list(intersection)[0]
+                    all_visited.update(nodes)
+
+        def build_path_to_convergence(
+            start: str, convergence: str, visited: Set[str]
+        ) -> List[Any]:
+            """Build a path from start to convergence point."""
+            if start in visited:
+                return []
+
+            path = []
+            current = start
+            visited.add(current)
+
+            while current != convergence:
+                next_nodes = get_next_nodes(current)
+                if len(next_nodes) > 1:
+                    # Handle nested parallel paths
+                    nested_convergence = find_convergence_point(next_nodes)
+                    nested_paths = []
+                    for next_node in next_nodes:
+                        nested_path = build_path_to_convergence(
+                            next_node, nested_convergence, visited.copy()
+                        )
+                        if nested_path:
+                            nested_paths.append(nested_path)
+                    path.append(nested_paths)
+                    current = nested_convergence
+                else:
+                    path.append(current)
+                    current = next_nodes[0]
+                    visited.add(current)
+
+            return path if len(path) > 1 else path[0]
+
+        def build_execution_plan(current: str) -> List[Any]:
+            if current == END:
+                return []
+
+            next_nodes = get_next_nodes(current)
+
+            # Skip START node
+            if current == START:
+                return build_execution_plan(next_nodes[0])
+
+            # Handle parallel paths
+            if len(next_nodes) > 1:
+                convergence = find_convergence_point(next_nodes)
+                parallel_paths = []
+
+                for next_node in next_nodes:
+                    path = build_path_to_convergence(next_node, convergence, set())
+                    if isinstance(path, list) and len(path) == 1:
+                        path = path[0]
+                    parallel_paths.append(path)
+
+                return [current, parallel_paths] + build_execution_plan(convergence)
+
+            # Handle sequential path
+            return [current] + build_execution_plan(next_nodes[0])
+
+        # Build and clean the execution plan
+        plan = build_execution_plan(START)
+
+        def clean_plan(p):
+            if not isinstance(p, list):
+                return p
+            if len(p) == 1:
+                return clean_plan(p[0])
+            return [clean_plan(item) for item in p if item is not None]
+
+        return clean_plan(plan)
+
     def compile(self, state: Union[BaseModel, NamedTuple, None] = None) -> Self:
-        # Validate router nodes
-        for node_name, node in self.nodes.items():
-            if node.is_router and node.possible_routes:
-                # Check if all possible routes exist as nodes
-                invalid_routes = node.possible_routes - set(self.nodes.keys())
-                if invalid_routes:
-                    raise ValueError(
-                        f"Router node '{node_name}' contains invalid routes: {invalid_routes}"
-                    )
+        """Compiles the graph by validating and organizing execution paths."""
+        self.validate()
+        self.execution_plan = self._find_execution_paths()
 
-                # Check if all edges from this router point to declared possible routes
-                router_edges = {
-                    edge.end_node for edge in self.edges if edge.start_node == node_name
-                }
-                invalid_edges = router_edges - set(node.possible_routes)
-                if invalid_edges:
-                    raise ValueError(
-                        f"Router node '{node_name}' has edges to undeclared routes: {invalid_edges}"
-                    )
+        # Create tasks list based on execution plan
+        self.tasks = []
 
-        for _, end in self.edges:
-            self.tasks.append(self.nodes[end].action)
+        def add_tasks(plan):
+            for item in plan:
+                if isinstance(item, list):
+                    for subitem in item:
+                        if isinstance(subitem, list):
+                            add_tasks(subitem)
+                        else:
+                            self.tasks.append(self.nodes[subitem].action)
+                else:
+                    self.tasks.append(self.nodes[item].action)
 
+        add_tasks(self.execution_plan)
         self.is_compiled = True
         return self
 
@@ -255,9 +376,9 @@ class Graph:
                 fillcolor="lightblue",
             )
 
-        # Add edges
-        for start, end in self.edges:
-            dot.edge(start, end)
+        # Add edges - modified to use Edge objects
+        for edge in self.edges:
+            dot.edge(edge.start_node, edge.end_node)
 
         # Render the graph
         dot.render(output_file, view=True, format="pdf", cleanup=True)
