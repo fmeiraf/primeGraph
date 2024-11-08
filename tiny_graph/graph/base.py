@@ -267,14 +267,16 @@ class Graph:
                         )
                         if nested_path:
                             nested_paths.append(nested_path)
-                    path.append(nested_paths)
+                    path.extend(
+                        [current, nested_paths]
+                    )  # Add current node before nested paths
                     current = nested_convergence
                 else:
                     path.append(current)
                     current = next_nodes[0]
                     visited.add(current)
 
-            return path if len(path) > 1 else path[0]
+            return path
 
         def build_execution_plan(current: str) -> List[Any]:
             if current == END:
@@ -319,21 +321,6 @@ class Graph:
         self.validate()
         self.execution_plan = self._find_execution_paths()
 
-        # Create tasks list based on execution plan
-        self.tasks = []
-
-        def add_tasks(plan):
-            for item in plan:
-                if isinstance(item, list):
-                    for subitem in item:
-                        if isinstance(subitem, list):
-                            add_tasks(subitem)
-                        else:
-                            self.tasks.append(self.nodes[subitem].action)
-                else:
-                    self.tasks.append(self.nodes[item].action)
-
-        add_tasks(self.execution_plan)
         self.is_compiled = True
         return self
 
