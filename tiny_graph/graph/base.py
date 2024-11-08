@@ -21,6 +21,7 @@ from tiny_graph.constants import END, START
 
 @dataclass(frozen=True)
 class Edge:
+    id: Optional[str]
     start_node: str
     end_node: str
 
@@ -47,6 +48,9 @@ class Graph:
         self.tasks: List[Callable[..., None]] = []
         self.state: Union[BaseModel, NamedTuple, None] = state
         self.state_schema: Dict[str, type] = _get_schema(state)
+        self.edge_counter: Dict[
+            Tuple[str, str], int
+        ] = {}  # Track edge counts between node pairs
 
     @property
     def _all_nodes(self) -> List[str]:
@@ -118,12 +122,21 @@ class Graph:
 
         return decorator
 
-    def add_edge(self, start_node: str, end_node: str) -> Self:
+    def add_edge(
+        self, start_node: str, end_node: str, id: Optional[str] = None
+    ) -> Self:
         if start_node not in self.nodes or end_node not in self.nodes:
             raise ValueError(
                 f"Both start_node '{start_node}' and end_node '{end_node}' must be added to the graph before adding an edge"
             )
-        self.edges.add(Edge(start_node, end_node))
+
+        # Auto-generate edge ID if not provided
+        if id is None:
+            node_pair = (start_node, end_node)
+            self.edge_counter[node_pair] = self.edge_counter.get(node_pair, 0) + 1
+            id = f"{start_node}_to_{end_node}_{self.edge_counter[node_pair]}"
+
+        self.edges.add(Edge(id=id, start_node=start_node, end_node=end_node))
         return self
 
     def validate(self) -> Self:
@@ -369,6 +382,24 @@ class Graph:
 
         # Render the graph
         dot.render(output_file, view=True, format="pdf", cleanup=True)
+
+    def find_edges(
+        self,
+        start_node: Optional[str] = None,
+        end_node: Optional[str] = None,
+        edge_id: Optional[str] = None,
+    ) -> Set[Edge]:
+        """Find edges matching the given criteria"""
+        result = self.edges
+
+        if edge_id:
+            result = {edge for edge in result if edge.id == edge_id}
+        if start_node:
+            result = {edge for edge in result if edge.start_node == start_node}
+        if end_node:
+            result = {edge for edge in result if edge.end_node == end_node}
+
+        return result
 
 
 def _get_schema(state: Union[BaseModel, NamedTuple, None]) -> Dict[str, type]:
