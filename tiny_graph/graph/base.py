@@ -38,7 +38,7 @@ class Node(NamedTuple):
     possible_routes: Optional[Set[str]] = None
 
 
-class Graph:
+class BaseGraph:
     def __init__(self, state: Union[BaseModel, NamedTuple, None] = None):
         self.nodes: Dict[str, Node] = {}
         self.nodes[START] = Node(START, lambda: None, None, False, False, None)

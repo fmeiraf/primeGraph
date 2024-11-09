@@ -4,7 +4,7 @@ import pytest
 from pydantic import BaseModel
 
 from tiny_graph.constants import END, START
-from tiny_graph.graph.base import Edge, Graph
+from tiny_graph.graph.base import BaseGraph, Edge
 
 
 # Test fixtures and helper classes
@@ -20,12 +20,12 @@ class _TestNamedTupleState(NamedTuple):
 
 @pytest.fixture
 def empty_graph():
-    return Graph()
+    return BaseGraph()
 
 
 @pytest.fixture
 def basic_graph():
-    graph = Graph()
+    graph = BaseGraph()
 
     @graph.node()
     def start():
@@ -43,7 +43,7 @@ def basic_graph():
 
 @pytest.fixture
 def invalid_graph():
-    graph = Graph()
+    graph = BaseGraph()
 
     @graph.node()
     def start():
@@ -70,7 +70,7 @@ def invalid_graph():
 
 @pytest.fixture
 def simple_fan_graph():
-    graph = Graph()
+    graph = BaseGraph()
 
     @graph.node()
     def escape():
@@ -110,7 +110,7 @@ def simple_fan_graph():
 
 @pytest.fixture
 def complex_fan_graph():
-    graph = Graph()
+    graph = BaseGraph()
 
     @graph.node()
     def escape():
@@ -167,7 +167,7 @@ def complex_fan_graph():
 
 # Test basic graph creation and properties
 def test_graph_initialization():
-    graph = Graph()
+    graph = BaseGraph()
     assert graph.edges == set()
     assert not graph.is_compiled
     assert START in graph.nodes
@@ -176,13 +176,13 @@ def test_graph_initialization():
 
 def test_graph_with_pydantic_state():
     state = _TestState(value=1, name="test")
-    graph = Graph(state)
+    graph = BaseGraph(state)
     assert graph.state_schema == {"value": int, "name": str}
 
 
 def test_graph_with_namedtuple_state():
     state = _TestNamedTupleState(1, "test")
-    graph = Graph(state)
+    graph = BaseGraph(state)
     assert graph.state_schema == {"value": int, "name": str}
 
 
@@ -245,7 +245,7 @@ def test_compile_valid_graph(basic_graph):
 
 
 def test_compile_invalid_router():
-    graph = Graph()
+    graph = BaseGraph()
 
     @graph.node()
     def router():
