@@ -21,9 +21,9 @@ from tiny_graph.constants import END, START
 
 @dataclass(frozen=True)
 class Edge:
-    id: Optional[str]
     start_node: str
     end_node: str
+    id: Optional[str]
 
     def __hash__(self):
         return hash((self.start_node, self.end_node))
