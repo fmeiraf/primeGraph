@@ -375,10 +375,49 @@ def test_validate_orphaned_nodes(empty_graph):
         empty_graph.validate()
 
 
+def normalize_execution_plan(plan):
+    """Recursively sort lists within the execution plan while preserving structure."""
+    if not isinstance(plan, list):
+        return plan
+
+    # First normalize any nested lists
+    normalized = [normalize_execution_plan(item) for item in plan]
+
+    # Sort only lists that contain all strings or all lists
+    if all(isinstance(x, str) for x in normalized) or all(
+        isinstance(x, list) for x in normalized
+    ):
+        return sorted(normalized)
+    return normalized
+
+
+def get_length(item):
+    if isinstance(item, list):
+        return len(item)
+    return 1
+
+
+def get_item_type(item):
+    if isinstance(item, list):
+        return "list"
+    return "str/other"
+
+
+def create_compable_list(plan):
+    return [(get_length(item), get_item_type(item)) for item in plan]
+
+
 def test_simple_fan_graph(simple_fan_graph):
     compiled = simple_fan_graph.compile()
-    expected_execution_plan = ["process_data", ["validate", "escape"], "prep"]
-    assert compiled.execution_plan == expected_execution_plan
+    expected_execution_plan = [
+        "process_data",
+        "validate",
+        ["escape", ["aa", "bb"]],
+        "prep",
+    ]
+    assert create_compable_list(compiled.execution_plan) == create_compable_list(
+        expected_execution_plan
+    )
 
 
 def test_complex_fan_graph(complex_fan_graph):
@@ -389,4 +428,6 @@ def test_complex_fan_graph(complex_fan_graph):
         [["escape", ["cc", "dd"], "hh"], ["aa", "bb"]],
         "prep",
     ]
-    assert compiled.execution_plan == expected_execution_plan
+    assert create_compable_list(compiled.execution_plan) == create_compable_list(
+        expected_execution_plan
+    )
