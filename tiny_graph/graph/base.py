@@ -82,6 +82,11 @@ class BaseGraph:
                     pass
         return return_values
 
+    def _force_compile(self):
+        if not self.is_compiled:
+            print("Graph not compiled. Compiling now..")
+            self.compile()
+
     def node(
         self,
         name: Optional[str] = None,
@@ -346,9 +351,7 @@ class BaseGraph:
         """
         from graphviz import Digraph
 
-        if not self.is_compiled:
-            print("Graph is not compiled. Compiling now...")
-            self.compile()
+        self._force_compile()
 
         dot = Digraph(comment="Graph Visualization")
         dot.attr(rankdir="LR")  # Left to right layout
