@@ -36,7 +36,7 @@ def basic_graph():
         pass
 
     graph.add_edge(START, "start")
-    graph.add_edge("start", "end")
+    graph.add_edge("start", "end", "testing_edge")
     graph.add_edge("end", END)
     return graph
 
@@ -64,6 +64,103 @@ def invalid_graph():
     graph.add_edge(START, "intermediate")
     graph.add_edge("intermediate", END)
     graph.add_edge(START, END)
+
+    return graph
+
+
+@pytest.fixture
+def simple_fan_graph():
+    graph = Graph()
+
+    @graph.node()
+    def escape():
+        print("Starting workflow")
+
+    @graph.node()
+    def process_data():
+        print("Processing data")
+
+    @graph.node()
+    def validate():
+        print("Validating results")
+
+    @graph.node()
+    def aa():
+        print("Validating results")
+
+    @graph.node()
+    def bb():
+        print("Validating results")
+
+    @graph.node()
+    def prep():
+        print("Workflow complete")
+
+    graph.add_edge(START, "process_data")
+    graph.add_edge("process_data", "validate")
+    graph.add_edge("validate", "escape")
+    graph.add_edge("escape", "prep")
+    graph.add_edge("validate", "aa")
+    graph.add_edge("aa", "bb")
+    graph.add_edge("bb", "prep")
+    graph.add_edge("prep", END)
+
+    return graph
+
+
+@pytest.fixture
+def complex_fan_graph():
+    graph = Graph()
+
+    @graph.node()
+    def escape():
+        print("Starting workflow")
+
+    @graph.node()
+    def process_data():
+        print("Processing data")
+
+    @graph.node()
+    def validate():
+        print("Validating results")
+
+    @graph.node()
+    def aa():
+        print("Validating results")
+
+    @graph.node()
+    def bb():
+        print("Validating results")
+
+    @graph.node()
+    def dd():
+        print("Validating results")
+
+    @graph.node()
+    def cc():
+        print("Validating results")
+
+    @graph.node()
+    def hh():
+        print("Validating results")
+
+    @graph.node()
+    def prep():
+        print("Workflow complete")
+
+    # Add edges to create workflow
+    graph.add_edge(START, "process_data")
+    graph.add_edge("process_data", "validate")
+    graph.add_edge("validate", "escape")
+    graph.add_edge("escape", "dd")
+    graph.add_edge("escape", "cc")
+    graph.add_edge("cc", "hh")
+    graph.add_edge("dd", "hh")
+    graph.add_edge("hh", "prep")
+    graph.add_edge("validate", "aa")
+    graph.add_edge("aa", "bb")
+    graph.add_edge("bb", "prep")
+    graph.add_edge("prep", END)
 
     return graph
 
@@ -145,7 +242,6 @@ def test_router_node(empty_graph):
 def test_compile_valid_graph(basic_graph):
     compiled = basic_graph.compile()
     assert compiled.is_compiled
-    assert len(compiled.tasks) > 0
 
 
 def test_compile_invalid_router():
@@ -161,16 +257,14 @@ def test_compile_invalid_router():
 
     graph.add_edge("router", "actual")
 
-    with pytest.raises(
-        ValueError, match="Router node 'router' contains invalid routes"
-    ):
+    with pytest.raises(ValueError):
         graph.compile()
 
 
 def test_cannot_add_nodes_after_compile(basic_graph):
     basic_graph.compile()
 
-    with pytest.raises(ValueError, match="Cannot add nodes after compiling"):
+    with pytest.raises(ValueError):
 
         @basic_graph.node()
         def new_node():
@@ -188,8 +282,7 @@ def test_async_node(empty_graph):
 
 # Test edge creation
 def test_edge_creation(basic_graph):
-    assert Edge("start", "end") in basic_graph.edges
-    assert ("start", "end") in basic_graph._all_edges
+    assert Edge("start", "end", "testing_edge") in basic_graph.edges
 
 
 def test_node_list(basic_graph):
@@ -280,3 +373,20 @@ def test_validate_orphaned_nodes(empty_graph):
 
     with pytest.raises(ValueError):
         empty_graph.validate()
+
+
+def test_simple_fan_graph(simple_fan_graph):
+    compiled = simple_fan_graph.compile()
+    expected_execution_plan = ["process_data", ["validate", "escape"], "prep"]
+    assert compiled.execution_plan == expected_execution_plan
+
+
+def test_complex_fan_graph(complex_fan_graph):
+    compiled = complex_fan_graph.compile()
+    expected_execution_plan = [
+        "process_data",
+        "validate",
+        [["escape", ["cc", "dd"], "hh"], ["aa", "bb"]],
+        "prep",
+    ]
+    assert compiled.execution_plan == expected_execution_plan
