@@ -1,3 +1,4 @@
+import concurrent.futures
 from typing import Any, Callable, List, Literal, NamedTuple, Union
 
 from pydantic import BaseModel
@@ -45,5 +46,61 @@ class Graph(BaseGraph):
 
         return [create_executable_node(item) for item in self.execution_plan]
 
-    def execute(self, execution_id: str) -> None:
-        pass
+    def execute(self, execution_id: str = None) -> None:
+        """Execute the graph with concurrent and sequential execution based on the execution plan.
+
+        Args:
+            execution_id: Unique identifier for this execution
+        """
+
+        def execute_node(node: ExecutableNode, timeout: int = 30) -> None:
+            """Execute a single node or group of nodes with proper concurrency handling."""
+            if node.execution_type == "sequential":
+                # For sequential nodes, simply execute each task in order
+                for task in node.task_list:
+                    try:
+                        task()
+                    except Exception as e:
+                        raise RuntimeError(
+                            f"Error in node {node.node_name}: {str(e)}"
+                        ) from e
+
+            else:  # parallel execution
+                # Create a thread pool for parallel execution
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    # Submit all tasks/nested nodes
+                    futures = []
+                    for task in node.task_list:
+                        if isinstance(task, ExecutableNode):
+                            # Handle nested nodes recursively
+                            futures.append(executor.submit(execute_node, task))
+                        else:
+                            futures.append(executor.submit(task))
+
+                    # Wait for all tasks to complete with timeout
+                    try:
+                        concurrent.futures.wait(
+                            futures,
+                            timeout=timeout,
+                            return_when=concurrent.futures.ALL_COMPLETED,
+                        )
+
+                        # Check for exceptions
+                        for future in futures:
+                            if future.exception():
+                                raise RuntimeError(
+                                    f"Error in parallel execution of {node.node_name}: {str(future.exception())}"
+                                ) from future.exception()
+
+                    except concurrent.futures.TimeoutError:
+                        # Cancel all pending tasks if timeout occurs
+                        for future in futures:
+                            future.cancel()
+                        raise TimeoutError(
+                            f"Execution timeout in node {node.node_name}"
+                        )
+
+        # Convert the execution plan and execute
+        execution_plan = self._convert_execution_plan()
+        for node in execution_plan:
+            execute_node(node)
