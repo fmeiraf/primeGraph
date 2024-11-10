@@ -111,30 +111,95 @@ def test_execution_plan_invalid_input(basic_graph):
         basic_graph._convert_execution_plan()
 
 
-# # Test basic graph creation and properties
-# def test_execution_order(basic_graph):
-#     pass
+def test_find_execution_paths_with_edges(basic_graph):
+    # Get the execution plan with edges
+    edge_plan = basic_graph._find_execution_paths_with_edges()
 
+    def flatten_edge_plan(plan):
+        """Helper to flatten the nested structure into a set of edge IDs"""
+        edges = set()
+        for item in plan:
+            if isinstance(item, str):
+                edges.add(item)
+            elif isinstance(item, list):
+                edges.update(flatten_edge_plan(item))
+        return edges
 
-# def test_state_updates(basic_graph):
-#     pass
+    # Get all edges from the plan
+    all_edges = flatten_edge_plan(edge_plan)
 
+    # Verify required edges exist
+    expected_edges = {
+        "__start___to_process_data_1",
+        "process_data_to_validate_1",
+        "validate_to_escape_1",
+        "validate_to_aa_1",
+        "escape_to_dd_1",
+        "escape_to_cc_1",
+        "dd_to_hh_1",
+        "cc_to_hh_1",
+        "hh_to_prep_1",
+        "aa_to_bb_1",
+        "bb_to_prep_1",
+    }
+    assert expected_edges == all_edges
 
-# def test_concurrency(basic_graph):
-#     pass
+    def verify_structure(plan):
+        """Verify the structural properties of the execution plan"""
+        if not plan:
+            return True
 
+        # If it's a single edge, it should be a string
+        if isinstance(plan, str):
+            return True
 
-# def test_checkpoints(basic_graph):
-#     pass
+        # If it's a list, verify each element
+        if isinstance(plan, list):
+            # Parallel paths should be lists within lists
+            for item in plan:
+                if not (isinstance(item, str) or isinstance(item, list)):
+                    return False
+                if not verify_structure(item):
+                    return False
+            return True
 
+        return False
 
-# def test_jump_execution(basic_graph):
-#     pass
+    # Verify the overall structure is valid
+    assert verify_structure(edge_plan)
 
+    # Verify some key relationships without caring about exact order
+    def find_path_containing(edges, start_edge, end_edge):
+        """Check if there exists a path containing both edges in the nested structure"""
 
-# def test_interrupt_execution(basic_graph):
-#     pass
+        def check_sublist(sublist):
+            if isinstance(sublist, str):
+                return False
 
+            found_start = False
+            found_end = False
 
-# def test_error_handling(basic_graph):
-#     pass
+            for item in sublist:
+                if isinstance(item, str):
+                    if item == start_edge:
+                        found_start = True
+                    if item == end_edge:
+                        found_end = True
+                elif isinstance(item, list):
+                    if check_sublist(item):
+                        return True
+
+            return found_start and found_end
+
+        return check_sublist(edges)
+
+    # Verify some key path relationships
+    assert find_path_containing(
+        edge_plan, "__start___to_process_data_1", "process_data_to_validate_1"
+    )
+
+    # Verify parallel paths exist after validate
+    parallel_paths_exist = any(
+        isinstance(item, list) and len(item) > 1 for item in edge_plan
+    )
+    assert parallel_paths_exist
