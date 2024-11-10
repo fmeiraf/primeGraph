@@ -337,111 +337,29 @@ class BaseGraph:
     def _find_execution_paths_with_edges(self) -> List[Any]:
         """Similar to _find_execution_paths but returns edge IDs instead of node names."""
 
-        def get_next_edges(node: str) -> List[Edge]:
-            return [edge for edge in self.edges if edge.start_node == node]
+        def find_all_edges_with_node(node_name):
+            edges = [edge.id for edge in self.edges if edge.end_node == node_name]
+            return edges if len(edges) > 1 else edges[0]
 
-        def get_prev_edges(node: str) -> List[Edge]:
-            return [edge for edge in self.edges if edge.end_node == node]
+        def scan_execution_plan(execution_plan):
+            final_edge_plan = []
+            for step in execution_plan:
+                if isinstance(step, list):
+                    nested_result = [
+                        scan_execution_plan(node)
+                        if isinstance(node, list)
+                        else find_all_edges_with_node(node)
+                        for node in step
+                    ]
 
-        def find_convergence_point(start_edges: List[Edge]) -> str:
-            """Find where multiple paths converge."""
-            visited_by_path = {edge: set([edge.end_node]) for edge in start_edges}
-            current_nodes = {edge: [edge.end_node] for edge in start_edges}
-
-            while True:
-                # For each path, get the next node
-                for start_edge in start_edges:
-                    if current_nodes[start_edge][-1] != END:
-                        next_edge = get_next_edges(current_nodes[start_edge][-1])[0]
-                        visited_by_path[start_edge].add(next_edge.end_node)
-                        current_nodes[start_edge].append(next_edge.end_node)
-
-                # Check if any node is visited by multiple paths
-                all_visited = set()
-                for nodes in visited_by_path.values():
-                    intersection = all_visited.intersection(nodes)
-                    if intersection:
-                        return list(intersection)[0]
-                    all_visited.update(nodes)
-
-        def build_path_to_convergence(
-            start_edge: Edge, convergence: str, visited: Set[str]
-        ) -> List[Any]:
-            """Build a path from start to convergence point using edge IDs."""
-            if start_edge.end_node in visited:
-                return []
-
-            path = []
-            current_node = start_edge.end_node
-            visited.add(current_node)
-
-            while current_node != convergence:
-                next_edges = get_next_edges(current_node)
-                if len(next_edges) > 1:
-                    # Handle nested parallel paths
-                    nested_convergence = find_convergence_point(next_edges)
-                    nested_paths = []
-                    for next_edge in next_edges:
-                        nested_path = build_path_to_convergence(
-                            next_edge, nested_convergence, visited.copy()
-                        )
-                        if nested_path:
-                            nested_paths.append(nested_path)
-                    path.extend([start_edge.id, nested_paths])
-                    current_node = nested_convergence
+                    final_edge_plan.append(nested_result)
                 else:
-                    path.append(start_edge.id)
-                    if next_edges:  # Check if there are next edges
-                        current_node = next_edges[0].end_node
-                        visited.add(current_node)
+                    result = find_all_edges_with_node(step)
+                    final_edge_plan.append(result)
 
-            return path
+            return final_edge_plan
 
-        def build_execution_plan(current_node: str) -> List[Any]:
-            if current_node == END:
-                return []
-
-            next_edges = get_next_edges(current_node)
-
-            # Skip START node
-            if current_node == START:
-                return build_execution_plan(next_edges[0].end_node)
-
-            # Handle parallel paths
-            if len(next_edges) > 1:
-                convergence = find_convergence_point(next_edges)
-                parallel_paths = []
-
-                for next_edge in next_edges:
-                    path = build_path_to_convergence(next_edge, convergence, set())
-                    if isinstance(path, list) and len(path) == 1:
-                        path = path[0]
-                    parallel_paths.append(path)
-
-                first_edge = [
-                    edge for edge in self.edges if edge.end_node == current_node
-                ][0]
-                return [first_edge.id, parallel_paths] + build_execution_plan(
-                    convergence
-                )
-
-            # Handle sequential path
-            first_edge = [edge for edge in self.edges if edge.end_node == current_node][
-                0
-            ]
-            return [first_edge.id] + build_execution_plan(next_edges[0].end_node)
-
-        # Build and clean the execution plan
-        plan = build_execution_plan(START)
-
-        def clean_plan(p):
-            if not isinstance(p, list):
-                return p
-            if len(p) == 1:
-                return clean_plan(p[0])
-            return [clean_plan(item) for item in p if item is not None]
-
-        return clean_plan(plan)
+        return scan_execution_plan(self.execution_plan)
 
     def compile(self, state: Union[BaseModel, NamedTuple, None] = None) -> Self:
         """Compiles the graph by validating and organizing execution paths."""
