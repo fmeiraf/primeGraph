@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from tiny_graph.constants import END, START
@@ -203,3 +205,86 @@ def test_find_execution_paths_with_edges(basic_graph):
         isinstance(item, list) and len(item) > 1 for item in edge_plan
     )
     assert parallel_paths_exist
+
+
+def test_parallel_execution():
+    # Create a list to track execution order
+    execution_order = []
+
+    basic_graph = Graph()
+
+    # Override the existing nodes with new ones that track execution
+    @basic_graph.node()
+    def task1():
+        execution_order.append("task1")
+
+    @basic_graph.node()
+    def task2():
+        execution_order.append("task2")
+
+    @basic_graph.node()
+    def task3():
+        execution_order.append("task3")
+
+    basic_graph.add_edge(START, "task1")
+    basic_graph.add_edge("task1", "task2")
+    basic_graph.add_edge("task1", "task3")
+    basic_graph.add_edge("task2", END)
+    basic_graph.add_edge("task3", END)
+    basic_graph.compile()
+
+    # Execute the graph
+    basic_graph.execute()
+
+    # Verify task1 was executed first
+    assert execution_order[0] == "task1"
+
+    # Verify task2 and task3 were both executed after task1
+    assert set(execution_order[1:]) == {"task2", "task3"}
+    assert len(execution_order) == 3
+
+
+def test_parallel_execution_with_error():
+    basic_graph = Graph()
+
+    @basic_graph.node()
+    def failing_task():
+        raise ValueError("Task failed")
+
+    @basic_graph.node()
+    def normal_task():
+        pass
+
+    basic_graph.add_edge(START, "failing_task")
+    basic_graph.add_edge("failing_task", "normal_task")
+    basic_graph.add_edge("normal_task", END)
+    basic_graph.compile()
+
+    # Verify the error is propagated
+    with pytest.raises(RuntimeError) as exc_info:
+        basic_graph.execute()
+
+    assert "Task failed" in str(exc_info.value)
+
+
+def test_parallel_execution_timeout():
+    basic_graph = Graph()
+
+    @basic_graph.node()
+    def slow_task():
+        time.sleep(3)  # Task that takes too long
+
+    @basic_graph.node()
+    def normal_task():
+        pass
+
+    basic_graph.add_edge(START, "slow_task")
+    basic_graph.add_edge("slow_task", "normal_task")
+    basic_graph.add_edge("normal_task", END)
+    basic_graph.compile()
+
+    # Verify timeout error is raised
+    with pytest.raises(TimeoutError) as exc_info:
+        basic_graph.execute(timeout=1)
+
+    assert "Execution timeout" in str(exc_info.value)
