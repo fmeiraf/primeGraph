@@ -46,25 +46,34 @@ class Graph(BaseGraph):
 
         return [create_executable_node(item) for item in self.execution_plan]
 
-    def execute(self, execution_id: str = None) -> None:
+    def execute(
+        self, execution_id: str = None, timeout: Union[int, float] = 30
+    ) -> None:
         """Execute the graph with concurrent and sequential execution based on the execution plan.
 
         Args:
             execution_id: Unique identifier for this execution
         """
 
-        def execute_node(node: ExecutableNode, timeout: int = 30) -> None:
+        def execute_node(node: ExecutableNode) -> None:
             """Execute a single node or group of nodes with proper concurrency handling."""
             if node.execution_type == "sequential":
-                # For sequential nodes, simply execute each task in order
+                # For sequential nodes, execute each task with timeout
                 for task in node.task_list:
                     try:
-                        task()
+                        # Use ThreadPoolExecutor for timeout even in sequential case
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(task)
+                            # Wait for the task to complete with timeout
+                            future.result(timeout=timeout)
+                    except concurrent.futures.TimeoutError:
+                        raise TimeoutError(
+                            f"Execution timeout in sequential node {node.node_name}"
+                        )
                     except Exception as e:
                         raise RuntimeError(
                             f"Error in node {node.node_name}: {str(e)}"
                         ) from e
-
             else:  # parallel execution
                 # Create a thread pool for parallel execution
                 with concurrent.futures.ThreadPoolExecutor() as executor:
