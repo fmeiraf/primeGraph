@@ -46,6 +46,12 @@ class BaseGraph:
         self.edges: Set[Edge] = set()
         self.is_compiled: bool = False
         self.tasks: List[Callable[..., None]] = []
+
+        # Validate state type
+        if state is not None and not isinstance(state, (BaseModel, NamedTuple)):
+            raise TypeError(
+                "State must be either a Pydantic BaseModel, NamedTuple, or None"
+            )
         self.state: Union[BaseModel, NamedTuple, None] = state
         self.state_schema: Dict[str, type] = _get_schema(state)
         self.edge_counter: Dict[
