@@ -1,10 +1,12 @@
 import concurrent.futures
-from typing import Any, Callable, List, Literal, NamedTuple, Union
+from typing import Any, Callable, Dict, List, Literal, NamedTuple, Union
 
 from pydantic import BaseModel
 
-# from tiny_graph.Buffer.last_value import Buffer
+from tiny_graph.buffer.base import BaseBuffer
+from tiny_graph.buffer.factory import BufferFactory
 from tiny_graph.graph.base import BaseGraph
+from tiny_graph.models.base import GraphState
 
 
 class ExecutableNode(NamedTuple):
@@ -16,10 +18,26 @@ class ExecutableNode(NamedTuple):
 class Graph(BaseGraph):
     def __init__(self, state: Union[BaseModel, NamedTuple, None] = None):
         super().__init__(state)
-        # self.buffers: Dict[str, Buffer] = {
-        #     field_name: Buffer(field_name, field_type)
-        #     for field_name, field_type in self.state_schema.items()
-        # }
+        self.state = state
+        self.state_schema = self._get_schema(state)
+        self.buffers: Dict[str, BaseBuffer] = {}
+        if self.state_schema:
+            self._assign_buffers()
+
+    def _assign_buffers(self):
+        self.buffers = {
+            field_name: BufferFactory.create_buffer(field_name, field_type)
+            for field_name, field_type in self.state_schema.items()
+        }
+
+    def _get_schema(self, state: Union[BaseModel, NamedTuple, None]) -> Dict[str, type]:
+        if isinstance(state, (BaseModel, GraphState)) and hasattr(
+            state, "get_buffer_types"
+        ):
+            return state.get_buffer_types()
+        elif isinstance(state, tuple) and hasattr(state, "_fields"):
+            return state.__annotations__
+        return None
 
     def _convert_execution_plan(self) -> List[Any]:
         """Converts the execution plan to a list of functions that have concurrency flags"""
@@ -58,13 +76,26 @@ class Graph(BaseGraph):
         def execute_node(node: ExecutableNode) -> None:
             """Execute a single node or group of nodes with proper concurrency handling."""
             if node.execution_type == "sequential":
-                # For sequential nodes, execute each task with timeout
                 for task in node.task_list:
                     try:
-                        # Use ThreadPoolExecutor for timeout even in sequential case
                         with concurrent.futures.ThreadPoolExecutor() as executor:
-                            future = executor.submit(task)
-                            # Wait for the task to complete with timeout
+
+                            def wrapped_task():
+                                result = (
+                                    task(state=self.state)
+                                    if self._has_state
+                                    else task()
+                                )
+                                # Update buffers with the result if it's returned
+                                if result is not None and self._has_state:
+                                    for field_name, value in result.items():
+                                        if field_name in self.buffers:
+                                            self.buffers[field_name].update(
+                                                value, execution_id=node.node_name
+                                            )
+                                return result
+
+                            future = executor.submit(wrapped_task)
                             future.result(timeout=timeout)
                     except concurrent.futures.TimeoutError:
                         raise TimeoutError(
@@ -75,18 +106,30 @@ class Graph(BaseGraph):
                             f"Error in node {node.node_name}: {str(e)}"
                         ) from e
             else:  # parallel execution
-                # Create a thread pool for parallel execution
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    # Submit all tasks/nested nodes
                     futures = []
                     for task in node.task_list:
                         if isinstance(task, ExecutableNode):
-                            # Handle nested nodes recursively
                             futures.append(executor.submit(execute_node, task))
                         else:
-                            futures.append(executor.submit(task))
 
-                    # Wait for all tasks to complete with timeout
+                            def wrapped_task():
+                                result = (
+                                    task(state=self.state)
+                                    if self._has_state
+                                    else task()
+                                )
+                                # Update buffers with the result if it's returned
+                                if result is not None and self._has_state:
+                                    for field_name, value in result.items():
+                                        if field_name in self.buffers:
+                                            self.buffers[field_name].update(
+                                                value, execution_id=node.node_name
+                                            )
+                                return result
+
+                            futures.append(executor.submit(wrapped_task))
+
                     try:
                         concurrent.futures.wait(
                             futures,
@@ -94,7 +137,6 @@ class Graph(BaseGraph):
                             return_when=concurrent.futures.ALL_COMPLETED,
                         )
 
-                        # Check for exceptions
                         for future in futures:
                             if future.exception():
                                 raise RuntimeError(
@@ -102,14 +144,12 @@ class Graph(BaseGraph):
                                 ) from future.exception()
 
                     except concurrent.futures.TimeoutError:
-                        # Cancel all pending tasks if timeout occurs
                         for future in futures:
                             future.cancel()
                         raise TimeoutError(
                             f"Execution timeout in node {node.node_name}"
                         )
 
-        # Convert the execution plan and execute
         execution_plan = self._convert_execution_plan()
         for node in execution_plan:
             execute_node(node)

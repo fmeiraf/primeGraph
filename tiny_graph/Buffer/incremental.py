@@ -1,6 +1,6 @@
 from typing import Any, Union
 
-from .base_buffer import BaseBuffer
+from tiny_graph.buffer.base import BaseBuffer
 
 
 class IncrementalBuffer(BaseBuffer):
@@ -13,13 +13,11 @@ class IncrementalBuffer(BaseBuffer):
 
     def update(self, new_value: Any, execution_id: str) -> None:
         with self._lock:
-            if not isinstance(new_value, self.field_type):
-                raise TypeError(
-                    f"Expected value of type {self.field_type}, got {type(new_value)}"
-                )
+            self._enforce_type(new_value)
             self.value = self.value + new_value
             self.last_value = self.value
             self.add_history(self.value, execution_id)
+            self._consumed = False
 
     def get(self) -> Any:
         with self._lock:

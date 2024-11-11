@@ -53,7 +53,8 @@ class BaseGraph:
                 "State must be either a Pydantic BaseModel, NamedTuple, or None"
             )
         self.state: Union[BaseModel, NamedTuple, None] = state
-        self.state_schema: Dict[str, type] = _get_schema(state)
+        self._has_state = state is not None
+
         self.edge_counter: Dict[
             Tuple[str, str], int
         ] = {}  # Track edge counts between node pairs
@@ -120,6 +121,15 @@ class BaseGraph:
             # Check if this is a router node by looking for return statements
             return_values = self._get_return_values(func)
             is_router = len(return_values) > 0
+
+            # Check if function accepts state parameter when graph has state
+            if hasattr(self, "_has_state") and self._has_state:
+                sig = inspect.signature(func)
+                if "state" not in sig.parameters:
+                    raise ValueError(
+                        f"Node function '{func.__name__}' must accept 'state' parameter when graph has state. "
+                        f"Update your function definition to: def {func.__name__}(state) -> Dict"
+                    )
 
             self.nodes[node_name] = Node(
                 node_name,
@@ -437,17 +447,3 @@ class BaseGraph:
             result = {edge for edge in result if edge.end_node == end_node}
 
         return result
-
-
-def _get_schema(state: Union[BaseModel, NamedTuple, None]) -> Dict[str, type]:
-    if isinstance(state, BaseModel):
-        pydantic_schema = {
-            field_name: field_info.annotation
-            for field_name, field_info in state.model_fields.items()
-        }
-        return pydantic_schema
-    elif isinstance(state, tuple) and hasattr(
-        state, "_fields"
-    ):  # Check for named tuple
-        return state.__annotations__
-    return None
