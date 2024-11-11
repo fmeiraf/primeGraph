@@ -47,7 +47,7 @@ class Graph(BaseGraph):
         return [create_executable_node(item) for item in self.execution_plan]
 
     def execute(
-        self, execution_id: str = None, timeout: Union[int, float] = 30
+        self, execution_id: str = None, timeout: Union[int, float] = 60 * 5
     ) -> None:
         """Execute the graph with concurrent and sequential execution based on the execution plan.
 
