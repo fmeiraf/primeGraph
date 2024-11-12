@@ -16,7 +16,7 @@ class LastValueBuffer(BaseBuffer):
             self.value = new_value
             self.last_value = new_value
             self.add_history(new_value, execution_id)
-            self._consumed = False
+            self._ready_for_consumption = True
 
     def get(self) -> Any:
         with self._lock:

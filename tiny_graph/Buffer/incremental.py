@@ -17,7 +17,7 @@ class IncrementalBuffer(BaseBuffer):
             self.value = self.value + new_value
             self.last_value = self.value
             self.add_history(self.value, execution_id)
-            self._consumed = False
+            self._ready_for_consumption = True
 
     def get(self) -> Any:
         with self._lock:

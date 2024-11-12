@@ -1,4 +1,5 @@
 import concurrent.futures
+import logging
 from typing import Any, Callable, Dict, List, Literal, NamedTuple, Union
 
 from pydantic import BaseModel
@@ -7,6 +8,10 @@ from tiny_graph.buffer.base import BaseBuffer
 from tiny_graph.buffer.factory import BufferFactory
 from tiny_graph.graph.base import BaseGraph
 from tiny_graph.models.base import GraphState
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 
 class ExecutableNode(NamedTuple):
@@ -20,6 +25,7 @@ class Graph(BaseGraph):
         super().__init__(state)
         self.state = state
         self.state_schema = self._get_schema(state)
+        self.state_history = {}
         self.buffers: Dict[str, BaseBuffer] = {}
         if self.state_schema:
             self._assign_buffers()
@@ -64,6 +70,15 @@ class Graph(BaseGraph):
 
         return [create_executable_node(item) for item in self.execution_plan]
 
+    def _update_state_from_buffers(self):
+        for field_name, buffer in self.buffers.items():
+            if buffer._ready_for_consumption:
+                setattr(self.state, field_name, buffer.consume_last_value())
+                # Ensure the history key exists and append the new history
+                self.state_history.setdefault(f"{field_name}_history", []).append(
+                    buffer.value_history
+                )
+
     def execute(
         self, execution_id: str = None, timeout: Union[int, float] = 60 * 5
     ) -> None:
@@ -75,12 +90,16 @@ class Graph(BaseGraph):
 
         def execute_node(node: ExecutableNode) -> None:
             """Execute a single node or group of nodes with proper concurrency handling."""
+            logger.debug(f"Executing node: {node.node_name}")
             if node.execution_type == "sequential":
                 for task in node.task_list:
                     try:
                         with concurrent.futures.ThreadPoolExecutor() as executor:
 
                             def wrapped_task():
+                                logger.debug(
+                                    f"Executing task in node: {node.node_name}"
+                                )
                                 result = (
                                     task(state=self.state)
                                     if self._has_state
@@ -98,10 +117,12 @@ class Graph(BaseGraph):
                             future = executor.submit(wrapped_task)
                             future.result(timeout=timeout)
                     except concurrent.futures.TimeoutError:
+                        logger.error(f"Timeout in sequential node {node.node_name}")
                         raise TimeoutError(
                             f"Execution timeout in sequential node {node.node_name}"
                         )
                     except Exception as e:
+                        logger.error(f"Error in node {node.node_name}: {str(e)}")
                         raise RuntimeError(
                             f"Error in node {node.node_name}: {str(e)}"
                         ) from e
@@ -114,6 +135,9 @@ class Graph(BaseGraph):
                         else:
 
                             def wrapped_task():
+                                logger.debug(
+                                    f"Executing task in node: {node.node_name}"
+                                )
                                 result = (
                                     task(state=self.state)
                                     if self._has_state
@@ -139,6 +163,9 @@ class Graph(BaseGraph):
 
                         for future in futures:
                             if future.exception():
+                                logger.error(
+                                    f"Error in parallel execution of {node.node_name}: {str(future.exception())}"
+                                )
                                 raise RuntimeError(
                                     f"Error in parallel execution of {node.node_name}: {str(future.exception())}"
                                 ) from future.exception()
@@ -146,6 +173,7 @@ class Graph(BaseGraph):
                     except concurrent.futures.TimeoutError:
                         for future in futures:
                             future.cancel()
+                        logger.error(f"Timeout in node {node.node_name}")
                         raise TimeoutError(
                             f"Execution timeout in node {node.node_name}"
                         )
@@ -153,3 +181,6 @@ class Graph(BaseGraph):
         execution_plan = self._convert_execution_plan()
         for node in execution_plan:
             execute_node(node)
+            # Update state after each main-level node execution
+            self._update_state_from_buffers()
+            logger.debug(f"State updated after node: {node.node_name}")

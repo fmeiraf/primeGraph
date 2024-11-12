@@ -69,7 +69,6 @@ class BufferFactory:
             "Incremental": IncrementalBuffer,
             "LastValue": LastValueBuffer,
         }
-        print(buffer_type)
 
         buffer_type = buffer_map.get(buffer_type, LastValueBuffer)
         actual_type = annotation._inner_type

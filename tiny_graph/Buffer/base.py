@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from threading import Lock
-from typing import Any, Dict, List, get_args, get_origin
+from typing import Any, Dict, get_args, get_origin
 
 
 class BaseBuffer(ABC):
@@ -14,10 +14,10 @@ class BaseBuffer(ABC):
         self.field_name = field_name
         self.field_type = field_type
         self.value: Any = None
-        self.last_value: List[Any] = []
+        self.last_value: Any = None
         self.value_history: Dict[str, Any] = {}
         self._lock = Lock()
-        self._consumed = False
+        self._ready_for_consumption = False
         self._has_state = False
 
     @abstractmethod
@@ -29,12 +29,19 @@ class BaseBuffer(ABC):
         pass
 
     def add_history(self, value: Any, execution_id: str) -> None:
+        # with self._lock:
+        #     self.value_history[execution_id] = value
         self.value_history[execution_id] = value
 
     def consume_last_value(self) -> Any:
-        last_value_copy = self.last_value.copy()
-        self.last_value = []
-        self._consumed = True
+        with self._lock:
+            if isinstance(self.last_value, list):
+                last_value_copy = self.last_value.copy()
+                self.last_value = []
+            else:
+                last_value_copy = self.last_value
+                self.last_value = None
+            self._ready_for_consumption = False
         return last_value_copy
 
     def _enforce_type(self, new_value: Any) -> None:

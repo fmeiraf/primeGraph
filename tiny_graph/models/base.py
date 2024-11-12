@@ -28,6 +28,7 @@ class GraphState(BaseModel):
     def get_buffer_types(cls) -> Dict[str, Any]:
         """Returns a mapping of field names to their buffer types"""
         # Use __annotations__ directly to avoid issues with get_type_hints
+
         annotations = cls.__annotations__
         buffer_types = {}
 
@@ -38,8 +39,5 @@ class GraphState(BaseModel):
                 raise ValueError(
                     f"Field {field_name} is not using a buffer type (History, Incremental, LastValue, etc)"
                 )
-            #     buffer_types[field_name] = field_type.__bases__[0]
-            # else:
-            #     buffer_types[field_name] = field_type
 
         return buffer_types
