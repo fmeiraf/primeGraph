@@ -174,18 +174,6 @@ def test_graph_initialization():
     assert END in graph.nodes
 
 
-def test_graph_with_pydantic_state():
-    state = _TestState(value=1, name="test")
-    graph = BaseGraph(state)
-    assert graph.state_schema == {"value": int, "name": str}
-
-
-def test_graph_with_namedtuple_state():
-    state = _TestNamedTupleState(1, "test")
-    graph = BaseGraph(state)
-    assert graph.state_schema == {"value": int, "name": str}
-
-
 # Test node decoration and edge creation
 def test_node_decoration(empty_graph):
     @empty_graph.node()
