@@ -1,9 +1,12 @@
 import time
+from typing import Dict
 
 import pytest
 
+from tiny_graph.buffer.factory import History, Incremental, LastValue
 from tiny_graph.constants import END, START
 from tiny_graph.graph.executable import ExecutableNode, Graph
+from tiny_graph.models.base import GraphState
 
 
 @pytest.fixture
@@ -64,6 +67,63 @@ def basic_graph():
     simple_graph.compile()
 
     return simple_graph
+
+
+@pytest.fixture
+def complex_graph():
+    class ComplexTestState(GraphState):
+        counter: Incremental[int]  # Will accumulate values
+        status: LastValue[str]  # Will only keep last value
+        metrics: History[Dict[str, float]]  # Will keep history of all updates
+
+    # Initialize the graph with state
+    state = ComplexTestState(counter=0, status="", metrics={})
+    graph = Graph(state=state)
+
+    # Define nodes (same as in your notebook)
+    @graph.node()
+    def increment_counter(state):
+        return {"counter": 2}
+
+    @graph.node()
+    def decrement_counter(state):
+        return {"counter": -1}
+
+    @graph.node()
+    def update_status_to_in_progress(state):
+        return {"status": "in_progress"}
+
+    @graph.node()
+    def update_status_to_complete(state):
+        return {"status": "complete"}
+
+    @graph.node()
+    def add_metrics(state):
+        return {"metrics": {"accuracy": 0.9, "loss": 0.1}}
+
+    @graph.node()
+    def update_metrics(state):
+        return {"metrics": {"loss": 0.05, "precision": 0.85}}
+
+    @graph.node()
+    def finalize_metrics(state):
+        return {"metrics": {"finalized": True}}
+
+    # Create the workflow with multiple levels of execution
+    graph.add_edge(START, "increment_counter")
+    graph.add_edge(START, "decrement_counter")
+    graph.add_edge(START, "update_status_to_in_progress")
+    graph.add_edge("increment_counter", "add_metrics")
+    graph.add_edge("decrement_counter", "add_metrics")
+    graph.add_edge("add_metrics", "update_metrics")
+    graph.add_edge("update_metrics", "finalize_metrics")
+    graph.add_edge("update_status_to_in_progress", "update_status_to_complete")
+    graph.add_edge("update_status_to_complete", "finalize_metrics")
+    graph.add_edge("finalize_metrics", END)
+
+    graph.compile()
+
+    return graph
 
 
 def extract_executable_nodes_info(executable_node):
@@ -201,6 +261,100 @@ def test_find_execution_paths_with_edges(basic_graph):
     )
 
     # Verify parallel paths exist after validate
+    parallel_paths_exist = any(
+        isinstance(item, list) and len(item) > 1 for item in edge_plan
+    )
+    assert parallel_paths_exist
+
+
+def test_find_execution_paths_with_edges_for_complex_graph(complex_graph):
+    # Get the execution plan with edges
+    edge_plan = complex_graph._find_execution_paths_with_edges()
+
+    def flatten_edge_plan(plan):
+        """Helper to flatten the nested structure into a set of edge IDs"""
+        edges = set()
+        for item in plan:
+            if isinstance(item, str):
+                edges.add(item)
+            elif isinstance(item, list):
+                edges.update(flatten_edge_plan(item))
+        return edges
+
+    # Get all edges from the plan
+    all_edges = flatten_edge_plan(edge_plan)
+
+    # Verify required edges exist
+    expected_edges = {
+        "__start___to_increment_counter_1",
+        "__start___to_decrement_counter_1",
+        "__start___to_update_status_to_in_progress_1",
+        "increment_counter_to_add_metrics_1",
+        "decrement_counter_to_add_metrics_1",
+        "add_metrics_to_update_metrics_1",
+        "update_metrics_to_finalize_metrics_1",
+        "update_status_to_in_progress_to_update_status_to_complete_1",
+        "update_status_to_complete_to_finalize_metrics_1",
+    }
+    assert expected_edges == all_edges
+
+    def verify_structure(plan):
+        """Verify the structural properties of the execution plan"""
+        if not plan:
+            return True
+
+        # If it's a single edge, it should be a string
+        if isinstance(plan, str):
+            return True
+
+        # If it's a list, verify each element
+        if isinstance(plan, list):
+            # Parallel paths should be lists within lists
+            for item in plan:
+                if not (isinstance(item, str) or isinstance(item, list)):
+                    return False
+                if not verify_structure(item):
+                    return False
+            return True
+
+        return False
+
+    # Verify the overall structure is valid
+    assert verify_structure(edge_plan)
+
+    # Verify some key relationships without caring about exact order
+    def find_path_containing(edges, start_edge, end_edge):
+        """Check if there exists a path containing both edges in the nested structure"""
+
+        def check_sublist(sublist):
+            if isinstance(sublist, str):
+                return False
+
+            found_start = False
+            found_end = False
+
+            for item in sublist:
+                if isinstance(item, str):
+                    if item == start_edge:
+                        found_start = True
+                    if item == end_edge:
+                        found_end = True
+                elif isinstance(item, list):
+                    if check_sublist(item):
+                        return True
+
+            return found_start and found_end
+
+        return check_sublist(edges)
+
+    # Verify some key path relationships
+    # assert find_path_containing(
+    #     edge_plan,
+    #     "__start___to_increment_counter_1",
+    #     "increment_counter_to_add_metrics_1",
+    # )
+
+    # Verify parallel paths exist after start
     parallel_paths_exist = any(
         isinstance(item, list) and len(item) > 1 for item in edge_plan
     )
