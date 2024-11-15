@@ -442,3 +442,75 @@ def test_parallel_execution_timeout():
         basic_graph.execute(timeout=1)
 
     assert "Execution timeout" in str(exc_info.value)
+
+
+class TestState(GraphState):
+    counter: Incremental[int]
+    status: LastValue[str]
+    metrics: History[dict]
+
+
+@pytest.fixture
+def graph_with_buffers():
+    state = TestState(counter=0, status="", metrics={})
+    graph = Graph(state=state)
+
+    @graph.node()
+    def increment_counter(state):
+        return {"counter": 1}
+
+    @graph.node()
+    def update_status(state):
+        return {"status": "running"}
+
+    @graph.node()
+    def add_metrics_1(state):
+        return {"metrics": {"accuracy": 0.95}}
+
+    @graph.node()
+    def add_metrics_2(state):
+        return {"metrics": {"precision": 0.90}}
+
+    @graph.node()
+    def add_metrics_3(state):
+        return {"metrics": {"recall": 0.85}}
+
+    # Add edges to create parallel execution paths
+    graph.add_edge(START, "increment_counter")
+    graph.add_edge(START, "update_status")
+    graph.add_edge(START, "add_metrics_1")
+    graph.add_edge(START, "add_metrics_2")
+    graph.add_edge(START, "add_metrics_3")
+    graph.add_edge("increment_counter", END)
+    graph.add_edge("update_status", END)
+    graph.add_edge("add_metrics_1", END)
+    graph.add_edge("add_metrics_2", END)
+    graph.add_edge("add_metrics_3", END)
+    graph.compile()
+
+    return graph
+
+
+def test_parallel_updates(graph_with_buffers):
+    # Execute the graph multiple times
+    for _ in range(3):
+        graph_with_buffers.execute()
+
+    # Check the state after execution
+    state = graph_with_buffers.state
+
+    # Verify that the counter was incremented 3 times
+    assert state.counter == 3
+
+    # Verify that the status was updated to "running"
+    assert state.status == "running"
+
+    # Verify that metrics were added 9 times (3 executions * 3 nodes)
+    assert len(state.metrics) == 9
+    expected_metrics = [
+        {"accuracy": 0.95},
+        {"precision": 0.90},
+        {"recall": 0.85},
+    ]
+    for metric in state.metrics:
+        assert metric in expected_metrics
