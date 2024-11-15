@@ -257,6 +257,9 @@ class BaseGraph:
         def get_prev_nodes(node: str) -> List[str]:
             return [edge.start_node for edge in self.edges if edge.end_node == node]
 
+        def is_convergence_point(node: str) -> bool:
+            return len(get_prev_nodes(node)) > 1
+
         def find_convergence_point(start_nodes: List[str]) -> str:
             """Find where multiple paths converge."""
             visited_by_path = {start: set([start]) for start in start_nodes}
@@ -282,6 +285,7 @@ class BaseGraph:
             start: str, convergence: str, visited: Set[str]
         ) -> List[Any]:
             """Build a path from start to convergence point."""
+            # pdb.set_trace()
             if start in visited:
                 return []
 
@@ -305,6 +309,18 @@ class BaseGraph:
                         [current, nested_paths]
                     )  # Add current node before nested paths
                     current = nested_convergence
+                elif not next_nodes:
+                    path.append(current)
+                    visited.add(current)
+                    break
+                elif is_convergence_point(current):
+                    if "nested_convergence" in locals():
+                        path.append(current)
+                        current = next_nodes[0]
+                        visited.add(current)
+                    else:
+                        break
+
                 else:
                     path.append(current)
                     current = next_nodes[0]
@@ -313,13 +329,14 @@ class BaseGraph:
             return path
 
         def build_execution_plan(current: str) -> List[Any]:
+            # pdb.set_trace()
             if current == END:
                 return []
 
             next_nodes = get_next_nodes(current)
 
             # Skip START node
-            if current == START:
+            if current == START and len(next_nodes) == 1:
                 return build_execution_plan(next_nodes[0])
 
             # Handle parallel paths
@@ -346,7 +363,9 @@ class BaseGraph:
                 return p
             if len(p) == 1:
                 return clean_plan(p[0])
-            return [clean_plan(item) for item in p if item is not None]
+            return [
+                clean_plan(item) for item in p if item is not None and item != START
+            ]
 
         return clean_plan(plan)
 
