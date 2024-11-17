@@ -1,3 +1,4 @@
+import hashlib
 from typing import Any, Dict, get_origin, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -9,6 +10,18 @@ class GraphState(BaseModel):
     """Base class for all graph states with buffer support"""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+    version: str = ""
+
+    def __setattr__(self, name, value):
+        super().__setattr__(name, value)
+        if name != "version":
+            self.update_version()
+
+    def update_version(self):
+        """Update the version based on the current state of the model."""
+        state = self.model_dump()
+        state_str = str(sorted(state.items()))
+        super().__setattr__("version", hashlib.md5(state_str.encode()).hexdigest())
 
     @model_validator(mode="before")
     @classmethod
