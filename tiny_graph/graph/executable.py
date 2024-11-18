@@ -1,11 +1,14 @@
 import concurrent.futures
 import logging
-from typing import Any, Callable, Dict, List, Literal, NamedTuple, Union
+import uuid
+from typing import Any, Callable, Dict, List, Literal, NamedTuple, Optional, Union
 
 from pydantic import BaseModel
 
 from tiny_graph.buffer.base import BaseBuffer
 from tiny_graph.buffer.factory import BufferFactory
+from tiny_graph.checkpoint.storage.base import StorageBackend
+from tiny_graph.checkpoint.storage.local_storage import LocalStorage
 from tiny_graph.graph.base import BaseGraph
 from tiny_graph.models.base import GraphState
 
@@ -21,7 +24,12 @@ class ExecutableNode(NamedTuple):
 
 
 class Graph(BaseGraph):
-    def __init__(self, state: Union[BaseModel, NamedTuple, None] = None):
+    def __init__(
+        self,
+        state: Union[BaseModel, NamedTuple, None] = None,
+        checkpoint_storage: Optional[StorageBackend] = None,
+        chain_id: Optional[str] = None,
+    ):
         super().__init__(state)
         self.state = state
         self.state_schema = self._get_schema(state)
@@ -29,6 +37,12 @@ class Graph(BaseGraph):
         self.buffers: Dict[str, BaseBuffer] = {}
         if self.state_schema:
             self._assign_buffers()
+        self.chain_id = chain_id if chain_id else f"{uuid.uuid4()}"
+        self.checkpoint_storage = (
+            checkpoint_storage(self.chain_id)
+            if checkpoint_storage
+            else LocalStorage(self.chain_id)
+        )
 
     def _assign_buffers(self):
         self.buffers = {
@@ -183,4 +197,5 @@ class Graph(BaseGraph):
             execute_node(node)
             # Update state after each main-level node execution
             self._update_state_from_buffers()
+            self.checkpoint_storage.save_checkpoint(self.state, self.chain_id)
             logger.debug(f"State updated after node: {node.node_name}")
