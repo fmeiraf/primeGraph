@@ -18,9 +18,16 @@ class GraphState(BaseModel):
             self.update_version()
 
     def update_version(self):
-        """Update the version based on the current state of the model."""
-        state = self.model_dump()
-        state_str = str(sorted(state.items()))
+        """Update the version based only on the model's attribute names."""
+        # Get only the field names, ignoring their values
+        field_names = sorted(
+            [
+                field_name
+                for field_name in self.model_fields.keys()
+                if field_name != "version"
+            ]
+        )
+        state_str = str(field_names)
         super().__setattr__("version", hashlib.md5(state_str.encode()).hexdigest())
 
     @model_validator(mode="before")
