@@ -8,14 +8,14 @@ from tiny_graph.graph.executable import Graph
 from tiny_graph.models.base import GraphState
 
 
-class TestState(GraphState):
+class StateForTest(GraphState):
     value: LastValue[int]
     text: LastValue[Optional[str]] = None
 
 
 def test_save_and_load_checkpoint():
     # Initialize
-    state = TestState(value=42, text="initial")
+    state = StateForTest(value=42, text="initial")
     graph = Graph(state=state, checkpoint_storage=LocalStorage())
 
     # Save checkpoint
@@ -31,7 +31,7 @@ def test_save_and_load_checkpoint():
 
 
 def test_list_checkpoints():
-    state = TestState(value=42)
+    state = StateForTest(value=42)
     graph = Graph(state=state, checkpoint_storage=LocalStorage())
 
     # Save multiple checkpoints
@@ -46,7 +46,7 @@ def test_list_checkpoints():
 
 
 def test_delete_checkpoint():
-    state = TestState(value=42)
+    state = StateForTest(value=42)
     graph = Graph(state=state, checkpoint_storage=LocalStorage())
 
     # Save and then delete a checkpoint
@@ -58,25 +58,25 @@ def test_delete_checkpoint():
 
 
 def test_version_mismatch():
-    class NewTestState(GraphState):
+    class NewStateForTest(GraphState):
         value: LastValue[int]
         text: LastValue[Optional[str]] = None
         new_value: LastValue[int]  # new attribute
 
     # Save with original version
-    state = TestState(value=42)
+    state = StateForTest(value=42)
     graph = Graph(state=state, checkpoint_storage=LocalStorage())
     checkpoint_id = graph.checkpoint_storage.save_checkpoint(state, graph.chain_id)
 
     # Try to load with new version
     with pytest.raises(ValueError):
         graph.checkpoint_storage.load_checkpoint(
-            NewTestState, graph.chain_id, checkpoint_id
+            NewStateForTest, graph.chain_id, checkpoint_id
         )
 
 
 def test_nonexistent_checkpoint():
-    state = TestState(value=42)
+    state = StateForTest(value=42)
     graph = Graph(state=state, checkpoint_storage=LocalStorage())
 
     with pytest.raises(KeyError):
@@ -84,7 +84,7 @@ def test_nonexistent_checkpoint():
 
 
 def test_nonexistent_chain():
-    state = TestState(value=42)
+    state = StateForTest(value=42)
     graph = Graph(state=state, checkpoint_storage=LocalStorage())
 
     with pytest.raises(KeyError):

@@ -444,7 +444,7 @@ def test_parallel_execution_timeout():
     assert "Execution timeout" in str(exc_info.value)
 
 
-class TestState(GraphState):
+class StateForTest(GraphState):
     counter: Incremental[int]
     status: LastValue[str]
     metrics: History[dict]
@@ -452,7 +452,7 @@ class TestState(GraphState):
 
 @pytest.fixture
 def graph_with_buffers():
-    state = TestState(counter=0, status="", metrics={})
+    state = StateForTest(counter=0, status="", metrics={})
     graph = Graph(state=state)
 
     @graph.node()
