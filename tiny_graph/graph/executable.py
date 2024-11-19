@@ -8,7 +8,6 @@ from pydantic import BaseModel
 from tiny_graph.buffer.base import BaseBuffer
 from tiny_graph.buffer.factory import BufferFactory
 from tiny_graph.checkpoint.storage.base import StorageBackend
-from tiny_graph.checkpoint.storage.local_storage import LocalStorage
 from tiny_graph.graph.base import BaseGraph
 from tiny_graph.models.base import GraphState
 
@@ -38,11 +37,7 @@ class Graph(BaseGraph):
         if self.state_schema:
             self._assign_buffers()
         self.chain_id = chain_id if chain_id else f"{uuid.uuid4()}"
-        self.checkpoint_storage = (
-            checkpoint_storage(self.chain_id)
-            if checkpoint_storage
-            else LocalStorage(self.chain_id)
-        )
+        self.checkpoint_storage = checkpoint_storage
 
     def _assign_buffers(self):
         self.buffers = {
@@ -196,6 +191,8 @@ class Graph(BaseGraph):
         for node in execution_plan:
             execute_node(node)
             # Update state after each main-level node execution
-            self._update_state_from_buffers()
-            self.checkpoint_storage.save_checkpoint(self.state, self.chain_id)
-            logger.debug(f"State updated after node: {node.node_name}")
+            if self.state:
+                self._update_state_from_buffers()
+                if self.checkpoint_storage:
+                    self.checkpoint_storage.save_checkpoint(self.state, self.chain_id)
+                logger.debug(f"State updated after node: {node.node_name}")

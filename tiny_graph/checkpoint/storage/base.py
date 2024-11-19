@@ -8,16 +8,15 @@ from pydantic import BaseModel
 
 
 class StorageBackend(ABC):
-    def __init__(self, chain_id: str):
-        self.chain_id = chain_id
+    def __init__(self):
         self._storage = defaultdict(dict)
         self._lock = threading.Lock()
 
     def _enforce_checkpoint_id(self, checkpoint_id: Optional[str]) -> str:
-        return checkpoint_id or f"{self.chain_id}_{uuid.uuid4()}"
+        return checkpoint_id or f"{uuid.uuid4()}"
 
     def _get_last_stored_model_version(self, chain_id: str) -> Optional[str]:
-        chain_storage = self._storage.get(chain_id, {})
+        chain_storage = self._storage.get(chain_id, None)
         if not chain_storage:
             return None
         sorted_checkpoints = sorted(
