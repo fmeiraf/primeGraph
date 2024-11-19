@@ -12,6 +12,10 @@ class GraphState(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     version: str = ""
 
+    def __init__(self, **data):
+        super().__init__(**data)
+        self.update_version()
+
     def __setattr__(self, name, value):
         super().__setattr__(name, value)
         if name != "version":
