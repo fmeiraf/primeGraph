@@ -151,7 +151,7 @@ def test_execution_plan_conversion(basic_graph):
     result = basic_graph._convert_execution_plan()
 
     assert len(result) == 1
-    assert result[0].node_name == "group_escape"
+    assert result[0].node_name == "escape_aa"
     assert result[0].execution_type == "parallel"
     assert len(result[0].task_list) == 2
 

@@ -1,6 +1,7 @@
 import concurrent.futures
 import logging
 import uuid
+from enum import Enum, auto
 from typing import Any, Callable, Dict, List, Literal, NamedTuple, Optional, Union
 
 from pydantic import BaseModel
@@ -22,6 +23,13 @@ class ExecutableNode(NamedTuple):
     execution_type: Literal["sequential", "parallel"]
 
 
+class ChainStatus(Enum):
+    IDLE = auto()
+    PAUSE = auto()
+    RUNNING = auto()
+    FAILED = auto()
+
+
 class Graph(BaseGraph):
     def __init__(
         self,
@@ -38,6 +46,7 @@ class Graph(BaseGraph):
             self._assign_buffers()
         self.chain_id = chain_id if chain_id else f"{uuid.uuid4()}"
         self.checkpoint_storage = checkpoint_storage
+        self.chain_status = ChainStatus.IDLE
 
     def _assign_buffers(self):
         self.buffers = {
@@ -69,8 +78,21 @@ class Graph(BaseGraph):
                     execution_type="sequential",
                 )
             elif isinstance(exec_plan_item, list):
+
+                def get_group_name(exec_plan_item: List[Any]) -> str:
+                    reference_nodes = []
+                    for item in exec_plan_item:
+                        print(item, type(item))
+                        if isinstance(item[0], list):
+                            get_group_name(item)
+                        elif isinstance(item, str):
+                            reference_nodes.append(item)
+                        else:
+                            reference_nodes.append(item[0])
+                    return "_".join(reference_nodes)
+
                 return ExecutableNode(
-                    node_name=f"group_{exec_plan_item[0]}",
+                    node_name=get_group_name(exec_plan_item),
                     task_list=[create_executable_node(item) for item in exec_plan_item],
                     execution_type="parallel",
                 )
@@ -87,6 +109,12 @@ class Graph(BaseGraph):
                 self.state_history.setdefault(f"{field_name}_history", []).append(
                     buffer.value_history
                 )
+
+    def _get_chain_status(self) -> ChainStatus:
+        return self.chain_status
+
+    def _update_chain_status(self, status: ChainStatus):
+        self.chain_status = status
 
     def execute(
         self, execution_id: str = None, timeout: Union[int, float] = 60 * 5
