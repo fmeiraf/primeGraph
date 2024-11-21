@@ -11,6 +11,7 @@ from tiny_graph.buffer.factory import BufferFactory
 from tiny_graph.checkpoint.storage.base import StorageBackend
 from tiny_graph.graph.base import BaseGraph
 from tiny_graph.models.base import GraphState
+from tiny_graph.utils.class_utils import internal_only
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -21,6 +22,7 @@ class ExecutableNode(NamedTuple):
     node_name: str
     task_list: List[Callable]
     execution_type: Literal["sequential", "parallel"]
+    interrupt: Union[Literal["before", "after"], None] = None
 
 
 class ChainStatus(Enum):
@@ -36,17 +38,26 @@ class Graph(BaseGraph):
         state: Union[BaseModel, NamedTuple, None] = None,
         checkpoint_storage: Optional[StorageBackend] = None,
         chain_id: Optional[str] = None,
+        execution_timeout: Union[int, float] = 60 * 5,
     ):
         super().__init__(state)
+
+        # State management
         self.state = state
         self.state_schema = self._get_schema(state)
         self.state_history = {}
         self.buffers: Dict[str, BaseBuffer] = {}
         if self.state_schema:
             self._assign_buffers()
+
+        # Chain management
         self.chain_id = chain_id if chain_id else f"{uuid.uuid4()}"
         self.checkpoint_storage = checkpoint_storage
         self.chain_status = ChainStatus.IDLE
+
+        # Execution management
+        self.next_execution_node = None
+        self.execution_timeout = execution_timeout
 
     def _assign_buffers(self):
         self.buffers = {
@@ -76,31 +87,35 @@ class Graph(BaseGraph):
                     node_name=exec_plan_item,
                     task_list=[self.nodes[exec_plan_item].action],
                     execution_type="sequential",
+                    interrupt=self.nodes[exec_plan_item].interrupt,
                 )
             elif isinstance(exec_plan_item, list):
 
                 def get_group_name(exec_plan_item: List[Any]) -> str:
                     reference_nodes = []
                     for item in exec_plan_item:
-                        print(item, type(item))
                         if isinstance(item[0], list):
                             get_group_name(item)
                         elif isinstance(item, str):
                             reference_nodes.append(item)
                         else:
                             reference_nodes.append(item[0])
-                    return "_".join(reference_nodes)
+                    return f"group_{'_'.join(reference_nodes)}"
 
                 return ExecutableNode(
                     node_name=get_group_name(exec_plan_item),
                     task_list=[create_executable_node(item) for item in exec_plan_item],
                     execution_type="parallel",
+                    interrupt=None,
                 )
             else:
                 raise ValueError(f"Expected str or list, got {type(exec_plan_item)}")
 
-        return [create_executable_node(item) for item in self.execution_plan]
+        self.execution_plan = [
+            create_executable_node(item) for item in self.execution_path
+        ]
 
+    @internal_only
     def _update_state_from_buffers(self):
         for field_name, buffer in self.buffers.items():
             if buffer._ready_for_consumption:
@@ -113,21 +128,45 @@ class Graph(BaseGraph):
     def _get_chain_status(self) -> ChainStatus:
         return self.chain_status
 
+    @internal_only
     def _update_chain_status(self, status: ChainStatus):
         self.chain_status = status
 
-    def execute(
-        self, execution_id: str = None, timeout: Union[int, float] = 60 * 5
+    @internal_only
+    def _save_state_and_buffers(self, node_name: str):
+        if self.state:
+            self._update_state_from_buffers()
+            if self.checkpoint_storage:
+                self.checkpoint_storage.save_checkpoint(self.state, self.chain_id)
+        logger.debug(f"State updated after node: {node_name}")
+
+    @internal_only
+    def _execute(
+        self, start_from: Optional[str] = None, timeout: Union[int, float] = 60 * 5
     ) -> None:
         """Execute the graph with concurrent and sequential execution based on the execution plan.
 
         Args:
-            execution_id: Unique identifier for this execution
+            start_from: node name to start execution from
         """
 
-        def execute_node(node: ExecutableNode) -> None:
+        def execute_node(
+            node: ExecutableNode, start_from: Optional[str] = None
+        ) -> None:
             """Execute a single node or group of nodes with proper concurrency handling."""
+            if start_from and node.node_name != start_from:
+                return
+
+            if node.interrupt == "before":
+                if node.node_name == start_from:
+                    self._update_chain_status(ChainStatus.RUNNING)
+                else:
+                    self._update_chain_status(ChainStatus.PAUSE)
+                    self.next_execution_node = node.node_name
+                    return
+
             logger.debug(f"Executing node: {node.node_name}")
+
             if node.execution_type == "sequential":
                 for task in node.task_list:
                     try:
@@ -153,6 +192,7 @@ class Graph(BaseGraph):
 
                             future = executor.submit(wrapped_task)
                             future.result(timeout=timeout)
+
                     except concurrent.futures.TimeoutError:
                         logger.error(f"Timeout in sequential node {node.node_name}")
                         raise TimeoutError(
@@ -187,6 +227,7 @@ class Graph(BaseGraph):
                                             self.buffers[field_name].update(
                                                 value, execution_id=node.node_name
                                             )
+                                self.next_execution_node = node.node_name
                                 return result
 
                             futures.append(executor.submit(wrapped_task))
@@ -214,13 +255,43 @@ class Graph(BaseGraph):
                         raise TimeoutError(
                             f"Execution timeout in node {node.node_name}"
                         )
+            self.next_execution_node = node.node_name
 
-        execution_plan = self._convert_execution_plan()
-        for node in execution_plan:
-            execute_node(node)
+            if node.interrupt == "after":
+                self._update_chain_status(ChainStatus.PAUSE)
+                return
+
+        self._convert_execution_plan()
+        self._update_chain_status(ChainStatus.RUNNING)
+        for node in self.execution_plan:
+            if start_from and node.node_name != start_from:
+                continue
+
+            chain_status = self._get_chain_status()
+            if chain_status == ChainStatus.PAUSE:
+                logger.info("Chain paused.")
+                return
+
+            execute_node(node, start_from)
             # Update state after each main-level node execution
-            if self.state:
-                self._update_state_from_buffers()
-                if self.checkpoint_storage:
-                    self.checkpoint_storage.save_checkpoint(self.state, self.chain_id)
-                logger.debug(f"State updated after node: {node.node_name}")
+            self._save_state_and_buffers(node.node_name)
+
+            if start_from and node.node_name == start_from:
+                start_from = None
+
+    def execute(
+        self, start_from: Optional[str] = None, timeout: Union[int, float, None] = None
+    ):
+        if timeout is None:
+            timeout = self.execution_timeout
+        self._execute(start_from, timeout)
+
+    def resume(self):
+        if not self.next_execution_node:
+            logger.info(
+                "No interrupted node found. Starting execution from the beginning."
+            )
+            raise RuntimeError("No interrupted node found. Cannot resume.")
+
+        self.execute(start_from=self.next_execution_node)
+        return

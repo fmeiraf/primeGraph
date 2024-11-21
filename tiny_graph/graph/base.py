@@ -6,6 +6,7 @@ from typing import (
     Callable,
     Dict,
     List,
+    Literal,
     NamedTuple,
     Optional,
     Self,
@@ -36,6 +37,7 @@ class Node(NamedTuple):
     is_async: bool = False
     is_router: bool = False
     possible_routes: Optional[Set[str]] = None
+    interrupt: Union[Literal["before", "after"], None] = None
 
 
 class BaseGraph:
@@ -98,6 +100,7 @@ class BaseGraph:
         self,
         name: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        interrupt: Union[Literal["before", "after"], None] = None,
     ):
         """Decorator to add a node to the graph
 
@@ -138,6 +141,7 @@ class BaseGraph:
                 is_async,
                 is_router,
                 return_values if is_router else None,
+                interrupt,
             )
             return func
 
@@ -394,12 +398,12 @@ class BaseGraph:
 
             return final_edge_plan
 
-        return scan_execution_plan(self.execution_plan)
+        return scan_execution_plan(self.execution_path)
 
     def compile(self, state: Union[BaseModel, NamedTuple, None] = None) -> Self:
         """Compiles the graph by validating and organizing execution paths."""
         self.validate()
-        self.execution_plan = self._find_execution_paths()
+        self.execution_path = self._find_execution_paths()
         self.execution_plan_with_edges = self._find_execution_paths_with_edges()
 
         self.is_compiled = True
