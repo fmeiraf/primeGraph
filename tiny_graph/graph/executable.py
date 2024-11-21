@@ -158,12 +158,12 @@ class Graph(BaseGraph):
                 return
 
             if node.interrupt == "before":
-                if node.node_name == start_from:
-                    self._update_chain_status(ChainStatus.RUNNING)
-                else:
+                if not start_from:
                     self._update_chain_status(ChainStatus.PAUSE)
                     self.next_execution_node = node.node_name
                     return
+                else:
+                    self.next_execution_node = None
 
             logger.debug(f"Executing node: {node.node_name}")
 
@@ -258,13 +258,24 @@ class Graph(BaseGraph):
             self.next_execution_node = node.node_name
 
             if node.interrupt == "after":
-                self._update_chain_status(ChainStatus.PAUSE)
-                return
+                if not start_from:
+                    self._update_chain_status(ChainStatus.PAUSE)
+                    return
 
         self._convert_execution_plan()
         self._update_chain_status(ChainStatus.RUNNING)
         for node in self.execution_plan:
-            if start_from and node.node_name != start_from:
+            if (
+                start_from and node.node_name != start_from
+            ):  # when start_from is provided, skip all nodes until the start_from node
+                continue
+
+            if (
+                start_from
+                and node.interrupt == "after"
+                and node.node_name == start_from
+            ):
+                start_from = None
                 continue
 
             chain_status = self._get_chain_status()
