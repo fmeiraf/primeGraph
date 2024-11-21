@@ -105,7 +105,15 @@ class Graph(BaseGraph):
                     task.node_name if isinstance(task, ExecutableNode) else item
                     for item, task in zip(exec_plan_item, tasks)
                 )
-                if any(isinstance(task, ExecutableNode) for task in tasks):
+                # Check if there's a mix of ExecutableNode and other task types
+                has_executable_nodes = any(
+                    isinstance(task, ExecutableNode) for task in tasks
+                )
+                has_other_tasks = any(
+                    not isinstance(task, ExecutableNode) for task in tasks
+                )
+
+                if has_executable_nodes and has_other_tasks:
                     return ExecutableNode(
                         node_name=f"sequential_group_{group_name}",
                         task_list=tasks,
