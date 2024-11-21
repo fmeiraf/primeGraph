@@ -76,12 +76,12 @@ class Graph(BaseGraph):
 
     def _convert_execution_plan(self) -> List[Any]:
         """Converts the execution plan to a list of functions that have concurrency flags"""
-
         self._force_compile()
 
         def create_executable_node(
             exec_plan_item: Union[str, List[Any], None],
         ) -> ExecutableNode:
+            # Handle single string nodes (sequential)
             if isinstance(exec_plan_item, str):
                 return ExecutableNode(
                     node_name=exec_plan_item,
@@ -89,25 +89,36 @@ class Graph(BaseGraph):
                     execution_type="sequential",
                     interrupt=self.nodes[exec_plan_item].interrupt,
                 )
+            # Handle lists (parallel groups)
             elif isinstance(exec_plan_item, list):
-
-                def get_group_name(exec_plan_item: List[Any]) -> str:
-                    reference_nodes = []
-                    for item in exec_plan_item:
-                        if isinstance(item[0], list):
-                            get_group_name(item)
-                        elif isinstance(item, str):
-                            reference_nodes.append(item)
-                        else:
-                            reference_nodes.append(item[0])
-                    return f"group_{'_'.join(reference_nodes)}"
-
-                return ExecutableNode(
-                    node_name=get_group_name(exec_plan_item),
-                    task_list=[create_executable_node(item) for item in exec_plan_item],
-                    execution_type="parallel",
-                    interrupt=None,
+                tasks = []
+                for item in exec_plan_item:
+                    if isinstance(item, str):
+                        tasks.append(self.nodes[item].action)
+                    elif isinstance(item, list):
+                        # Recursively create executable nodes for nested groups
+                        tasks.append(create_executable_node(item))
+                    else:
+                        raise ValueError(f"Expected str or list, got {type(item)}")
+                # Join all node names in the task list for the group name
+                group_name = "_".join(
+                    task.node_name if isinstance(task, ExecutableNode) else item
+                    for item, task in zip(exec_plan_item, tasks)
                 )
+                if any(isinstance(task, ExecutableNode) for task in tasks):
+                    return ExecutableNode(
+                        node_name=f"sequential_group_{group_name}",
+                        task_list=tasks,
+                        execution_type="sequential",
+                        interrupt=None,
+                    )
+                else:
+                    return ExecutableNode(
+                        node_name=f"parallel_group_{group_name}",
+                        task_list=tasks,
+                        execution_type="parallel",
+                        interrupt=None,
+                    )
             else:
                 raise ValueError(f"Expected str or list, got {type(exec_plan_item)}")
 
