@@ -79,59 +79,60 @@ class Graph(BaseGraph):
         self._force_compile()
 
         def create_executable_node(
-            exec_plan_item: Union[str, List[Any], None],
+            exec_plan_item: Union[tuple, List[Any], None],
         ) -> ExecutableNode:
-            # Handle single string nodes (sequential)
-            if isinstance(exec_plan_item, str):
+            # Handle single tuple nodes (sequential)
+            if isinstance(exec_plan_item, tuple):
+                parent_node, node_name = exec_plan_item
                 return ExecutableNode(
-                    node_name=exec_plan_item,
-                    task_list=[self.nodes[exec_plan_item].action],
+                    node_name=node_name,
+                    task_list=[self.nodes[node_name].action],
                     execution_type="sequential",
-                    interrupt=self.nodes[exec_plan_item].interrupt,
+                    interrupt=self.nodes[node_name].interrupt,
                 )
-            # Handle lists (parallel groups)
+            # Handle lists (parallel or sequential groups)
             elif isinstance(exec_plan_item, list):
                 tasks = []
+                node_names = []
+                parent_names = []
+
+                # First pass to collect all items
                 for item in exec_plan_item:
-                    if isinstance(item, str):
-                        tasks.append(self.nodes[item].action)
+                    if isinstance(item, tuple):
+                        parent_node, node_name = item
+                        tasks.append(self.nodes[node_name].action)
+                        node_names.append(node_name)
+                        parent_names.append(parent_node)
                     elif isinstance(item, list):
                         # Recursively create executable nodes for nested groups
-                        tasks.append(create_executable_node(item))
+                        executable_node = create_executable_node(item)
+                        tasks.append(executable_node)
+                        node_names.append(executable_node.node_name)
                     else:
-                        raise ValueError(f"Expected str or list, got {type(item)}")
+                        raise ValueError(f"Expected tuple or list, got {type(item)}")
+
+                # Check if all items have the same parent
+                if all(parent == parent_names[0] for parent in parent_names):
+                    execution_type = "parallel"
+                else:
+                    execution_type = "sequential"
+
                 # Join all node names in the task list for the group name
                 group_name = "_".join(
-                    task.node_name if isinstance(task, ExecutableNode) else item
-                    for item, task in zip(exec_plan_item, tasks)
-                )
-                # Check if there's a mix of ExecutableNode and other task types
-                has_executable_nodes = any(
-                    isinstance(task, ExecutableNode) for task in tasks
-                )
-                has_other_tasks = any(
-                    not isinstance(task, ExecutableNode) for task in tasks
+                    name[1] if isinstance(name, tuple) else name for name in node_names
                 )
 
-                if has_executable_nodes and has_other_tasks:
-                    return ExecutableNode(
-                        node_name=f"sequential_group_{group_name}",
-                        task_list=tasks,
-                        execution_type="sequential",
-                        interrupt=None,
-                    )
-                else:
-                    return ExecutableNode(
-                        node_name=f"parallel_group_{group_name}",
-                        task_list=tasks,
-                        execution_type="parallel",
-                        interrupt=None,
-                    )
+                return ExecutableNode(
+                    node_name=f"group_{group_name}",
+                    task_list=tasks,
+                    execution_type=execution_type,
+                    interrupt=None,
+                )
             else:
-                raise ValueError(f"Expected str or list, got {type(exec_plan_item)}")
+                raise ValueError(f"Expected tuple or list, got {type(exec_plan_item)}")
 
         self.execution_plan = [
-            create_executable_node(item) for item in self.execution_path
+            create_executable_node(item) for item in self.detailed_execution_path
         ]
 
     @internal_only

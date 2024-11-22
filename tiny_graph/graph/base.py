@@ -286,10 +286,8 @@ class BaseGraph:
                     all_visited.update(nodes)
 
         def build_path_to_convergence(
-            start: str, convergence: str, visited: Set[str]
+            start: str, convergence: str, visited: Set[str], parent: str
         ) -> List[Any]:
-            """Build a path from start to convergence point."""
-            # pdb.set_trace()
             if start in visited:
                 return []
 
@@ -305,35 +303,34 @@ class BaseGraph:
                     nested_paths = []
                     for next_node in next_nodes:
                         nested_path = build_path_to_convergence(
-                            next_node, nested_convergence, visited.copy()
+                            next_node, nested_convergence, visited.copy(), current
                         )
                         if nested_path:
                             nested_paths.append(nested_path)
                     path.extend(
-                        [current, nested_paths]
-                    )  # Add current node before nested paths
+                        [(current, current), nested_paths]
+                    )  # Include parent info
                     current = nested_convergence
                 elif not next_nodes:
-                    path.append(current)
+                    path.append((parent, current))
                     visited.add(current)
                     break
                 elif is_convergence_point(current):
                     if "nested_convergence" in locals():
-                        path.append(current)
+                        path.append((parent, current))
                         current = next_nodes[0]
                         visited.add(current)
                     else:
                         break
-
                 else:
-                    path.append(current)
+                    path.append((parent, current))
                     current = next_nodes[0]
+                    parent = current  # Update parent for next iteration
                     visited.add(current)
 
             return path
 
-        def build_execution_plan(current: str) -> List[Any]:
-            # pdb.set_trace()
+        def build_execution_plan(current: str, parent: str = START) -> List[Any]:
             if current == END:
                 return []
 
@@ -341,7 +338,7 @@ class BaseGraph:
 
             # Skip START node
             if current == START and len(next_nodes) == 1:
-                return build_execution_plan(next_nodes[0])
+                return build_execution_plan(next_nodes[0], current)
 
             # Handle parallel paths
             if len(next_nodes) > 1:
@@ -349,26 +346,45 @@ class BaseGraph:
                 parallel_paths = []
 
                 for next_node in next_nodes:
-                    path = build_path_to_convergence(next_node, convergence, set())
+                    path = build_path_to_convergence(
+                        next_node, convergence, set(), current
+                    )
                     if isinstance(path, list) and len(path) == 1:
                         path = path[0]
                     parallel_paths.append(path)
 
-                return [current, parallel_paths] + build_execution_plan(convergence)
+                return [(parent, current), parallel_paths] + build_execution_plan(
+                    convergence, current
+                )
 
             # Handle sequential path
-            return [current] + build_execution_plan(next_nodes[0])
+            return [(parent, current)] + build_execution_plan(next_nodes[0], current)
 
         # Build and clean the execution plan
         plan = build_execution_plan(START)
 
         def clean_plan(p):
+            # Handle non-list items (like tuples)
             if not isinstance(p, list):
                 return p
+
+            # Handle empty lists
+            if not p:
+                return p
+
+            # Handle single-item lists
             if len(p) == 1:
                 return clean_plan(p[0])
+
+            # Clean the list items
             return [
-                clean_plan(item) for item in p if item is not None and item != START
+                clean_plan(item)
+                for item in p
+                if item is not None
+                and (
+                    not isinstance(item, tuple)  # Handle non-tuple items
+                    or (len(item) == 2 and item[1] != START)  # Handle tuples
+                )
             ]
 
         return clean_plan(plan)
@@ -403,7 +419,17 @@ class BaseGraph:
     def compile(self, state: Union[BaseModel, NamedTuple, None] = None) -> Self:
         """Compiles the graph by validating and organizing execution paths."""
         self.validate()
-        self.execution_path = self._find_execution_paths()
+        self.detailed_execution_path = self._find_execution_paths()
+
+        def extract_execution_plan(current_item):
+            if isinstance(current_item, list):
+                return [extract_execution_plan(item) for item in current_item]
+            else:
+                return current_item[1]
+
+        self.execution_path = [
+            extract_execution_plan(item) for item in self.detailed_execution_path
+        ]
         self.execution_plan_with_edges = self._find_execution_paths_with_edges()
 
         self.is_compiled = True
