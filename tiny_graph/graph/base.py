@@ -121,6 +121,11 @@ class BaseGraph:
             # Checking for async calls
             is_async = inspect.iscoroutinefunction(func)
 
+            # adding metadata to the node
+            func.__metadata__ = {
+                "interrupt": interrupt,
+            }
+
             # Check if this is a router node by looking for return statements
             return_values = self._get_return_values(func)
             is_router = len(return_values) > 0
