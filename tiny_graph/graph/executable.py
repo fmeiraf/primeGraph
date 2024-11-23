@@ -2,7 +2,17 @@ import concurrent.futures
 import logging
 import uuid
 from enum import Enum, auto
-from typing import Any, Callable, Dict, List, Literal, NamedTuple, Optional, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    NamedTuple,
+    Optional,
+    Tuple,
+    Union,
+)
 
 from pydantic import BaseModel
 
@@ -21,6 +31,7 @@ logger = logging.getLogger(__name__)
 class ExecutableNode(NamedTuple):
     node_name: str
     task_list: List[Callable]
+    node_list: List[str]
     execution_type: Literal["sequential", "parallel"]
     interrupt: Union[Literal["before", "after"], None] = None
 
@@ -58,6 +69,7 @@ class Graph(BaseGraph):
         # Execution management
         self.next_execution_node = None
         self.execution_timeout = execution_timeout
+        self.start_from = None
 
     def _assign_buffers(self):
         self.buffers = {
@@ -86,6 +98,7 @@ class Graph(BaseGraph):
                 parent_node, node_name = exec_plan_item
                 return ExecutableNode(
                     node_name=node_name,
+                    node_list=[node_name],
                     task_list=[self.nodes[node_name].action],
                     execution_type="sequential",
                     interrupt=self.nodes[node_name].interrupt,
@@ -107,7 +120,7 @@ class Graph(BaseGraph):
                         # Recursively create executable nodes for nested groups
                         executable_node = create_executable_node(item)
                         tasks.append(executable_node)
-                        node_names.append(executable_node.node_name)
+                        node_names.append(executable_node.node_list)
                     else:
                         raise ValueError(f"Expected tuple or list, got {type(item)}")
 
@@ -118,13 +131,26 @@ class Graph(BaseGraph):
                     execution_type = "sequential"
 
                 # Join all node names in the task list for the group name
-                group_name = "_".join(
-                    name[1] if isinstance(name, tuple) else name for name in node_names
-                )
+                def get_node_name(name):
+                    if isinstance(name, list):
+                        # Flatten nested lists and handle each element
+                        flattened = []
+                        for item in name:
+                            if isinstance(item, str):
+                                flattened.append(item)
+                            elif isinstance(item, tuple):
+                                flattened.append(item[1])
+                        return f"({'_'.join(flattened)})"
+                    elif isinstance(name, tuple):
+                        return name[1]
+                    return name
+
+                group_name = "_".join([get_node_name(name) for name in node_names])
 
                 return ExecutableNode(
                     node_name=f"group_{group_name}",
                     task_list=tasks,
+                    node_list=node_names,
                     execution_type=execution_type,
                     interrupt=None,
                 )
@@ -151,6 +177,7 @@ class Graph(BaseGraph):
     @internal_only
     def _update_chain_status(self, status: ChainStatus):
         self.chain_status = status
+        logger.debug(f"Chain status updated to: {status}")
 
     @internal_only
     def _save_state_and_buffers(self, node_name: str):
@@ -161,6 +188,11 @@ class Graph(BaseGraph):
         logger.debug(f"State updated after node: {node_name}")
 
     @internal_only
+    def _get_interrupt_status(
+        self, node_name: str
+    ) -> Union[Literal["before", "after"], None]:
+        return self.nodes[node_name].interrupt
+
     def _execute(
         self, start_from: Optional[str] = None, timeout: Union[int, float] = 60 * 5
     ) -> None:
@@ -168,147 +200,145 @@ class Graph(BaseGraph):
 
         Args:
             start_from: node name to start execution from
+            timeout: maximum execution time in seconds
         """
 
-        def execute_node(
-            node: ExecutableNode, start_from: Optional[str] = None
-        ) -> None:
-            """Execute a single node or group of nodes with proper concurrency handling."""
-            if start_from and node.node_name != start_from:
-                return
+        def execute_task(task: Callable, node_name: str) -> Any:
+            """Execute a single task with proper state handling."""
+            logger.debug(f"Executing task in node: {node_name}")
+            result = task(state=self.state) if self._has_state else task()
 
-            if node.interrupt == "before":
-                if not start_from:
-                    self._update_chain_status(ChainStatus.PAUSE)
-                    self.next_execution_node = node.node_name
-                    return
+            # Update buffers with the result if it's returned
+            # if result is not None and self._has_state:
+            #     for field_name, value in result.items():
+            #         if field_name in self.buffers:
+            #             self.buffers[field_name].update(value, execution_id=node_name)
+            self._save_state_and_buffers(node_name)
+            return result
+
+        def add_item_to_obj_store(obj_store: Union[List, Tuple], item):
+            if isinstance(obj_store, list):
+                obj_store.append(item)
+                return obj_store  # Return the modified list
+            elif isinstance(obj_store, tuple):
+                return obj_store + (item,)  # Already returns the new tuple
+            else:
+                raise ValueError(f"Unsupported object store type: {type(obj_store)}")
+
+        def extract_tasks_from_node(node, tasks=[]):
+            """
+            Extracts tasks from a node, including nested nodes
+            returns lists for sequential execution and tuples for parallel execution
+            """
+            tasks = [] if node.execution_type == "sequential" else tuple()
+            for task in node.task_list:
+                if isinstance(task, ExecutableNode):
+                    if task.execution_type == "sequential":
+                        tasks = add_item_to_obj_store(
+                            tasks, extract_tasks_from_node(task, [])
+                        )
+                    else:
+                        tasks = add_item_to_obj_store(
+                            tasks, extract_tasks_from_node(task, tuple())
+                        )
                 else:
-                    self.next_execution_node = None
+                    tasks = add_item_to_obj_store(tasks, task)
 
-            logger.debug(f"Executing node: {node.node_name}")
+            return tasks
 
-            if node.execution_type == "sequential":
-                for task in node.task_list:
-                    try:
+        def execute_node(node: ExecutableNode) -> None:
+            """Execute a single node or group of nodes with proper concurrency handling."""
+
+            def execute_tasks(tasks):
+                # if isinstance(tasks, Callable) and tasks.__name__ in ["prep", "escape"]:
+                #     import pdb
+
+                #     pdb.set_trace()
+                """Recursively execute tasks respecting list (sequential) and tuple (parallel) structures"""
+                if isinstance(tasks, (list, tuple)):
+                    if isinstance(tasks, list):
+                        # Sequential execution
+                        for task in tasks:
+                            # Check chain status before continuing
+                            if self.chain_status != ChainStatus.RUNNING:
+                                return
+                            execute_tasks(task)
+                    else:
+                        # Parallel execution using concurrent.futures
                         with concurrent.futures.ThreadPoolExecutor() as executor:
+                            futures = []
+                            for task in tasks:
+                                # Check chain status before submitting new tasks
+                                if self.chain_status != ChainStatus.RUNNING:
+                                    return
+                                futures.append(executor.submit(execute_tasks, task))
 
-                            def wrapped_task():
-                                logger.debug(
-                                    f"Executing task in node: {node.node_name}"
-                                )
-                                result = (
-                                    task(state=self.state)
-                                    if self._has_state
-                                    else task()
-                                )
-                                # Update buffers with the result if it's returned
-                                if result is not None and self._has_state:
-                                    for field_name, value in result.items():
-                                        if field_name in self.buffers:
-                                            self.buffers[field_name].update(
-                                                value, execution_id=node.node_name
-                                            )
-                                return result
+                            # Wait for all futures to complete
+                            for future in concurrent.futures.as_completed(futures):
+                                try:
+                                    future.result(timeout=timeout)
+                                except Exception as e:
+                                    # Cancel remaining futures
+                                    for f in futures:
+                                        f.cancel()
+                                    raise e
+                else:
+                    # Base case: execute individual task
+                    node_name = getattr(tasks, "__name__", str(tasks))
 
-                            future = executor.submit(wrapped_task)
-                            future.result(timeout=timeout)
+                    # Handle before interrupts
+                    if not isinstance(node_name, list):
+                        if self._get_interrupt_status(node_name) == "before":
+                            if not self.start_from:
+                                self._save_state_and_buffers(node_name)
+                                self.next_execution_node = node_name
+                                self._update_chain_status(ChainStatus.PAUSE)
+                                return
 
-                    except concurrent.futures.TimeoutError:
-                        logger.error(f"Timeout in sequential node {node.node_name}")
-                        raise TimeoutError(
-                            f"Execution timeout in sequential node {node.node_name}"
-                        )
-                    except Exception as e:
-                        logger.error(f"Error in node {node.node_name}: {str(e)}")
-                        raise RuntimeError(
-                            f"Error in node {node.node_name}: {str(e)}"
-                        ) from e
-            else:  # parallel execution
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    futures = []
-                    for task in node.task_list:
-                        if isinstance(task, ExecutableNode):
-                            futures.append(executor.submit(execute_node, task))
-                        else:
-
-                            def wrapped_task():
-                                logger.debug(
-                                    f"Executing task in node: {node.node_name}"
-                                )
-                                result = (
-                                    task(state=self.state)
-                                    if self._has_state
-                                    else task()
-                                )
-                                # Update buffers with the result if it's returned
-                                if result is not None and self._has_state:
-                                    for field_name, value in result.items():
-                                        if field_name in self.buffers:
-                                            self.buffers[field_name].update(
-                                                value, execution_id=node.node_name
-                                            )
-                                self.next_execution_node = node.node_name
-                                return result
-
-                            futures.append(executor.submit(wrapped_task))
+                    # Skip nodes until we reach start_from
+                    if self.start_from and self.start_from != node_name:
+                        return
+                    # Cleaning up once start_from is reached
+                    if self.start_from == node_name:
+                        self.start_from = None
+                        self._update_chain_status(ChainStatus.RUNNING)
 
                     try:
-                        concurrent.futures.wait(
-                            futures,
-                            timeout=timeout,
-                            return_when=concurrent.futures.ALL_COMPLETED,
-                        )
+                        # Execute the task
+                        result = execute_task(tasks, node_name)
+                        self.last_executed_node = node_name
 
-                        for future in futures:
-                            if future.exception():
-                                logger.error(
-                                    f"Error in parallel execution of {node.node_name}: {str(future.exception())}"
-                                )
-                                raise RuntimeError(
-                                    f"Error in parallel execution of {node.node_name}: {str(future.exception())}"
-                                ) from future.exception()
+                        # Handle after interrupts
+                        if not isinstance(node_name, list):
+                            if self._get_interrupt_status(node_name) == "after":
+                                if not self.start_from:
+                                    self.next_execution_node = node_name
+                                    self._update_chain_status(ChainStatus.PAUSE)
+                                    return
+
+                        return result
 
                     except concurrent.futures.TimeoutError:
-                        for future in futures:
-                            future.cancel()
-                        logger.error(f"Timeout in node {node.node_name}")
-                        raise TimeoutError(
-                            f"Execution timeout in node {node.node_name}"
-                        )
-            self.next_execution_node = node.node_name
+                        logger.error(f"Timeout in node {node_name}")
+                        raise TimeoutError(f"Execution timeout in node {node_name}")
+                    except Exception as e:
+                        logger.error(f"Error in node {node_name}: {str(e)}")
+                        raise RuntimeError(
+                            f"Error in node {node_name}: {str(e)}"
+                        ) from e
 
-            if node.interrupt == "after":
-                if not start_from:
-                    self._update_chain_status(ChainStatus.PAUSE)
-                    return
+            # Extract and execute tasks
+            tasks = extract_tasks_from_node(node)
+            execute_tasks(tasks)
 
         self._convert_execution_plan()
         self._update_chain_status(ChainStatus.RUNNING)
+        self.start_from = start_from
         for node in self.execution_plan:
-            if (
-                start_from and node.node_name != start_from
-            ):  # when start_from is provided, skip all nodes until the start_from node
-                continue
-
-            if (
-                start_from
-                and node.interrupt == "after"
-                and node.node_name == start_from
-            ):
-                start_from = None
-                continue
-
-            chain_status = self._get_chain_status()
-            if chain_status == ChainStatus.PAUSE:
-                logger.info("Chain paused.")
+            if self.chain_status == ChainStatus.RUNNING:
+                execute_node(node)
+            else:
                 return
-
-            execute_node(node, start_from)
-            # Update state after each main-level node execution
-            self._save_state_and_buffers(node.node_name)
-
-            if start_from and node.node_name == start_from:
-                start_from = None
 
     def execute(
         self, start_from: Optional[str] = None, timeout: Union[int, float, None] = None
