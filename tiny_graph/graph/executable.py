@@ -70,6 +70,7 @@ class Graph(BaseGraph):
         self.next_execution_node = None
         self.execution_timeout = execution_timeout
         self.start_from = None
+        self.executed_nodes = set()
 
     def _assign_buffers(self):
         self.buffers = {
@@ -207,13 +208,8 @@ class Graph(BaseGraph):
             """Execute a single task with proper state handling."""
             logger.debug(f"Executing task in node: {node_name}")
             result = task(state=self.state) if self._has_state else task()
-
-            # Update buffers with the result if it's returned
-            # if result is not None and self._has_state:
-            #     for field_name, value in result.items():
-            #         if field_name in self.buffers:
-            #             self.buffers[field_name].update(value, execution_id=node_name)
             self._save_state_and_buffers(node_name)
+            self.executed_nodes.add(node_name)
             return result
 
         def add_item_to_obj_store(obj_store: Union[List, Tuple], item):
@@ -246,14 +242,10 @@ class Graph(BaseGraph):
 
             return tasks
 
-        def execute_node(node: ExecutableNode) -> None:
+        def execute_node(node: ExecutableNode, node_index: int) -> None:
             """Execute a single node or group of nodes with proper concurrency handling."""
 
-            def execute_tasks(tasks):
-                # if isinstance(tasks, Callable) and tasks.__name__ in ["prep", "escape"]:
-                #     import pdb
-
-                #     pdb.set_trace()
+            def execute_tasks(tasks, node_index: int):
                 """Recursively execute tasks respecting list (sequential) and tuple (parallel) structures"""
                 if isinstance(tasks, (list, tuple)):
                     if isinstance(tasks, list):
@@ -262,7 +254,7 @@ class Graph(BaseGraph):
                             # Check chain status before continuing
                             if self.chain_status != ChainStatus.RUNNING:
                                 return
-                            execute_tasks(task)
+                            execute_tasks(task, node_index)
                     else:
                         # Parallel execution using concurrent.futures
                         with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -271,7 +263,9 @@ class Graph(BaseGraph):
                                 # Check chain status before submitting new tasks
                                 if self.chain_status != ChainStatus.RUNNING:
                                     return
-                                futures.append(executor.submit(execute_tasks, task))
+                                futures.append(
+                                    executor.submit(execute_tasks, task, node_index)
+                                )
 
                             # Wait for all futures to complete
                             for future in concurrent.futures.as_completed(futures):
@@ -286,6 +280,10 @@ class Graph(BaseGraph):
                     # Base case: execute individual task
                     node_name = getattr(tasks, "__name__", str(tasks))
 
+                    # Skip if node was already executed
+                    if node_name in self.executed_nodes:
+                        return
+
                     # Handle before interrupts
                     if not isinstance(node_name, list):
                         if self._get_interrupt_status(node_name) == "before":
@@ -298,6 +296,7 @@ class Graph(BaseGraph):
                     # Skip nodes until we reach start_from
                     if self.start_from and self.start_from != node_name:
                         return
+
                     # Cleaning up once start_from is reached
                     if self.start_from == node_name:
                         self.start_from = None
@@ -312,9 +311,14 @@ class Graph(BaseGraph):
                         if not isinstance(node_name, list):
                             if self._get_interrupt_status(node_name) == "after":
                                 if not self.start_from:
-                                    self.next_execution_node = node_name
+                                    self.next_execution_node = self.execution_plan[
+                                        node_index + 1
+                                    ].node_name
                                     self._update_chain_status(ChainStatus.PAUSE)
                                     return
+                                else:
+                                    self.start_from = None
+                                    self._update_chain_status(ChainStatus.RUNNING)
 
                         return result
 
@@ -329,20 +333,22 @@ class Graph(BaseGraph):
 
             # Extract and execute tasks
             tasks = extract_tasks_from_node(node)
-            execute_tasks(tasks)
+            execute_tasks(tasks, node_index)
 
         self._convert_execution_plan()
         self._update_chain_status(ChainStatus.RUNNING)
         self.start_from = start_from
-        for node in self.execution_plan:
+        for node_index, node in enumerate(self.execution_plan):
             if self.chain_status == ChainStatus.RUNNING:
-                execute_node(node)
+                execute_node(node, node_index)
             else:
                 return
 
     def execute(
         self, start_from: Optional[str] = None, timeout: Union[int, float, None] = None
     ):
+        if start_from is None:
+            self.executed_nodes.clear()
         if timeout is None:
             timeout = self.execution_timeout
         self._execute(start_from, timeout)
