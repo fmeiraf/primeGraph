@@ -403,7 +403,7 @@ def test_simple_fan_graph(simple_fan_graph):
         ["escape", ["aa", "bb"]],
         "prep",
     ]
-    assert create_compable_list(compiled.execution_plan) == create_compable_list(
+    assert create_compable_list(compiled.execution_path) == create_compable_list(
         expected_execution_plan
     )
 
@@ -416,6 +416,6 @@ def test_complex_fan_graph(complex_fan_graph):
         [["escape", ["cc", "dd"], "hh"], ["aa", "bb"]],
         "prep",
     ]
-    assert create_compable_list(compiled.execution_plan) == create_compable_list(
+    assert create_compable_list(compiled.execution_path) == create_compable_list(
         expected_execution_plan
     )

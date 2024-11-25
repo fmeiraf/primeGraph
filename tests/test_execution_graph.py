@@ -137,7 +137,10 @@ def extract_executable_nodes_info(executable_node):
 
 def test_execution_plan_conversion(basic_graph):
     # Test sequential execution
-    basic_graph.execution_plan = ["process_data", "validate"]
+    basic_graph.detailed_execution_path = [
+        ("__start__", "process_data"),
+        ("process_data", "validate"),
+    ]
     result = basic_graph._convert_execution_plan()
 
     assert len(result) == 2
@@ -147,28 +150,53 @@ def test_execution_plan_conversion(basic_graph):
     assert len(result[0].task_list) == 1
 
     # Test parallel execution
-    basic_graph.execution_plan = [["escape", "aa"]]
+    basic_graph.detailed_execution_path = [
+        [("validate", "aa"), ("bb", "bb")],
+        [
+            ("escape", "escape"),
+            [("escape", "dd"), ("escape", "cc")],
+            ("validate", "hh"),
+        ],
+    ]
     result = basic_graph._convert_execution_plan()
 
-    assert len(result) == 1
-    assert result[0].node_name == "escape_aa"
-    assert result[0].execution_type == "parallel"
-    assert len(result[0].task_list) == 2
+    # Execpted result:
+    #     [
+    #     ExecutableNode(
+    #         node_name='group_aa_bb',
+    #         task_list=[<function aa at 0x10c756ac0>, <function bb at 0x10c7551c0>],
+    #         node_list=['aa', 'bb'],
+    #         execution_type='sequential',
+    #         interrupt=None
+    #     ),
+    #     ExecutableNode(
+    #         node_name='group_escape_(dd_cc)_hh',
+    #         task_list=[
+    #             <function escape at 0x10c756b60>,
+    #             ExecutableNode(
+    #                 node_name='group_dd_cc',
+    #                 task_list=[<function dd at 0x10c7568e0>, <function cc at 0x10c755ee0>],
+    #                 node_list=['dd', 'cc'],
+    #                 execution_type='parallel',
+    #                 interrupt=None
+    #             ),
+    #             <function hh at 0x10c756c00>
+    #         ],
+    #         node_list=['escape', ['dd', 'cc'], 'hh'],
+    #         execution_type='sequential',
+    #         interrupt=None
+    #     )
+    # ]
 
-    # Test mixed execution
-    basic_graph.execution_plan = ["process_data", ["escape", "cc"], "prep"]
-    result = basic_graph._convert_execution_plan()
-
-    assert len(result) == 3
-    assert result[0].execution_type == "sequential"
-    assert result[1].execution_type == "parallel"
-    assert result[2].execution_type == "sequential"
-    assert len(result[1].task_list) == 2
+    assert len(result) == 2
+    assert result[1].task_list[1].node_name == "group_dd_cc"
+    assert result[1].task_list[1].execution_type == "parallel"
+    assert len(result[1].task_list) == 3
 
 
 def test_execution_plan_invalid_input(basic_graph):
     # Test invalid input
-    basic_graph.execution_plan = [None]
+    basic_graph.detailed_execution_path = [None]
     with pytest.raises(ValueError):
         basic_graph._convert_execution_plan()
 
