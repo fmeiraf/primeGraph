@@ -220,8 +220,13 @@ class Graph(BaseGraph):
 
             # added this way to have access to class .self
             def run_task():
-                print("has_state", self._has_state)
-                return task(state=self.state) if self._has_state else task()
+                result = task(state=self.state) if self._has_state else task()
+                if result and self._has_state:
+                    for state_field_name, state_field_value in result.items():
+                        self.buffers[state_field_name].update(
+                            state_field_value, node_name
+                        )
+                return result
 
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(run_task)
@@ -229,6 +234,7 @@ class Graph(BaseGraph):
                     result = future.result(timeout=timeout)
                     self._save_state_and_buffers(node_name)
                     self.executed_nodes.add(node_name)
+
                     return result
                 except concurrent.futures.TimeoutError:
                     future.cancel()
