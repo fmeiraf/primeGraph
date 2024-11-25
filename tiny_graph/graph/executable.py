@@ -158,9 +158,18 @@ class Graph(BaseGraph):
             else:
                 raise ValueError(f"Expected tuple or list, got {type(exec_plan_item)}")
 
+        if not self.detailed_execution_path or any(
+            item is None for item in self.detailed_execution_path
+        ):
+            raise ValueError(
+                "No execution plan found. Please set detailed_execution_path."
+            )
+
         self.execution_plan = [
             create_executable_node(item) for item in self.detailed_execution_path
         ]
+
+        return self.execution_plan
 
     @internal_only
     def _update_state_from_buffers(self):
@@ -194,6 +203,7 @@ class Graph(BaseGraph):
     ) -> Union[Literal["before", "after"], None]:
         return self.nodes[node_name].interrupt
 
+    @internal_only
     def _execute(
         self, start_from: Optional[str] = None, timeout: Union[int, float] = 60 * 5
     ) -> None:
@@ -207,10 +217,23 @@ class Graph(BaseGraph):
         def execute_task(task: Callable, node_name: str) -> Any:
             """Execute a single task with proper state handling."""
             logger.debug(f"Executing task in node: {node_name}")
-            result = task(state=self.state) if self._has_state else task()
-            self._save_state_and_buffers(node_name)
-            self.executed_nodes.add(node_name)
-            return result
+
+            # added this way to have access to class .self
+            def run_task():
+                print("has_state", self._has_state)
+                return task(state=self.state) if self._has_state else task()
+
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(run_task)
+                try:
+                    result = future.result(timeout=timeout)
+                    self._save_state_and_buffers(node_name)
+                    self.executed_nodes.add(node_name)
+                    return result
+                except concurrent.futures.TimeoutError:
+                    future.cancel()
+                    logger.error(f"Timeout in node {node_name}")
+                    raise TimeoutError(f"Execution timeout in node {node_name}")
 
         def add_item_to_obj_store(obj_store: Union[List, Tuple], item):
             if isinstance(obj_store, list):
