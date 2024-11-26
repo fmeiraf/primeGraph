@@ -542,3 +542,173 @@ def test_parallel_updates(graph_with_buffers):
     ]
     for metric in state.metrics:
         assert metric in expected_metrics
+
+
+def test_pause_before_node_execution():
+    graph = Graph()
+    execution_order = []
+
+    @graph.node()
+    def task1():
+        execution_order.append("task1")
+
+    @graph.node(interrupt="before")
+    def task2():
+        execution_order.append("task2")
+
+    @graph.node()
+    def task3():
+        execution_order.append("task3")
+
+    graph.add_edge(START, "task1")
+    graph.add_edge("task1", "task2")
+    graph.add_edge("task2", "task3")
+    graph.add_edge("task3", END)
+    graph.compile()
+
+    # First execution should stop before task2
+    graph.execute()
+    assert execution_order == ["task1"]
+    assert graph.next_execution_node == "task2"
+
+    # Resume execution
+    graph.resume()
+    assert execution_order == ["task1", "task2", "task3"]
+
+
+def test_pause_after_node_execution():
+    graph = Graph()
+    execution_order = []
+
+    @graph.node()
+    def task1():
+        execution_order.append("task1")
+
+    @graph.node(interrupt="after")
+    def task2():
+        execution_order.append("task2")
+
+    @graph.node()
+    def task3():
+        execution_order.append("task3")
+
+    graph.add_edge(START, "task1")
+    graph.add_edge("task1", "task2")
+    graph.add_edge("task2", "task3")
+    graph.add_edge("task3", END)
+    graph.compile()
+
+    # First execution should stop after task2
+    graph.execute()
+    assert execution_order == ["task1", "task2"]
+    assert graph.next_execution_node == "task3"
+
+    # Resume execution
+    graph.resume()
+    assert execution_order == ["task1", "task2", "task3"]
+
+
+def test_resume_without_pause():
+    graph = Graph()
+
+    @graph.node()
+    def task1():
+        pass
+
+    @graph.node()
+    def task2():
+        pass
+
+    graph.add_edge(START, "task1")
+    graph.add_edge("task1", "task2")
+    graph.add_edge("task2", END)
+    graph.compile()
+
+    # Should raise error when trying to resume without a pause
+    with pytest.raises(RuntimeError) as exc_info:
+        graph.resume()
+    assert "No interrupted node found" in str(exc_info.value)
+
+
+class StateForTestWithHistory(GraphState):
+    execution_order: History[str]
+
+
+def test_multiple_pause_resume_cycles():
+    state = StateForTestWithHistory(execution_order=[])
+    graph = Graph(state=state)
+
+    @graph.node()
+    def task1(state):
+        return {"execution_order": "task1"}
+
+    @graph.node(interrupt="after")
+    def task2(state):
+        return {"execution_order": "task2"}
+
+    @graph.node()
+    def task3(state):
+        return {"execution_order": "task3"}
+
+    @graph.node()
+    def task4(state):
+        return {"execution_order": "task4"}
+
+    graph.add_edge(START, "task1")
+    graph.add_edge("task1", "task2")
+    graph.add_edge("task2", "task3")
+    graph.add_edge("task3", "task4")
+    graph.add_edge("task4", END)
+    graph.compile()
+
+    # First execution - stops after task2
+    graph.execute()
+    assert state.execution_order == ["task1", "task2"]
+    assert graph.next_execution_node == "task3"
+
+    # Second resume - completes execution
+    graph.resume()
+    assert state.execution_order == ["task1", "task2", "task3", "task4"]
+
+
+def test_pause_resume_with_parallel_execution():
+    state = StateForTestWithHistory(execution_order=[])
+    graph = Graph(state=state)
+
+    @graph.node()
+    def task1(state):
+        return {"execution_order": "task1"}
+
+    @graph.node(interrupt="before")
+    def task2(state):
+        return {"execution_order": "task2"}
+
+    @graph.node()
+    def task3(state):
+        return {"execution_order": "task3"}
+
+    @graph.node()
+    def task4(state):
+        return {"execution_order": "task4"}
+
+    # Create parallel paths
+    graph.add_edge(START, "task1")
+    graph.add_edge("task1", "task2")
+    graph.add_edge("task1", "task3")
+    graph.add_edge("task2", "task4")
+    graph.add_edge("task3", "task4")
+    graph.add_edge("task4", END)
+    graph.compile()
+
+    # First execution should execute task1 and task3, but pause before task2
+    graph.execute()
+    assert "task1" in graph.state.execution_order
+    assert "task3" in graph.state.execution_order
+    assert "task2" not in graph.state.execution_order
+    assert "task4" not in graph.state.execution_order
+    assert graph.next_execution_node == "task2"
+
+    # Resume should complete the execution
+    graph.resume()
+    assert "task2" in graph.state.execution_order
+    assert "task4" in graph.state.execution_order
