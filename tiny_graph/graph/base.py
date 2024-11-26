@@ -197,6 +197,10 @@ class BaseGraph:
                 f"Found orphaned nodes not reachable from '__start__': {orphaned_nodes}"
             )
 
+        # Check for graphs with only one node added or less
+        if len(self.nodes) <= 3:
+            raise ValueError("Graph with only one node is not valid")
+
         # Check for dead ends (nodes with no outgoing edges, except END)
         nodes_with_outgoing_edges = {edge.start_node for edge in self.edges}
         dead_ends = set(self.nodes.keys()) - nodes_with_outgoing_edges - {END}
@@ -399,6 +403,8 @@ class BaseGraph:
 
         def find_all_edges_with_node(node_name):
             edges = [edge.id for edge in self.edges if edge.end_node == node_name]
+            if not edges:
+                raise ValueError(f"No edges found for node: {node_name}")
             return edges if len(edges) > 1 else edges[0]
 
         def scan_execution_plan(execution_plan):
@@ -414,8 +420,9 @@ class BaseGraph:
 
                     final_edge_plan.append(nested_result)
                 else:
-                    result = find_all_edges_with_node(step)
-                    final_edge_plan.append(result)
+                    if step != START:
+                        result = find_all_edges_with_node(step)
+                        final_edge_plan.append(result)
 
             return final_edge_plan
 
@@ -429,6 +436,9 @@ class BaseGraph:
         def extract_execution_plan(current_item):
             if isinstance(current_item, list):
                 return [extract_execution_plan(item) for item in current_item]
+
+            elif isinstance(current_item, str):
+                return current_item
             else:
                 return current_item[1]
 
