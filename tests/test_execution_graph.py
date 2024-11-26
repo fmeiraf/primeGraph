@@ -711,3 +711,35 @@ def test_pause_resume_with_parallel_execution():
     graph.resume()
     assert "task2" in graph.state.execution_order
     assert "task4" in graph.state.execution_order
+
+
+def test_resume_with_start_from_only():
+    state = StateForTestWithHistory(execution_order=[])
+    graph = Graph(state=state)
+
+    @graph.node()
+    def task1(state):
+        return {"execution_order": "task1"}
+
+    @graph.node()
+    def task2(state):
+        return {"execution_order": "task2"}
+
+    @graph.node()
+    def task3(state):
+        return {"execution_order": "task3"}
+
+    @graph.node()
+    def task4(state):
+        return {"execution_order": "task4"}
+
+    graph.add_edge(START, "task1")
+    graph.add_edge("task1", "task2")
+    graph.add_edge("task2", "task3")
+    graph.add_edge("task3", "task4")
+    graph.add_edge("task4", END)
+    graph.compile()
+
+    # Start execution from task2
+    graph.resume(start_from="task2")
+    assert state.execution_order == ["task2", "task3", "task4"]

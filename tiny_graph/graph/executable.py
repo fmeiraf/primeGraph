@@ -391,5 +391,9 @@ class Graph(BaseGraph):
                 "resume method should either specify a start_from node or be part of a chain call (execute)"
             )
 
-        self.execute(start_from=self.next_execution_node)
+        if start_from:
+            self.start_from = start_from
+            self.execute(start_from=start_from)
+        else:
+            self.execute(start_from=self.next_execution_node)
         return
