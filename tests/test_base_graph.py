@@ -232,6 +232,19 @@ def test_compile_valid_graph(basic_graph):
     assert compiled.is_compiled
 
 
+def test_graph_with_only_one_node(empty_graph):
+    shallow_graph = BaseGraph()
+
+    @shallow_graph.node()
+    def task1():
+        pass
+
+    shallow_graph.add_edge(START, "task1")
+    shallow_graph.add_edge("task1", END)
+    with pytest.raises(ValueError):
+        shallow_graph.compile()
+
+
 def test_compile_invalid_router():
     graph = BaseGraph()
 
