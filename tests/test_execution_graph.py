@@ -625,9 +625,8 @@ def test_resume_without_pause():
     graph.compile()
 
     # Should raise error when trying to resume without a pause
-    with pytest.raises(RuntimeError) as exc_info:
+    with pytest.raises(ValueError):
         graph.resume()
-    assert "No interrupted node found" in str(exc_info.value)
 
 
 class StateForTestWithHistory(GraphState):

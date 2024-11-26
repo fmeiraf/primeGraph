@@ -382,12 +382,14 @@ class Graph(BaseGraph):
             timeout = self.execution_timeout
         self._execute(start_from, timeout)
 
-    def resume(self):
-        if not self.next_execution_node:
+    def resume(self, start_from: Optional[str] = None):
+        if not self.next_execution_node and not start_from:
             logger.info(
-                "No interrupted node found. Starting execution from the beginning."
+                "resume method should either specify a start_from node or be part of a chain call (execute)"
             )
-            raise RuntimeError("No interrupted node found. Cannot resume.")
+            raise ValueError(
+                "resume method should either specify a start_from node or be part of a chain call (execute)"
+            )
 
         self.execute(start_from=self.next_execution_node)
         return
