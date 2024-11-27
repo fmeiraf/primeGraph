@@ -68,7 +68,9 @@ class LocalStorage(StorageBackend):
             chain_storage = self._storage.get(chain_id, {})
             if not chain_storage:
                 return []
-            return [name for name in chain_storage.keys()]
+            return [
+                chain_storage[checkpoint_id] for checkpoint_id in chain_storage.keys()
+            ]
 
     def delete_checkpoint(self, checkpoint_id: str, chain_id: str) -> None:
         with self._lock:
