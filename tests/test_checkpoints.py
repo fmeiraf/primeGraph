@@ -41,8 +41,8 @@ def test_list_checkpoints():
 
     checkpoints = graph.checkpoint_storage.list_checkpoints(graph.chain_id)
     assert len(checkpoints) == 2
-    assert checkpoint_1 in checkpoints
-    assert checkpoint_2 in checkpoints
+    assert checkpoint_1 in [c["checkpoint_id"] for c in checkpoints]
+    assert checkpoint_2 in [c["checkpoint_id"] for c in checkpoints]
 
 
 def test_delete_checkpoint():
