@@ -56,7 +56,6 @@ class Graph(BaseGraph):
         # State management
         self.state = state
         self.state_schema = self._get_schema(state)
-        self.state_history = {}
         self.buffers: Dict[str, BaseBuffer] = {}
         if self.state_schema:
             self._assign_buffers()
@@ -176,10 +175,6 @@ class Graph(BaseGraph):
         for field_name, buffer in self.buffers.items():
             if buffer._ready_for_consumption:
                 setattr(self.state, field_name, buffer.consume_last_value())
-                # Ensure the history key exists and append the new history
-                self.state_history.setdefault(f"{field_name}_history", []).append(
-                    buffer.value_history
-                )
 
     def _get_chain_status(self) -> ChainStatus:
         return self.chain_status
