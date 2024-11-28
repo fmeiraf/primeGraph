@@ -23,3 +23,8 @@ class HistoryBuffer(BaseBuffer):
     def get(self) -> Any:
         with self._lock:
             return self.value
+
+    def set_value(self, value: Any) -> None:
+        with self._lock:
+            self.value = value
+            self.last_value = value

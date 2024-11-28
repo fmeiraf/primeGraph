@@ -1,7 +1,6 @@
 import concurrent.futures
 import logging
 import uuid
-from enum import Enum, auto
 from typing import (
     Any,
     Callable,
@@ -18,9 +17,10 @@ from pydantic import BaseModel
 
 from tiny_graph.buffer.base import BaseBuffer
 from tiny_graph.buffer.factory import BufferFactory
-from tiny_graph.checkpoint.storage.base import StorageBackend
+from tiny_graph.checkpoint.base import StorageBackend
 from tiny_graph.graph.base import BaseGraph
-from tiny_graph.models.base import GraphState
+from tiny_graph.models.state import GraphState
+from tiny_graph.types import ChainStatus
 from tiny_graph.utils.class_utils import internal_only
 
 # Configure logging
@@ -36,17 +36,10 @@ class ExecutableNode(NamedTuple):
     interrupt: Union[Literal["before", "after"], None] = None
 
 
-class ChainStatus(Enum):
-    IDLE = auto()
-    PAUSE = auto()
-    RUNNING = auto()
-    FAILED = auto()
-
-
 class Graph(BaseGraph):
     def __init__(
         self,
-        state: Union[BaseModel, NamedTuple, None] = None,
+        state: Union[BaseModel, None] = None,
         checkpoint_storage: Optional[StorageBackend] = None,
         chain_id: Optional[str] = None,
         execution_timeout: Union[int, float] = 60 * 5,
@@ -54,14 +47,15 @@ class Graph(BaseGraph):
         super().__init__(state)
 
         # State management
-        self.state = state
+        self.initial_state = state
+        self.state = self._reset_state()
         self.state_schema = self._get_schema(state)
         self.buffers: Dict[str, BaseBuffer] = {}
         if self.state_schema:
             self._assign_buffers()
 
         # Chain management
-        self.chain_id = chain_id if chain_id else f"{uuid.uuid4()}"
+        self.chain_id = chain_id if chain_id else f"chain_{uuid.uuid4()}"
         self.checkpoint_storage = checkpoint_storage
         self.chain_status = ChainStatus.IDLE
 
@@ -76,6 +70,19 @@ class Graph(BaseGraph):
             field_name: BufferFactory.create_buffer(field_name, field_type)
             for field_name, field_type in self.state_schema.items()
         }
+
+    def _reset_state(self, new_state: Union[BaseModel, None] = None):
+        """Reset the state instance to its initial values while preserving the class."""
+        if not self.initial_state:
+            return None
+
+        if new_state:
+            new_state = new_state.model_dump()
+            return self.initial_state.__class__(**new_state)
+        else:
+            # Store the class and create new instance with same initial values
+            initial_state = self.initial_state.model_dump()
+            return self.initial_state.__class__(**initial_state)
 
     def _get_schema(self, state: Union[BaseModel, NamedTuple, None]) -> Dict[str, type]:
         if isinstance(state, (BaseModel, GraphState)) and hasattr(
@@ -170,14 +177,23 @@ class Graph(BaseGraph):
 
         return self.execution_plan
 
-    @internal_only
-    def _update_state_from_buffers(self):
-        for field_name, buffer in self.buffers.items():
-            if buffer._ready_for_consumption:
-                setattr(self.state, field_name, buffer.consume_last_value())
-
     def _get_chain_status(self) -> ChainStatus:
         return self.chain_status
+
+    def _clean_graph_variables(self, new_state: Union[BaseModel, None] = None):
+        # One-off set up variables
+        self.next_execution_node = None
+        self.executed_nodes = set()
+        self.start_from = None
+        self.last_executed_node = None
+        self.chain_status = ChainStatus.IDLE
+
+        # Re-assign buffers and reset state
+        if self.state_schema:
+            self._assign_buffers()
+
+        # Reset state to first assigned state (from graph init)
+        self._reset_state(new_state)
 
     @internal_only
     def _update_chain_status(self, status: ChainStatus):
@@ -185,12 +201,24 @@ class Graph(BaseGraph):
         logger.debug(f"Chain status updated to: {status}")
 
     @internal_only
-    def _save_state_and_buffers(self, node_name: str):
+    def _update_state_from_buffers(self):
+        for field_name, buffer in self.buffers.items():
+            if buffer._ready_for_consumption:
+                setattr(self.state, field_name, buffer.consume_last_value())
+
+    @internal_only
+    def _save_checkpoint(self, node_name: str):
         if self.state:
-            self._update_state_from_buffers()
             if self.checkpoint_storage:
-                self.checkpoint_storage.save_checkpoint(self.state, self.chain_id)
-        logger.debug(f"State updated after node: {node_name}")
+                # TODO: add checkpoint_id or make it optional
+                self.checkpoint_storage.save_checkpoint(
+                    state_instance=self.state,
+                    chain_id=self.chain_id,
+                    chain_status=self.chain_status,
+                    next_execution_node=self.next_execution_node,
+                    executed_nodes=self.executed_nodes,
+                )
+        logger.debug(f"Checkpoint saved after node: {node_name}")
 
     @internal_only
     def _get_interrupt_status(
@@ -208,6 +236,8 @@ class Graph(BaseGraph):
             start_from: node name to start execution from
             timeout: maximum execution time in seconds
         """
+
+        # I believe the problem is that we should only save tasks on the end of execute_tasks, not on each task, that will ensure we get the right state from the graph for checkpoints
 
         def execute_task(task: Callable, node_name: str) -> Any:
             """Execute a single task with proper state handling."""
@@ -227,7 +257,7 @@ class Graph(BaseGraph):
                 future = executor.submit(run_task)
                 try:
                     result = future.result(timeout=timeout)
-                    self._save_state_and_buffers(node_name)
+                    self._update_state_from_buffers()
                     self.executed_nodes.add(node_name)
 
                     return result
@@ -279,6 +309,9 @@ class Graph(BaseGraph):
                             if self.chain_status != ChainStatus.RUNNING:
                                 return
                             execute_tasks(task, node_index)
+                            self._save_checkpoint(
+                                self.execution_plan[node_index].node_name
+                            )
                     else:
                         # Parallel execution using concurrent.futures
                         with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -300,6 +333,9 @@ class Graph(BaseGraph):
                                     for f in futures:
                                         f.cancel()
                                     raise e
+                            self._save_checkpoint(
+                                self.execution_plan[node_index].node_name
+                            )
                 else:
                     # Base case: execute individual task
                     node_name = getattr(tasks, "__name__", str(tasks))
@@ -312,7 +348,7 @@ class Graph(BaseGraph):
                     if not isinstance(node_name, list):
                         if self._get_interrupt_status(node_name) == "before":
                             if not self.start_from:
-                                self._save_state_and_buffers(node_name)
+                                # self._save_state_and_buffers(node_name)
                                 self.next_execution_node = node_name
                                 self._update_chain_status(ChainStatus.PAUSE)
                                 return
@@ -368,13 +404,17 @@ class Graph(BaseGraph):
             else:
                 return
 
+    @internal_only
     def execute(
-        self, start_from: Optional[str] = None, timeout: Union[int, float, None] = None
+        self,
+        start_from: Optional[str] = None,
+        timeout: Union[int, float] = 60 * 5,
     ):
         if start_from is None:
             self.executed_nodes.clear()
-        if timeout is None:
+        if not timeout:
             timeout = self.execution_timeout
+
         self._execute(start_from, timeout)
 
     def resume(self, start_from: Optional[str] = None):
@@ -392,3 +432,69 @@ class Graph(BaseGraph):
         else:
             self.execute(start_from=self.next_execution_node)
         return
+
+    def start(
+        self, chain_id: Optional[str] = None, timeout: Union[int, float] = None
+    ) -> str:
+        """Start a new graph execution with a new chain id"""
+        if chain_id:
+            self.chain_id = chain_id
+        else:
+            self.chain_id = f"chain_{uuid.uuid4()}"
+
+        self._clean_graph_variables()
+        self.execute(timeout=timeout)
+        return self.chain_id
+
+    def load_from_checkpoint(
+        self, chain_id: str, checkpoint_id: Optional[str] = None
+    ) -> None:
+        """Load graph state and execution variables from a checkpoint.
+
+        Args:
+            checkpoint_id: Optional specific checkpoint ID to load. If None, loads the last checkpoint.
+        """
+        if not self.checkpoint_storage:
+            raise ValueError(
+                "Checkpoint storage must be configured to load from checkpoint"
+            )
+
+        # Get checkpoint ID if not specified
+        if not checkpoint_id:
+            checkpoint_id = self.checkpoint_storage.get_last_checkpoint_id(chain_id)
+            if not checkpoint_id:
+                raise ValueError(f"No checkpoints found for chain {chain_id}")
+
+        # Load checkpoint data
+        checkpoint = self.checkpoint_storage.load_checkpoint(
+            state_instance=self.state,
+            chain_id=chain_id,
+            checkpoint_id=checkpoint_id,
+        )
+
+        # Verify state class matches
+        current_state_class = (
+            f"{self.state.__class__.__module__}.{self.state.__class__.__name__}"
+        )
+        if current_state_class != checkpoint.state_class:
+            raise ValueError(
+                f"State class mismatch. Current: {current_state_class}, "
+                f"Checkpoint: {checkpoint.state_class}"
+            )
+
+        self._clean_graph_variables()
+        # Update state from serialized data
+        self.state = self.initial_state.__class__.model_validate_json(checkpoint.data)
+
+        # Update buffers with current state values
+        for field_name, buffer in self.buffers.items():
+            buffer.set_value(getattr(self.state, field_name))
+
+        # Update execution variables
+        self.chain_id = checkpoint.chain_id
+        self.chain_status = checkpoint.chain_status
+        self.next_execution_node = checkpoint.next_execution_node
+        if checkpoint.executed_nodes:
+            self.executed_nodes = checkpoint.executed_nodes
+
+        logger.debug(f"Loaded checkpoint {checkpoint_id} for chain {self.chain_id}")

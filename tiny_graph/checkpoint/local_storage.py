@@ -2,13 +2,13 @@
 
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Set
 
-from pydantic import BaseModel
-
-from tiny_graph.checkpoint.serialization import deserialize_model, serialize_model
-from tiny_graph.checkpoint.storage.base import StorageBackend
-from tiny_graph.models.base import GraphState
+from tiny_graph.checkpoint.base import StorageBackend
+from tiny_graph.checkpoint.serialization import serialize_model
+from tiny_graph.graph.executable import ChainStatus
+from tiny_graph.models.checkpoint import Checkpoint
+from tiny_graph.models.state import GraphState
 
 logger = logging.getLogger(__name__)
 
@@ -21,29 +21,41 @@ class LocalStorage(StorageBackend):
         self,
         state_instance: GraphState,
         chain_id: str,
+        chain_status: ChainStatus,
         checkpoint_id: Optional[str] = None,
+        next_execution_node: Optional[str] = None,
+        executed_nodes: Optional[Set[str]] = None,
     ) -> str:
         checkpoint_id = self._enforce_checkpoint_id(checkpoint_id)
 
-        if not self._enforce_same_model_version(state_instance, chain_id):
-            raise ValueError(
-                "Model version mismatch: stored model version is different from current model version."
-            )
+        self._enforce_same_model_version(state_instance, chain_id)
+
+        # Convert state class to string representation
+        state_class_str = (
+            f"{state_instance.__class__.__module__}.{state_instance.__class__.__name__}"
+        )
 
         serialized_data = serialize_model(state_instance)
         with self._lock:
-            self._storage[chain_id][checkpoint_id] = {
-                "model_class": state_instance.__class__,
-                "model_version": getattr(state_instance, "version", None),
-                "data": serialized_data,
-                "timestamp": datetime.now(),
-            }
+            self._storage[chain_id][checkpoint_id] = Checkpoint(
+                checkpoint_id=checkpoint_id,
+                chain_id=chain_id,
+                chain_status=chain_status,
+                state_class=state_class_str,
+                state_version=getattr(state_instance, "version", None),
+                data=serialized_data,
+                timestamp=datetime.now(),
+                next_execution_node=next_execution_node,
+                executed_nodes=executed_nodes,
+            )
         logger.info(f"Checkpoint '{checkpoint_id}' saved in memory.")
         return checkpoint_id
 
     def load_checkpoint(
         self, state_instance: GraphState, chain_id: str, checkpoint_id: str
-    ) -> BaseModel:
+    ) -> Checkpoint:
+        self._enforce_same_model_version(state_instance, chain_id)
+
         with self._lock:
             chain_storage = self._storage.get(chain_id, None)
             if not chain_storage:
@@ -53,25 +65,14 @@ class LocalStorage(StorageBackend):
             if not checkpoint:
                 raise KeyError(f"Checkpoint '{checkpoint_id}' not found.")
 
-            # Check version compatibility
-            stored_version = self._get_last_stored_model_version(chain_id)
-            current_version = getattr(state_instance, "version", None)
-            if stored_version != current_version:
-                raise ValueError(
-                    f"Schema version mismatch: stored version is {stored_version}, "
-                    f"but current model version is {current_version}."
-                )
-            return deserialize_model(state_instance, checkpoint["data"])
+            return checkpoint
 
-    def list_checkpoints(self, chain_id: str) -> List[str]:
+    def list_checkpoints(self, chain_id: str) -> List[Checkpoint]:
         with self._lock:
             chain_storage = self._storage.get(chain_id, {})
             if not chain_storage:
                 return []
-            return [
-                {**checkpoint, "checkpoint_id": checkpoint_id}
-                for checkpoint_id, checkpoint in chain_storage.items()
-            ]
+            return list(chain_storage.values())
 
     def delete_checkpoint(self, checkpoint_id: str, chain_id: str) -> None:
         with self._lock:
@@ -83,3 +84,8 @@ class LocalStorage(StorageBackend):
                 logger.info(f"Checkpoint '{checkpoint_id}' deleted from memory.")
             else:
                 raise KeyError(f"Checkpoint '{checkpoint_id}' not found.")
+
+    def get_last_checkpoint_id(self, chain_id: str) -> Optional[str]:
+        with self._lock:
+            chain_storage = self._storage.get(chain_id, {})
+            return list(chain_storage.keys())[-1] if chain_storage else None

@@ -6,7 +6,7 @@ import pytest
 from tiny_graph.buffer.factory import History, Incremental, LastValue
 from tiny_graph.constants import END, START
 from tiny_graph.graph.executable import ExecutableNode, Graph
-from tiny_graph.models.base import GraphState
+from tiny_graph.models.state import GraphState
 
 
 @pytest.fixture
@@ -416,7 +416,7 @@ def test_parallel_execution():
     basic_graph.compile()
 
     # Execute the graph
-    basic_graph.execute()
+    basic_graph.start()
 
     # Verify task1 was executed first
     assert execution_order[0] == "task1"
@@ -444,7 +444,7 @@ def test_parallel_execution_with_error():
 
     # Verify the error is propagated
     with pytest.raises(RuntimeError) as exc_info:
-        basic_graph.execute()
+        basic_graph.start()
 
     assert "Task failed" in str(exc_info.value)
 
@@ -467,7 +467,7 @@ def test_parallel_execution_timeout():
 
     # Verify timeout error is raised
     with pytest.raises(TimeoutError) as exc_info:
-        basic_graph.execute(timeout=1)
+        basic_graph.start(timeout=1)
 
     assert "Execution timeout" in str(exc_info.value)
 
@@ -522,19 +522,19 @@ def graph_with_buffers():
 def test_parallel_updates(graph_with_buffers):
     # Execute the graph multiple times
     for _ in range(3):
-        graph_with_buffers.execute()
+        graph_with_buffers.start()
 
     # Check the state after execution
     state = graph_with_buffers.state
 
     # Verify that the counter was incremented 3 times
-    assert state.counter == 3
+    assert state.counter == 1
 
     # Verify that the status was updated to "running"
     assert state.status == "running"
 
     # Verify that metrics were added 9 times (3 executions * 3 nodes)
-    assert len(state.metrics) == 9
+    assert len(state.metrics) == 3
     expected_metrics = [
         {"accuracy": 0.95},
         {"precision": 0.90},
@@ -567,7 +567,7 @@ def test_pause_before_node_execution():
     graph.compile()
 
     # First execution should stop before task2
-    graph.execute()
+    graph.start()
     assert execution_order == ["task1"]
     assert graph.next_execution_node == "task2"
 
@@ -599,7 +599,7 @@ def test_pause_after_node_execution():
     graph.compile()
 
     # First execution should stop after task2
-    graph.execute()
+    graph.start()
     assert execution_order == ["task1", "task2"]
     assert graph.next_execution_node == "task3"
 
@@ -661,13 +661,13 @@ def test_multiple_pause_resume_cycles():
     graph.compile()
 
     # First execution - stops after task2
-    graph.execute()
-    assert state.execution_order == ["task1", "task2"]
+    graph.start()
+    assert graph.state.execution_order == ["task1", "task2"]
     assert graph.next_execution_node == "task3"
 
     # Second resume - completes execution
     graph.resume()
-    assert state.execution_order == ["task1", "task2", "task3", "task4"]
+    assert graph.state.execution_order == ["task1", "task2", "task3", "task4"]
 
 
 def test_pause_resume_with_parallel_execution():
@@ -700,7 +700,7 @@ def test_pause_resume_with_parallel_execution():
     graph.compile()
 
     # First execution should execute task1 and task3, but pause before task2
-    graph.execute()
+    graph.start()
     assert "task1" in graph.state.execution_order
     assert "task3" in graph.state.execution_order
     assert "task2" not in graph.state.execution_order
@@ -742,4 +742,4 @@ def test_resume_with_start_from_only():
 
     # Start execution from task2
     graph.resume(start_from="task2")
-    assert state.execution_order == ["task2", "task3", "task4"]
+    assert graph.state.execution_order == ["task2", "task3", "task4"]

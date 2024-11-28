@@ -28,6 +28,10 @@ class BaseBuffer(ABC):
     def get(self) -> Any:
         pass
 
+    @abstractmethod
+    def set_value(self, value: Any) -> None:
+        pass
+
     def add_history(self, value: Any, execution_id: str) -> None:
         # with self._lock:
         #     self.value_history[execution_id] = value

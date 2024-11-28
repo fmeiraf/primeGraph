@@ -2,10 +2,11 @@ from typing import Optional
 
 import pytest
 
-from tiny_graph.buffer.factory import LastValue
-from tiny_graph.checkpoint.storage.local_storage import LocalStorage
+from tiny_graph.buffer.factory import History, LastValue
+from tiny_graph.checkpoint.local_storage import LocalStorage
+from tiny_graph.constants import END, START
 from tiny_graph.graph.executable import Graph
-from tiny_graph.models.base import GraphState
+from tiny_graph.models.state import GraphState
 
 
 class StateForTest(GraphState):
@@ -19,15 +20,19 @@ def test_save_and_load_checkpoint():
     graph = Graph(state=state, checkpoint_storage=LocalStorage())
 
     # Save checkpoint
-    checkpoint_id = graph.checkpoint_storage.save_checkpoint(state, graph.chain_id)
+    checkpoint_id = graph.checkpoint_storage.save_checkpoint(
+        state, graph.chain_id, graph.chain_status
+    )
 
     # Load checkpoint
     loaded_state = graph.checkpoint_storage.load_checkpoint(
         state, graph.chain_id, checkpoint_id
     )
 
-    assert loaded_state.value == state.value
-    assert loaded_state.text == state.text
+    serialized_data = state.__class__.model_validate_json(loaded_state.data)
+
+    assert serialized_data.value == state.value
+    assert serialized_data.text == state.text
 
 
 def test_list_checkpoints():
@@ -35,14 +40,18 @@ def test_list_checkpoints():
     graph = Graph(state=state, checkpoint_storage=LocalStorage())
 
     # Save multiple checkpoints
-    checkpoint_1 = graph.checkpoint_storage.save_checkpoint(state, graph.chain_id)
+    checkpoint_1 = graph.checkpoint_storage.save_checkpoint(
+        state, graph.chain_id, graph.chain_status
+    )
     state.value = 43
-    checkpoint_2 = graph.checkpoint_storage.save_checkpoint(state, graph.chain_id)
+    checkpoint_2 = graph.checkpoint_storage.save_checkpoint(
+        state, graph.chain_id, graph.chain_status
+    )
 
     checkpoints = graph.checkpoint_storage.list_checkpoints(graph.chain_id)
     assert len(checkpoints) == 2
-    assert checkpoint_1 in [c["checkpoint_id"] for c in checkpoints]
-    assert checkpoint_2 in [c["checkpoint_id"] for c in checkpoints]
+    assert checkpoint_1 in [c.checkpoint_id for c in checkpoints]
+    assert checkpoint_2 in [c.checkpoint_id for c in checkpoints]
 
 
 def test_delete_checkpoint():
@@ -50,7 +59,9 @@ def test_delete_checkpoint():
     graph = Graph(state=state, checkpoint_storage=LocalStorage())
 
     # Save and then delete a checkpoint
-    checkpoint_id = graph.checkpoint_storage.save_checkpoint(state, graph.chain_id)
+    checkpoint_id = graph.checkpoint_storage.save_checkpoint(
+        state, graph.chain_id, graph.chain_status
+    )
     assert len(graph.checkpoint_storage.list_checkpoints(graph.chain_id)) == 1
 
     graph.checkpoint_storage.delete_checkpoint(checkpoint_id, graph.chain_id)
@@ -66,9 +77,11 @@ def test_version_mismatch():
     # Save with original version
     state = StateForTest(value=42)
     graph = Graph(state=state, checkpoint_storage=LocalStorage())
-    checkpoint_id = graph.checkpoint_storage.save_checkpoint(state, graph.chain_id)
+    checkpoint_id = graph.checkpoint_storage.save_checkpoint(
+        state, graph.chain_id, graph.chain_status
+    )
 
-    # Try to load with new version
+    # Try to save with new version
     with pytest.raises(ValueError):
         graph.checkpoint_storage.load_checkpoint(
             NewStateForTest, graph.chain_id, checkpoint_id
@@ -91,3 +104,76 @@ def test_nonexistent_chain():
         graph.checkpoint_storage.load_checkpoint(
             state, "nonexistent", "some_checkpoint"
         )
+
+
+class StateForTestWithHistory(GraphState):
+    execution_order: History[str]
+
+
+def test_resume_with_checkpoint_load():
+    state = StateForTestWithHistory(execution_order=[])
+    storage = LocalStorage()
+    graph = Graph(state=state, checkpoint_storage=storage)
+
+    @graph.node()
+    def task1(state):
+        print("task1")
+        return {"execution_order": "task1"}
+
+    @graph.node()
+    def task2(state):
+        print("task2")
+        return {"execution_order": "task2"}
+
+    @graph.node()
+    def task3(state):
+        print("task3")
+        return {"execution_order": "task3"}
+
+    @graph.node()
+    def task4(state):
+        print("task4")
+
+        return {"execution_order": "task4"}
+
+    @graph.node()
+    def task5(state):
+        print("task5")
+        return {"execution_order": "task5"}
+
+    @graph.node(interrupt="before")
+    def task6(state):
+        print("task6")
+        return {"execution_order": "task6"}
+
+    graph.add_edge(START, "task1")
+    graph.add_edge("task1", "task2")
+    graph.add_edge("task2", "task3")
+    graph.add_edge("task2", "task4")
+    graph.add_edge("task2", "task5")
+    graph.add_edge("task4", "task6")
+    graph.add_edge("task3", "task6")
+    graph.add_edge("task5", "task6")
+    graph.add_edge("task6", END)
+    graph.compile()
+
+    chain_id = graph.start()
+    assert all(
+        task in graph.state.execution_order
+        for task in ["task1", "task2", "task3", "task4", "task5"]
+    ), "tasks are not in there"
+    assert len(storage.list_checkpoints(graph.chain_id)) == 4  # n + 1 due to interrupt
+
+    # start a new chain just to test the load from checkpoint
+    new_chain_id = graph.start()
+    assert new_chain_id != chain_id
+
+    # loading first chain state
+    graph.load_from_checkpoint(chain_id)
+
+    # resuming execution
+    graph.resume()
+    assert all(
+        task in graph.state.execution_order
+        for task in ["task1", "task2", "task3", "task4", "task5", "task6"]
+    ), "tasks are not in there"
