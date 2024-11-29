@@ -177,7 +177,7 @@ class PostgreSQLStorage(StorageBackend):
         sql = """
         SELECT * FROM checkpoints 
         WHERE chain_id = %s 
-        ORDER BY timestamp DESC
+        ORDER BY timestamp ASC
         """
 
         with self.pool.getconn() as conn:
