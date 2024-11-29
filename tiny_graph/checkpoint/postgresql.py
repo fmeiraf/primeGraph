@@ -1,9 +1,12 @@
 import logging
+import time
 from datetime import datetime
-from typing import List, Optional, Set
+from typing import List, Literal, Optional, Set
 
+import psycopg2
+from psycopg2 import DatabaseError, OperationalError
 from psycopg2.extras import DictCursor, Json
-from psycopg2.pool import SimpleConnectionPool
+from psycopg2.pool import ThreadedConnectionPool
 
 from tiny_graph.checkpoint.base import StorageBackend
 from tiny_graph.checkpoint.serialization import serialize_model
@@ -13,24 +16,6 @@ from tiny_graph.models.state import GraphState
 
 logger = logging.getLogger(__name__)
 
-CREATE_TABLES_SQL = """
-CREATE TABLE IF NOT EXISTS checkpoints (
-    checkpoint_id VARCHAR(255) PRIMARY KEY,
-    chain_id VARCHAR(255) NOT NULL,
-    chain_status VARCHAR(50) NOT NULL,
-    state_class VARCHAR(255) NOT NULL,
-    state_version VARCHAR(50),
-    data JSONB NOT NULL,
-    timestamp TIMESTAMP NOT NULL,
-    next_execution_node VARCHAR(255),
-    executed_nodes JSONB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_checkpoints_chain_id ON checkpoints(chain_id);
-CREATE INDEX IF NOT EXISTS idx_checkpoints_timestamp ON checkpoints(timestamp);
-"""
-
 
 class PostgreSQLStorage(StorageBackend):
     def __init__(
@@ -38,30 +23,51 @@ class PostgreSQLStorage(StorageBackend):
         dsn: str,
         min_connections: int = 1,
         max_connections: int = 10,
+        connection_timeout: int = 30,
+        retry_attempts: int = 3,
+        isolation_level: Literal[
+            "serializable", "repeatable read", "read committed", "read uncommitted"
+        ] = "read committed",
     ):
-        """Initialize PostgreSQL storage backend.
-
-        Args:
-            dsn: Database connection string
-            min_connections: Minimum number of connections in pool
-            max_connections: Maximum number of connections in pool
-        """
+        """Initialize PostgreSQL storage backend with enhanced configuration."""
         super().__init__()
         self.dsn = dsn
-        self.pool = SimpleConnectionPool(
-            minconn=min_connections, maxconn=max_connections, dsn=dsn
+        self.retry_attempts = retry_attempts
+        self.isolation_level = isolation_level
+        self.connection_timeout = connection_timeout
+
+        # Use connection factory with timeout and health checks
+        self.pool = ThreadedConnectionPool(
+            minconn=min_connections,
+            maxconn=max_connections,
+            dsn=dsn,
+            connection_factory=self._create_connection_with_timeout,
         )
 
-    def initialize_database(self):
-        """Create necessary database tables and indexes."""
-        with self.pool.getconn() as conn:
-            try:
-                with conn.cursor() as cur:
-                    cur.execute(CREATE_TABLES_SQL)
-                conn.commit()
-                logger.info("Database tables initialized successfully")
-            finally:
-                self.pool.putconn(conn)
+    def _create_connection_with_timeout(self, dsn=None):
+        """Create connection with timeout and proper isolation level.
+
+        Args:
+            dsn: Database connection string. If None, uses self.dsn
+        """
+        dsn = dsn or self.dsn
+        # First create the connection without isolation level
+        conn = psycopg2.connect(
+            dsn,
+            connect_timeout=self.connection_timeout,
+        )
+
+        # Set isolation level after connection is established
+        if self.isolation_level == "read committed":
+            conn.isolation_level = psycopg2.extensions.ISOLATION_LEVEL_READ_COMMITTED
+        elif self.isolation_level == "read uncommitted":
+            conn.isolation_level = psycopg2.extensions.ISOLATION_LEVEL_READ_UNCOMMITTED
+        elif self.isolation_level == "repeatable read":
+            conn.isolation_level = psycopg2.extensions.ISOLATION_LEVEL_REPEATABLE_READ
+        elif self.isolation_level == "serializable":
+            conn.isolation_level = psycopg2.extensions.ISOLATION_LEVEL_SERIALIZABLE
+
+        return conn
 
     def save_checkpoint(
         self,
@@ -97,26 +103,36 @@ class PostgreSQLStorage(StorageBackend):
             executed_nodes = EXCLUDED.executed_nodes
         """
 
-        with self.pool.getconn() as conn:
+        for attempt in range(self.retry_attempts):
             try:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        sql,
-                        (
-                            checkpoint_id,
-                            chain_id,
-                            chain_status.value,
-                            state_class_str,
-                            getattr(state_instance, "version", None),
-                            Json(serialized_data),
-                            datetime.now(),
-                            next_execution_node,
-                            Json(list(executed_nodes)) if executed_nodes else None,
-                        ),
-                    )
-                conn.commit()
-                logger.info(f"Checkpoint '{checkpoint_id}' saved to PostgreSQL")
-                return checkpoint_id
+                with self.pool.getconn() as conn:
+                    with conn.cursor() as cur:
+                        # Add advisory lock to prevent concurrent updates
+                        cur.execute(
+                            "SELECT pg_advisory_xact_lock(%s)", (hash(checkpoint_id),)
+                        )
+
+                        cur.execute(
+                            sql,
+                            (
+                                checkpoint_id,
+                                chain_id,
+                                chain_status.value,
+                                state_class_str,
+                                getattr(state_instance, "version", None),
+                                Json(serialized_data),
+                                datetime.now(),
+                                next_execution_node,
+                                Json(list(executed_nodes)) if executed_nodes else None,
+                            ),
+                        )
+                    conn.commit()
+                    logger.info(f"Checkpoint '{checkpoint_id}' saved to PostgreSQL")
+                    return checkpoint_id
+            except (OperationalError, DatabaseError):
+                if attempt == self.retry_attempts - 1:
+                    raise
+                time.sleep(0.1 * (2**attempt))  # Exponential backoff
             finally:
                 self.pool.putconn(conn)
 
@@ -231,3 +247,99 @@ class PostgreSQLStorage(StorageBackend):
         """Cleanup connection pool on object destruction."""
         if hasattr(self, "pool"):
             self.pool.closeall()
+
+    def check_schema(self) -> bool:
+        """Check if the required tables and columns exist in the database.
+
+        Returns:
+            bool: True if schema is valid, False otherwise
+        """
+        check_table_sql = """
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_name = 'checkpoints'
+        );
+        """
+
+        check_columns_sql = """
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'checkpoints';
+        """
+
+        required_columns = {
+            "checkpoint_id",
+            "chain_id",
+            "chain_status",
+            "state_class",
+            "state_version",
+            "data",
+            "timestamp",
+            "next_execution_node",
+            "executed_nodes",
+            "created_at",
+        }
+
+        with self.pool.getconn() as conn:
+            try:
+                with conn.cursor() as cur:
+                    # Check if table exists
+                    cur.execute(check_table_sql)
+                    table_exists = cur.fetchone()[0]
+
+                    if not table_exists:
+                        logger.warning("Checkpoints table does not exist")
+                        return False
+
+                    # Check columns
+                    cur.execute(check_columns_sql)
+                    existing_columns = {row[0] for row in cur.fetchall()}
+
+                    missing_columns = required_columns - existing_columns
+                    if missing_columns:
+                        logger.warning(f"Missing required columns: {missing_columns}")
+                        return False
+
+                    return True
+            finally:
+                self.pool.putconn(conn)
+
+    @classmethod
+    def from_url(cls, url: str, **kwargs) -> "PostgreSQLStorage":
+        """Create a PostgreSQLStorage instance from a database URL.
+
+        Args:
+            url: Database URL in format:
+                postgresql://user:password@host:port/dbname
+            **kwargs: Additional connection pool parameters
+
+        Returns:
+            PostgreSQLStorage: Configured storage instance
+        """
+        return cls(dsn=url, **kwargs)
+
+    @classmethod
+    def from_config(
+        cls,
+        host: str,
+        database: str,
+        user: str,
+        password: str,
+        port: int = 5432,
+        **kwargs,
+    ) -> "PostgreSQLStorage":
+        """Create a PostgreSQLStorage instance from individual configuration parameters.
+
+        Args:
+            host: Database host
+            database: Database name
+            user: Username
+            password: Password
+            port: Database port (default: 5432)
+            **kwargs: Additional connection pool parameters
+
+        Returns:
+            PostgreSQLStorage: Configured storage instance
+        """
+        dsn = f"postgresql://{user}:{password}@{host}:{port}/{database}"
+        return cls(dsn=dsn, **kwargs)
