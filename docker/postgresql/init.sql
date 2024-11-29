@@ -2,7 +2,7 @@
 CREATE TABLE IF NOT EXISTS checkpoints (
     checkpoint_id VARCHAR PRIMARY KEY,
     chain_id VARCHAR NOT NULL,
-    chain_status VARCHAR NOT NULL,
+    chain_status INTEGER NOT NULL,
     state_class VARCHAR NOT NULL,
     state_version VARCHAR,
     data JSONB NOT NULL,
