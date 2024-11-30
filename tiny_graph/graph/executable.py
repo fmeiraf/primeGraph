@@ -71,6 +71,8 @@ class Graph(BaseGraph):
             for field_name, field_type in self.state_schema.items()
         }
 
+        self._update_buffers_from_state()
+
     def _reset_state(self, new_state: Union[BaseModel, None] = None):
         """Reset the state instance to its initial values while preserving the class."""
         if not self.initial_state:
@@ -207,6 +209,11 @@ class Graph(BaseGraph):
         for field_name, buffer in self.buffers.items():
             if buffer._ready_for_consumption:
                 setattr(self.state, field_name, buffer.consume_last_value())
+
+    @internal_only
+    def _update_buffers_from_state(self):
+        for field_name, buffer in self.buffers.items():
+            buffer.update(getattr(self.state, field_name), "update_from_state")
 
     @internal_only
     def _save_checkpoint(self, node_name: str):
