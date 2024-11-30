@@ -47,7 +47,21 @@ class BufferTypeMarker(Generic[T]):
 
 
 class History(BufferTypeMarker[T]):
-    pass
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls,
+        source_type: Any,
+        handler: GetCoreSchemaHandler,
+    ) -> CoreSchema:
+        origin = get_origin(source_type)
+        if origin is None:
+            return core_schema.list_schema(core_schema.any_schema())
+
+        args = get_args(source_type)
+        if not args:
+            return core_schema.list_schema(core_schema.any_schema())
+
+        return core_schema.list_schema(handler.generate_schema(args[0]))
 
 
 class Incremental(BufferTypeMarker[T]):
@@ -76,6 +90,12 @@ class BufferFactory:
 
         # Set initial value if available
         if hasattr(annotation, "initial_value"):
-            buffer.value = annotation.initial_value
+            initial_value = annotation.initial_value
+            if buffer_type == HistoryBuffer:
+                if initial_value and not isinstance(initial_value, list):
+                    raise TypeError(
+                        f"HistoryBuffer initial value must be a list, got {type(initial_value)}"
+                    )
+            buffer.value = initial_value
 
         return buffer
