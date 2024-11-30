@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from threading import Lock
-from typing import Any, Dict, get_args, get_origin
+from typing import Any, Dict, Union, get_args, get_origin
 
 
 class BaseBuffer(ABC):
@@ -48,44 +48,27 @@ class BaseBuffer(ABC):
             self._ready_for_consumption = False
         return last_value_copy
 
-    def _enforce_type(self, new_value: Any) -> None:
-        actual_type = self.field_type
-        if hasattr(actual_type, "_inner_type"):
-            actual_type = actual_type._inner_type
+    def _enforce_type(self, new_value):
+        """Enforce the type of the buffer value."""
+        if self.field_type is None:
+            return
 
-        # Handle generic types like Dict, List, etc.
-        origin = get_origin(actual_type)
-        if origin is not None:
-            # Check if the value matches the generic container type (dict, list, etc)
-            if not isinstance(new_value, origin):
+        # Get the origin type (e.g., List from List[str])
+        origin = get_origin(self.field_type) or self.field_type
+
+        # Handle Union types specially
+        if origin is Union:
+            # Get the allowed types from the Union
+            allowed_types = get_args(self.field_type)
+            if not any(isinstance(new_value, t) for t in allowed_types):
                 raise TypeError(
-                    f"Expected value of type {origin.__name__}, got {type(new_value).__name__}"
+                    f"Buffer value must be one of types {allowed_types}, got {type(new_value)}"
                 )
+            return
 
-            # Get the type arguments (e.g., str and float for Dict[str, float])
-            type_args = get_args(actual_type)
-
-            if origin is dict:
-                # Check key and value types for dictionaries
-                for key, value in new_value.items():
-                    if not isinstance(key, type_args[0]):
-                        raise TypeError(
-                            f"Dict key must be {type_args[0].__name__}, got {type(key).__name__}"
-                        )
-                    if not isinstance(value, type_args[1]):
-                        raise TypeError(
-                            f"Dict value must be {type_args[1].__name__}, got {type(value).__name__}"
-                        )
-            elif origin is list:
-                # Check element types for lists
-                for item in new_value:
-                    if not isinstance(item, type_args[0]):
-                        raise TypeError(
-                            f"List items must be {type_args[0].__name__}, got {type(item).__name__}"
-                        )
-        else:
-            # Regular non-generic type
-            if not isinstance(new_value, actual_type):
+        # For non-Union types, proceed with normal isinstance check
+        if not isinstance(new_value, origin):
+            if new_value:
                 raise TypeError(
-                    f"Expected value of type {actual_type.__name__}, got {type(new_value).__name__}"
+                    f"Buffer value must be of type {self.field_type}, got {type(new_value)}"
                 )
