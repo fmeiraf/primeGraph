@@ -53,6 +53,7 @@ class Graph(BaseGraph):
         self.buffers: Dict[str, BaseBuffer] = {}
         if self.state_schema:
             self._assign_buffers()
+            self._update_buffers_from_state()
 
         # Chain management
         self.chain_id = chain_id if chain_id else f"chain_{uuid.uuid4()}"
@@ -70,8 +71,6 @@ class Graph(BaseGraph):
             field_name: BufferFactory.create_buffer(field_name, field_type)
             for field_name, field_type in self.state_schema.items()
         }
-
-        self._update_buffers_from_state()
 
     def _reset_state(self, new_state: Union[BaseModel, None] = None):
         """Reset the state instance to its initial values while preserving the class."""
