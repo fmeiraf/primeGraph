@@ -48,7 +48,7 @@ class Graph(BaseGraph):
 
         # State management
         self.initial_state = state
-        self.state = self._reset_state()
+        self.state = state
         self.state_schema = self._get_schema(state)
         self.buffers: Dict[str, BaseBuffer] = {}
         if self.state_schema:
@@ -77,12 +77,14 @@ class Graph(BaseGraph):
             return None
 
         if new_state:
-            new_state = new_state.model_dump()
-            return self.initial_state.__class__(**new_state)
+            # Update both state and initial_state with the new values
+            new_state_dict = new_state.model_dump()
+            self.initial_state = self.initial_state.__class__(**new_state_dict)
+            return self.initial_state.__class__(**new_state_dict)
         else:
-            # Store the class and create new instance with same initial values
-            initial_state = self.initial_state.model_dump()
-            return self.initial_state.__class__(**initial_state)
+            # Reset to initial values
+            initial_state_dict = self.initial_state.model_dump()
+            return self.initial_state.__class__(**initial_state_dict)
 
     def _get_schema(self, state: Union[BaseModel, NamedTuple, None]) -> Dict[str, type]:
         if isinstance(state, (BaseModel, GraphState)) and hasattr(
