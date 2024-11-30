@@ -15,10 +15,11 @@ class HistoryBuffer(BaseBuffer):
         with self._lock:
             self._enforce_type(new_value)
 
-            self.value = self.value + [new_value]
-            self.last_value = self.value
-            self.add_history(self.value, execution_id)
-            self._ready_for_consumption = True
+            if new_value:
+                self.value = self.value + [new_value]
+                self.last_value = self.value
+                self.add_history(self.value, execution_id)
+                self._ready_for_consumption = True
 
     def get(self) -> Any:
         with self._lock:
