@@ -27,5 +27,14 @@ class HistoryBuffer(BaseBuffer):
 
     def set_value(self, value: Any) -> None:
         with self._lock:
-            self.value = value
-            self.last_value = value
+            if isinstance(value, list):  # make sure the value is a list
+                for item in value:
+                    self._enforce_type(
+                        item
+                    )  # make sure all items are of the correct type
+                self.value = value
+                self.last_value = value
+            else:
+                raise ValueError(
+                    f"History buffer must be initialized set with a list, got {type(value)}"
+                )

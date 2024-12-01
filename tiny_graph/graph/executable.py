@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from tiny_graph.buffer.base import BaseBuffer
 from tiny_graph.buffer.factory import BufferFactory
+from tiny_graph.buffer.history import HistoryBuffer
 from tiny_graph.checkpoint.base import StorageBackend
 from tiny_graph.graph.base import BaseGraph
 from tiny_graph.models.state import GraphState
@@ -212,7 +213,10 @@ class Graph(BaseGraph):
     @internal_only
     def _update_buffers_from_state(self):
         for field_name, buffer in self.buffers.items():
-            buffer.update(getattr(self.state, field_name), "update_from_state")
+            if isinstance(buffer, HistoryBuffer):
+                buffer.set_value(getattr(self.state, field_name))
+            else:
+                buffer.update(getattr(self.state, field_name), "update_from_state")
 
     @internal_only
     def _save_checkpoint(self, node_name: str):
@@ -434,6 +438,9 @@ class Graph(BaseGraph):
                 "resume method should either specify a start_from node or be part of a chain call (execute)"
             )
 
+        # ensure that buffers are updated from state
+        self._update_buffers_from_state()
+
         if start_from:
             self.start_from = start_from
             self.execute(start_from=start_from)
@@ -450,7 +457,8 @@ class Graph(BaseGraph):
         else:
             self.chain_id = f"chain_{uuid.uuid4()}"
 
-        self._clean_graph_variables()
+        if self.chain_status != ChainStatus.IDLE:
+            self._clean_graph_variables()
         self.execute(timeout=timeout)
         return self.chain_id
 

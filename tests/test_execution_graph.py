@@ -77,7 +77,7 @@ def complex_graph():
         metrics: History[Dict[str, float]]  # Will keep history of all updates
 
     # Initialize the graph with state
-    state = ComplexTestState(counter=0, status="", metrics={})
+    state = ComplexTestState(counter=0, status="", metrics=[])
     graph = Graph(state=state)
 
     # Define nodes (same as in your notebook)
@@ -480,7 +480,7 @@ class StateForTest(GraphState):
 
 @pytest.fixture
 def graph_with_buffers():
-    state = StateForTest(counter=0, status="", metrics={})
+    state = StateForTest(counter=0, status="", metrics=[])
     graph = Graph(state=state)
 
     @graph.node()
@@ -743,3 +743,88 @@ def test_resume_with_start_from_only():
     # Start execution from task2
     graph.resume(start_from="task2")
     assert graph.state.execution_order == ["task2", "task3", "task4"]
+
+
+class StateForTestWithInitialValues(GraphState):
+    execution_order: History[str]
+    counter: Incremental[int]
+
+
+def test_initial_state_with_filled_values():
+    state = StateForTestWithInitialValues(
+        execution_order=["pre_task", "task0"], counter=2
+    )
+    graph = Graph(state=state)
+
+    @graph.node()
+    def task1(state):
+        return {"execution_order": "task1", "counter": 3}
+
+    @graph.node()
+    def task2(state):
+        return {"execution_order": "task2"}
+
+    @graph.node()
+    def task3(state):
+        return {"execution_order": "task3", "counter": 4}
+
+    @graph.node()
+    def task4(state):
+        return {"execution_order": "task4"}
+
+    graph.add_edge(START, "task1")
+    graph.add_edge("task1", "task2")
+    graph.add_edge("task2", "task3")
+    graph.add_edge("task3", "task4")
+    graph.add_edge("task4", END)
+    graph.compile()
+
+    # Start execution from task2
+    graph.start()
+    expected_tasks = {"pre_task", "task0", "task1", "task2", "task3", "task4"}
+    assert set(graph.state.execution_order) == expected_tasks
+    assert graph.state.counter == 9  # 2 + 3 + 4
+
+
+def test_state_modification_during_execution():
+    state = StateForTestWithHistory(execution_order=[])
+    graph = Graph(state=state)
+
+    @graph.node()
+    def task1(state):
+        return {"execution_order": "task1"}
+
+    @graph.node(interrupt="after")
+    def task2(state):
+        return {"execution_order": "task2"}
+
+    @graph.node()
+    def task3(state):
+        return {"execution_order": "task3"}
+
+    @graph.node()
+    def task4(state):
+        return {"execution_order": "task4"}
+
+    # Create parallel paths
+    graph.add_edge(START, "task1")
+    graph.add_edge("task1", "task2")
+    graph.add_edge("task2", "task3")
+    graph.add_edge("task3", "task4")
+    graph.add_edge("task4", END)
+    graph.compile()
+
+    # First execution should execute task1 and task3, but pause before task2
+    graph.start()
+    assert "task1" in graph.state.execution_order
+    assert "task2" in graph.state.execution_order
+    assert "task3" not in graph.state.execution_order
+    assert "task4" not in graph.state.execution_order
+
+    state.execution_order.append("appended_value")
+    assert state.execution_order == ["task1", "task2", "appended_value"]
+
+    # Resume should complete the execution
+    graph.resume()
+    expected_tasks = {"task1", "task2", "appended_value", "task3", "task4"}
+    assert set(graph.state.execution_order) == expected_tasks
