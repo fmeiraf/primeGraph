@@ -517,6 +517,7 @@ class Graph(BaseGraph):
 
         logger.debug(f"Loaded checkpoint {checkpoint_id} for chain {self.chain_id}")
 
+    @internal_only
     async def _execute_async(
         self, start_from: Optional[str] = None, timeout: Union[int, float] = 60 * 5
     ) -> None:
@@ -589,9 +590,6 @@ class Graph(BaseGraph):
                 raise TimeoutError(f"Execution timeout in node {node_name}")
 
         async def execute_tasks(tasks, node_index: int):
-            # import pdb
-
-            # pdb.set_trace()
             """Recursively execute tasks respecting list (sequential) and tuple (parallel) structures"""
             if isinstance(tasks, (list, tuple)):
                 if isinstance(tasks, list):
@@ -606,6 +604,16 @@ class Graph(BaseGraph):
                     if self.chain_status != ChainStatus.RUNNING:
                         return
 
+                    # Check if any task in the parallel group has a "before" interrupt
+                    for task in tasks:
+                        if callable(task):
+                            node_name = getattr(task, "__name__", str(task))
+                            if self._get_interrupt_status(node_name) == "before":
+                                if not self.start_from:
+                                    self.next_execution_node = node_name
+                                    self._update_chain_status(ChainStatus.PAUSE)
+                                    return
+
                     # Create a list of coroutines for parallel execution
                     parallel_tasks = []
                     for task in tasks:
@@ -613,6 +621,15 @@ class Graph(BaseGraph):
                         if callable(task):
                             node_name = getattr(task, "__name__", str(task))
                             if node_name not in self.executed_nodes:
+                                # Skip nodes until we reach start_from
+                                if self.start_from and self.start_from != node_name:
+                                    continue
+
+                                # Clean up start_from when reached
+                                if self.start_from == node_name:
+                                    self.start_from = None
+                                    self._update_chain_status(ChainStatus.RUNNING)
+
                                 parallel_tasks.append(execute_task(task, node_name))
                         # If it's a nested structure (list/tuple)
                         elif isinstance(task, (list, tuple)):
@@ -621,6 +638,22 @@ class Graph(BaseGraph):
                     # Execute all tasks in parallel if we have any
                     if parallel_tasks:
                         await asyncio.gather(*parallel_tasks)
+
+                        # Check if any task in the parallel group has an "after" interrupt
+                        for task in tasks:
+                            if callable(task):
+                                node_name = getattr(task, "__name__", str(task))
+                                if self._get_interrupt_status(node_name) == "after":
+                                    if not self.start_from:
+                                        self.next_execution_node = self.execution_plan[
+                                            node_index + 1
+                                        ].node_name
+                                        self._update_chain_status(ChainStatus.PAUSE)
+                                        return
+                                    else:
+                                        self.start_from = None
+                                        self._update_chain_status(ChainStatus.RUNNING)
+
                         self._save_checkpoint(self.execution_plan[node_index].node_name)
             else:
                 # Base case: execute individual task
@@ -692,6 +725,7 @@ class Graph(BaseGraph):
             else:
                 return
 
+    @internal_only
     async def execute_async(
         self,
         start_from: Optional[str] = None,

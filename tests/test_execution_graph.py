@@ -826,5 +826,10 @@ def test_state_modification_during_execution():
 
     # Resume should complete the execution
     graph.resume()
-    expected_tasks = {"task1", "task2", "appended_value", "task3", "task4"}
-    assert set(graph.state.execution_order) == expected_tasks
+    assert graph.state.execution_order == [
+        "task1",
+        "task2",
+        "appended_value",
+        "task3",
+        "task4",
+    ]
