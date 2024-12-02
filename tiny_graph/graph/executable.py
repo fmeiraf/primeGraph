@@ -557,14 +557,20 @@ class Graph(BaseGraph):
             logger.debug(f"Executing task in node: {node_name}")
 
             async def run_task():
+                logger.debug(f"Running task: {task}, has state: {self._has_state}")
                 if inspect.iscoroutinefunction(task):
+                    # Handle async functions
                     result = (
                         await task(state=self.state)
                         if self._has_state
                         else await task()
                     )
                 else:
-                    result = task(state=self.state) if self._has_state else task()
+                    # Handle CPU-bound sync functions by running them in a thread
+                    if self._has_state:
+                        result = await asyncio.to_thread(task, state=self.state)
+                    else:
+                        result = await asyncio.to_thread(task)
 
                 if result and self._has_state:
                     for state_field_name, state_field_value in result.items():
