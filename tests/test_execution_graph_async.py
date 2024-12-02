@@ -13,6 +13,11 @@ class StateForTestWithHistory(GraphState):
     execution_order: History[str]
 
 
+class StateForTestWithHistoryIncremental(GraphState):
+    execution_order: History[str]
+    counter: Incremental[int]
+
+
 class StateForTestWithBuffers(GraphState):
     counter: Incremental[int]
     status: LastValue[str]
@@ -338,3 +343,90 @@ async def test_async_parallel_updates():
     ]
     for metric in state.metrics:
         assert metric in expected_metrics
+
+
+@pytest.mark.asyncio
+async def test_async_initial_state_with_filled_values():
+    state = StateForTestWithHistoryIncremental(
+        execution_order=["pre_task", "task0"], counter=2
+    )
+    graph = Graph(state=state)
+
+    @graph.node()
+    async def task1(state):
+        return {"execution_order": "task1", "counter": 3}
+
+    @graph.node()
+    async def task2(state):
+        return {"execution_order": "task2"}
+
+    @graph.node()
+    async def task3(state):
+        return {"execution_order": "task3", "counter": 4}
+
+    @graph.node()
+    async def task4(state):
+        return {"execution_order": "task4"}
+
+    graph.add_edge(START, "task1")
+    graph.add_edge("task1", "task2")
+    graph.add_edge("task2", "task3")
+    graph.add_edge("task3", "task4")
+    graph.add_edge("task4", END)
+    graph.compile()
+
+    # Start execution from task2
+    await graph.start_async()
+    expected_tasks = {"pre_task", "task0", "task1", "task2", "task3", "task4"}
+    assert set(graph.state.execution_order) == expected_tasks
+    assert graph.state.counter == 9  # 2 + 3 + 4
+
+
+@pytest.mark.asyncio
+async def test_async_state_modification_during_execution():
+    state = StateForTestWithHistory(execution_order=[])
+    graph = Graph(state=state)
+
+    @graph.node()
+    async def task1(state):
+        return {"execution_order": "task1"}
+
+    @graph.node(interrupt="after")
+    async def task2(state):
+        return {"execution_order": "task2"}
+
+    @graph.node()
+    async def task3(state):
+        return {"execution_order": "task3"}
+
+    @graph.node()
+    async def task4(state):
+        return {"execution_order": "task4"}
+
+    # Create parallel paths
+    graph.add_edge(START, "task1")
+    graph.add_edge("task1", "task2")
+    graph.add_edge("task2", "task3")
+    graph.add_edge("task3", "task4")
+    graph.add_edge("task4", END)
+    graph.compile()
+
+    # First execution should execute task1 and task2, then pause
+    await graph.start_async()
+    assert "task1" in graph.state.execution_order
+    assert "task2" in graph.state.execution_order
+    assert "task3" not in graph.state.execution_order
+    assert "task4" not in graph.state.execution_order
+
+    state.execution_order.append("appended_value")
+    assert state.execution_order == ["task1", "task2", "appended_value"]
+
+    # Resume should complete the execution
+    await graph.resume_async()
+    assert graph.state.execution_order == [
+        "task1",
+        "task2",
+        "appended_value",
+        "task3",
+        "task4",
+    ]
