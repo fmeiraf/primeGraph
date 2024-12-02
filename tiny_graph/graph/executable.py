@@ -1,4 +1,6 @@
+import asyncio
 import concurrent.futures
+import inspect
 import logging
 import uuid
 from typing import (
@@ -514,3 +516,217 @@ class Graph(BaseGraph):
             self.executed_nodes = checkpoint.executed_nodes
 
         logger.debug(f"Loaded checkpoint {checkpoint_id} for chain {self.chain_id}")
+
+    async def _execute_async(
+        self, start_from: Optional[str] = None, timeout: Union[int, float] = 60 * 5
+    ) -> None:
+        """Async version of execute method"""
+
+        def add_item_to_obj_store(obj_store: Union[List, Tuple], item):
+            if isinstance(obj_store, list):
+                obj_store.append(item)
+                return obj_store  # Return the modified list
+            elif isinstance(obj_store, tuple):
+                return obj_store + (item,)  # Already returns the new tuple
+            else:
+                raise ValueError(f"Unsupported object store type: {type(obj_store)}")
+
+        def extract_tasks_from_node(node, tasks=[]):
+            """
+            Extracts tasks from a node, including nested nodes
+            returns lists for sequential execution and tuples for parallel execution
+            """
+            tasks = [] if node.execution_type == "sequential" else tuple()
+            for task in node.task_list:
+                if isinstance(task, ExecutableNode):
+                    if task.execution_type == "sequential":
+                        tasks = add_item_to_obj_store(
+                            tasks, extract_tasks_from_node(task, [])
+                        )
+                    else:
+                        tasks = add_item_to_obj_store(
+                            tasks, extract_tasks_from_node(task, tuple())
+                        )
+                else:
+                    tasks = add_item_to_obj_store(tasks, task)
+
+            return tasks
+
+        async def execute_task(task: Callable, node_name: str) -> Any:
+            """Execute a single task with proper state handling."""
+            logger.debug(f"Executing task in node: {node_name}")
+
+            async def run_task():
+                if inspect.iscoroutinefunction(task):
+                    result = (
+                        await task(state=self.state)
+                        if self._has_state
+                        else await task()
+                    )
+                else:
+                    result = task(state=self.state) if self._has_state else task()
+
+                if result and self._has_state:
+                    for state_field_name, state_field_value in result.items():
+                        self.buffers[state_field_name].update(
+                            state_field_value, node_name
+                        )
+                return result
+
+            try:
+                result = await asyncio.wait_for(run_task(), timeout=timeout)
+                self._update_state_from_buffers()
+                self.executed_nodes.add(node_name)
+                return result
+            except asyncio.TimeoutError:
+                logger.error(f"Timeout in node {node_name}")
+                raise TimeoutError(f"Execution timeout in node {node_name}")
+
+        async def execute_tasks(tasks, node_index: int):
+            # import pdb
+
+            # pdb.set_trace()
+            """Recursively execute tasks respecting list (sequential) and tuple (parallel) structures"""
+            if isinstance(tasks, (list, tuple)):
+                if isinstance(tasks, list):
+                    # Sequential execution
+                    for task in tasks:
+                        if self.chain_status != ChainStatus.RUNNING:
+                            return
+                        await execute_tasks(task, node_index)
+                        self._save_checkpoint(self.execution_plan[node_index].node_name)
+                else:
+                    # Parallel execution using asyncio.gather
+                    if self.chain_status != ChainStatus.RUNNING:
+                        return
+
+                    # Create a list of coroutines for parallel execution
+                    parallel_tasks = []
+                    for task in tasks:
+                        # If it's a callable (actual task)
+                        if callable(task):
+                            node_name = getattr(task, "__name__", str(task))
+                            if node_name not in self.executed_nodes:
+                                parallel_tasks.append(execute_task(task, node_name))
+                        # If it's a nested structure (list/tuple)
+                        elif isinstance(task, (list, tuple)):
+                            parallel_tasks.append(execute_tasks(task, node_index))
+
+                    # Execute all tasks in parallel if we have any
+                    if parallel_tasks:
+                        await asyncio.gather(*parallel_tasks)
+                        self._save_checkpoint(self.execution_plan[node_index].node_name)
+            else:
+                # Base case: execute individual task
+                node_name = getattr(tasks, "__name__", str(tasks))
+
+                # Skip if node was already executed
+                if node_name in self.executed_nodes:
+                    return
+
+                # Handle before interrupts
+                if not isinstance(node_name, list):
+                    if self._get_interrupt_status(node_name) == "before":
+                        if not self.start_from:
+                            # self._save_state_and_buffers(node_name)
+                            self.next_execution_node = node_name
+                            self._update_chain_status(ChainStatus.PAUSE)
+                            return
+
+                # Skip nodes until we reach start_from
+                if self.start_from and self.start_from != node_name:
+                    return
+
+                # Cleaning up once start_from is reached
+                if self.start_from == node_name:
+                    self.start_from = None
+                    self._update_chain_status(ChainStatus.RUNNING)
+
+                try:
+                    # Execute the task
+                    result = await execute_task(tasks, node_name)
+                    self.last_executed_node = node_name
+
+                    # Handle after interrupts
+                    if not isinstance(node_name, list):
+                        if self._get_interrupt_status(node_name) == "after":
+                            if not self.start_from:
+                                self.next_execution_node = self.execution_plan[
+                                    node_index + 1
+                                ].node_name
+                                self._update_chain_status(ChainStatus.PAUSE)
+                                return
+                            else:
+                                self.start_from = None
+                                self._update_chain_status(ChainStatus.RUNNING)
+
+                    return result
+
+                except asyncio.TimeoutError:
+                    logger.error(f"Timeout in node {node_name}")
+                    raise TimeoutError(f"Execution timeout in node {node_name}")
+                except Exception as e:
+                    logger.error(f"Error in node {node_name}: {str(e)}")
+                    raise RuntimeError(f"Error in node {node_name}: {str(e)}") from e
+
+        async def execute_node(node: ExecutableNode, node_index: int) -> None:
+            """Execute a single node or group of nodes with proper concurrency handling."""
+            tasks = extract_tasks_from_node(node)
+            await execute_tasks(tasks, node_index)
+
+        # Initialize execution
+        self._convert_execution_plan()
+        self._update_chain_status(ChainStatus.RUNNING)
+        self.start_from = start_from
+
+        # Execute nodes
+        for node_index, node in enumerate(self.execution_plan):
+            if self.chain_status == ChainStatus.RUNNING:
+                await execute_node(node, node_index)
+            else:
+                return
+
+    async def execute_async(
+        self,
+        start_from: Optional[str] = None,
+        timeout: Union[int, float] = 60 * 5,
+    ):
+        """Async version of execute method"""
+        if start_from is None:
+            self.executed_nodes.clear()
+        if not timeout:
+            timeout = self.execution_timeout
+
+        await self._execute_async(start_from, timeout)
+
+    async def start_async(
+        self, chain_id: Optional[str] = None, timeout: Union[int, float] = None
+    ) -> str:
+        """Async version of start method"""
+        if chain_id:
+            self.chain_id = chain_id
+        else:
+            self.chain_id = f"chain_{uuid.uuid4()}"
+
+        if self.chain_status != ChainStatus.IDLE:
+            self._clean_graph_variables()
+        await self.execute_async(timeout=timeout)
+        return self.chain_id
+
+    async def resume_async(self, start_from: Optional[str] = None):
+        """Async version of resume method"""
+        if not self.next_execution_node and not start_from:
+            logger.info(
+                "resume method should either specify a start_from node or be part of a chain call (execute)"
+            )
+            raise ValueError(
+                "resume method should either specify a start_from node or be part of a chain call (execute)"
+            )
+
+        self._update_buffers_from_state()
+
+        if start_from:
+            self.start_from = start_from
+            await self.execute_async(start_from=start_from)
+        else:
+            await self.execute_async(start_from=self.next_execution_node)
