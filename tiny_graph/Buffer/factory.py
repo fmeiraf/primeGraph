@@ -22,13 +22,6 @@ class BufferTypeMarker(Generic[T]):
         elif hasattr(self.__class__, "_inner_type"):
             self._inner_type = self.__class__._inner_type
 
-    def __class_getitem__(cls, item):
-        return type(f"{cls.__name__}[{item.__name__}]", (cls,), {"_inner_type": item})
-
-    @property
-    def inner_type(self):
-        return self._inner_type
-
     @classmethod
     def __get_pydantic_core_schema__(
         cls,
@@ -43,7 +36,8 @@ class BufferTypeMarker(Generic[T]):
         if not args:
             return core_schema.any_schema()
 
-        return handler.generate_schema(args[0])
+        inner_schema = handler.generate_schema(args[0])
+        return inner_schema
 
 
 class History(BufferTypeMarker[T]):
@@ -61,7 +55,8 @@ class History(BufferTypeMarker[T]):
         if not args:
             return core_schema.list_schema(core_schema.any_schema())
 
-        return core_schema.list_schema(handler.generate_schema(args[0]))
+        inner_schema = handler.generate_schema(args[0])
+        return core_schema.list_schema(items_schema=inner_schema, strict=True)
 
 
 class Incremental(BufferTypeMarker[T]):
@@ -76,17 +71,22 @@ class LastValue(BufferTypeMarker[T]):
 class BufferFactory:
     @staticmethod
     def create_buffer(field_name: str, annotation: Type) -> BaseBuffer:
-        buffer_type = annotation.__bases__[0].__name__
+        # Get the origin type for generic types
+        origin = get_origin(annotation) or annotation
 
+        # Map buffer types to their implementations
         buffer_map = {
-            "History": HistoryBuffer,
-            "Incremental": IncrementalBuffer,
-            "LastValue": LastValueBuffer,
+            History: HistoryBuffer,
+            Incremental: IncrementalBuffer,
+            LastValue: LastValueBuffer,
         }
 
-        buffer_type = buffer_map.get(buffer_type, LastValueBuffer)
-        actual_type = annotation._inner_type
-        buffer = buffer_type(field_name, actual_type)
+        buffer_type = buffer_map.get(origin, LastValueBuffer)
+
+        # Get the inner type from the generic's args
+        inner_type = get_args(annotation)[0] if get_args(annotation) else Any
+
+        buffer = buffer_type(field_name, inner_type)
 
         # Set initial value if available
         if hasattr(annotation, "initial_value"):

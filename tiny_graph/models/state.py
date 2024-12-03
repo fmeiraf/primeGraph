@@ -1,15 +1,17 @@
 import hashlib
-from typing import Any, Dict, get_origin, get_type_hints
+from typing import Any, Dict, Type, get_args, get_origin, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from tiny_graph.buffer.factory import BufferTypeMarker
+from tiny_graph.buffer.factory import BufferTypeMarker, History
 
 
 class GraphState(BaseModel):
     """Base class for all graph states with buffer support"""
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(
+        arbitrary_types_allowed=False, strict=True, validate_default=True
+    )
     version: str = ""
 
     def __init__(self, **data):
@@ -39,25 +41,73 @@ class GraphState(BaseModel):
     def wrap_buffer_types(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         hints = get_type_hints(cls)
 
+        def check_dict_type(value: Any, key_type: Type, value_type: Type) -> bool:
+            if not isinstance(value, dict):
+                return False
+            return all(
+                isinstance(k, key_type) and isinstance(v, value_type)
+                for k, v in value.items()
+            )
+
         for field_name, field_type in hints.items():
             if field_name in values:
                 origin = get_origin(field_type)
                 if origin is not None and issubclass(origin, BufferTypeMarker):
-                    buffer_instance = origin[field_type.__args__[0]](values[field_name])
-                    values[field_name] = buffer_instance.initial_value
+                    inner_type = field_type.__args__[0]
+                    inner_origin = get_origin(inner_type)
+
+                    # For History, ensure it's a list
+                    if origin is History and not isinstance(values[field_name], list):
+                        raise TypeError(f"Field {field_name} must be a list")
+
+                    # For History with Dict type
+                    if origin is History and inner_origin is dict:
+                        key_type, value_type = get_args(inner_type)
+                        if not all(
+                            check_dict_type(item, key_type, value_type)
+                            for item in values[field_name]
+                        ):
+                            raise TypeError(
+                                f"All items in {field_name} must be Dict[{key_type.__name__}, {value_type.__name__}]"
+                            )
+                    # For History with simple types
+                    elif origin is History:
+                        if not all(
+                            isinstance(item, inner_type) for item in values[field_name]
+                        ):
+                            raise TypeError(
+                                f"All items in {field_name} must be of type {inner_type}"
+                            )
+                    # For other buffer types with Dict
+                    elif inner_origin is dict:
+                        key_type, value_type = get_args(inner_type)
+                        if not check_dict_type(
+                            values[field_name], key_type, value_type
+                        ):
+                            raise TypeError(
+                                f"Field {field_name} must be Dict[{key_type.__name__}, {value_type.__name__}]"
+                            )
+                    # For other buffer types with simple types
+                    else:
+                        if not isinstance(values[field_name], inner_type):
+                            raise TypeError(
+                                f"Field {field_name} must be of type {inner_type}"
+                            )
 
         return values
 
     @classmethod
     def get_buffer_types(cls) -> Dict[str, Any]:
         """Returns a mapping of field names to their buffer types"""
-        # Use __annotations__ directly to avoid issues with get_type_hints
-
-        annotations = cls.__annotations__
+        annotations = get_type_hints(cls)
         buffer_types = {}
 
         for field_name, field_type in annotations.items():
-            if issubclass(field_type, BufferTypeMarker):
+            if field_name == "version":
+                continue
+
+            origin = get_origin(field_type)
+            if origin is not None and issubclass(origin, BufferTypeMarker):
                 buffer_types[field_name] = field_type
             else:
                 raise ValueError(
