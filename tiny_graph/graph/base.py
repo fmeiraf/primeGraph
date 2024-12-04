@@ -33,7 +33,9 @@ class Edge:
 class Node(NamedTuple):
     name: str
     action: Callable[..., None]
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = (
+        None  # TODO: Add methods to submit metadata to nodes from function execution
+    )
     is_async: bool = False
     is_router: bool = False
     possible_routes: Optional[Set[str]] = None
