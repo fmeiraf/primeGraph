@@ -3,6 +3,7 @@ import sys
 
 sys.path.append(os.path.abspath(".."))
 
+import logging
 from typing import List
 
 from fastapi import FastAPI
@@ -12,7 +13,9 @@ from tiny_graph.checkpoint.local_storage import LocalStorage
 from tiny_graph.constants import END, START
 from tiny_graph.graph.executable import Graph
 from tiny_graph.models.state import GraphState
-from tiny_graph.web import create_graph_service, wrap_graph_with_websocket
+from tiny_graph.web import create_graph_service
+
+logging.basicConfig(level=logging.DEBUG)
 
 # Create FastAPI app
 app = FastAPI()
@@ -43,16 +46,19 @@ graph1 = Graph(state=state, checkpoint_storage=storage)
 
 @graph1.node()
 def add_hello(state: GraphState):
+    logging.debug("add_hello")
     return {"messages": "Hello"}
 
 
 @graph1.node()
 def add_world(state: GraphState):
+    logging.debug("add_world")
     return {"messages": "World"}
 
 
 @graph1.node()
 def add_exclamation(state: GraphState):
+    logging.debug("add_exclamation")
     return {"messages": "!"}
 
 
@@ -72,7 +78,7 @@ graph1.compile()
 service = create_graph_service(graph1, storage, path_prefix="/graphs/workflow1")
 
 # Wrap graph with WebSocket support
-graph1 = wrap_graph_with_websocket(graph1, service)
+# graph1 = wrap_graph_with_websocket(graph1, service) # TODO: this websocket wrapper is not working
 
 # Include the router in your app
 app.include_router(service.router, tags=["workflow1"])
@@ -96,11 +102,64 @@ async def get_storage():
 
 
 # Add another graph if needed
-# graph2 = Graph()
-# # Configure graph2...
-# service2 = create_graph_service(graph2, storage, path_prefix="/graphs/workflow2")
-# graph2 = wrap_graph_with_websocket(graph2, service2)
-# app.include_router(service2.router, tags=["workflow2"])
+# Create state instance
+state2 = SimpleGraphState(messages=[])
+
+# Update graph with state
+storage2 = LocalStorage()
+graph2 = Graph(state=state2, checkpoint_storage=storage2)
+
+
+@graph2.node()
+def step1(state: GraphState):
+    logging.debug("step1")
+    return {"messages": "Hello"}
+
+
+@graph2.node(interrupt="after")
+def step2(state: GraphState):
+    logging.debug("step2")
+    logging.debug("we stop")
+    return {"messages": "World"}
+
+
+@graph2.node()
+def step3(state: GraphState):
+    logging.debug("step3")
+    return {"messages": "!"}
+
+
+# Add edges
+graph2.add_edge(START, "step1")
+graph2.add_edge("step1", "step2")
+graph2.add_edge("step2", "step3")
+graph2.add_edge("step3", END)
+
+# Add nodes and edges...
+graph2.compile()
+
+
+# Add endpoints to inspect state and storage
+@app.get("/graphs/workflow2/state", tags=["workflow2"])
+async def get_state2():
+    print(state2)
+    return {"messages": state2.messages}
+
+
+@app.get("/graphs/workflow2/storage", tags=["workflow2"])
+async def get_storage2():
+    # Get all chain IDs and their checkpoints
+    print(storage2._storage)
+    chain_data = {}
+    for key, value in storage2._storage.items():
+        chain_data[key] = value
+    return chain_data
+
+
+# Create graph service
+service2 = create_graph_service(graph2, storage2, path_prefix="/graphs/workflow2")
+app.include_router(service2.router, tags=["workflow2"])
+
 
 if __name__ == "__main__":
     import uvicorn
