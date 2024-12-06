@@ -109,6 +109,7 @@ class GraphService:
         if chain_id in self.active_websockets:
             # Convert all data to JSON-serializable format
             status_data = {
+                "type": "status",
                 "chain_id": chain_id,
                 "status": self.graph.chain_status.value,  # Convert enum to string
                 "current_node": self.graph.next_execution_node,

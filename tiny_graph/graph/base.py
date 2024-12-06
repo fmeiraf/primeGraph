@@ -146,7 +146,8 @@ class BaseGraph:
             async def emit_event(event_type: str, data: Any = None):
                 if hasattr(self, "event_handlers"):
                     event = {
-                        "type": event_type,
+                        "type": "node_event",
+                        "event_type": event_type,
                         "node_id": node_name,
                         "chain_id": getattr(self, "chain_id", None),
                         "timestamp": datetime.now(),
