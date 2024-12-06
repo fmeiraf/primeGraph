@@ -27,6 +27,7 @@ class GraphService:
 
         self._setup_routes()
         self._setup_websocket()
+        self.graph.event_handlers.append(self._handle_graph_event)
 
     def _setup_routes(self):
         @self.router.post("/start")
@@ -72,20 +73,24 @@ class GraphService:
 
     def _setup_websocket(self):
         @self.router.websocket("/ws/{chain_id}")
-        async def websocket_endpoint(websocket: WebSocket, chain_id: str):  # noqa
+        async def websocket_endpoint(websocket: WebSocket, chain_id: str):
+            logger.debug(f"WebSocket connection attempt for chain_id: {chain_id}")
             await websocket.accept()
+            logger.debug(f"WebSocket connection accepted for chain_id: {chain_id}")
 
             if chain_id not in self.active_websockets:
                 self.active_websockets[chain_id] = set()
             self.active_websockets[chain_id].add(websocket)
+            logger.debug(
+                f"Added websocket to active connections for chain_id: {chain_id}"
+            )
 
             try:
                 while True:
-                    # Keep connection alive and handle any incoming messages
-                    data = await websocket.receive_text()  # noqa
-                    # Handle any incoming messages if needed
-                    # TODO: Implement message handling
+                    data = await websocket.receive_text()
+                    logger.debug(f"Received WebSocket message: {data}")
             except WebSocketDisconnect:
+                logger.debug(f"WebSocket disconnected for chain_id: {chain_id}")
                 self.active_websockets[chain_id].remove(websocket)
                 if not self.active_websockets[chain_id]:
                     del self.active_websockets[chain_id]
@@ -102,22 +107,61 @@ class GraphService:
     async def broadcast_status_update(self, chain_id: str):
         """Broadcast status updates to all connected WebSocket clients"""
         if chain_id in self.active_websockets:
-            status = GraphStatus(
-                chain_id=chain_id,
-                status=self.graph.chain_status,
-                current_node=self.graph.next_execution_node,
-                executed_nodes=self.graph.executed_nodes,
-                last_update=datetime.now(),
-            )
+            # Convert all data to JSON-serializable format
+            status_data = {
+                "chain_id": chain_id,
+                "status": self.graph.chain_status.value,  # Convert enum to string
+                "current_node": self.graph.next_execution_node,
+                "executed_nodes": list(self.graph.executed_nodes)
+                if self.graph.executed_nodes
+                else [],  # Convert set to list
+                "last_update": datetime.now().isoformat(),  # Convert datetime to string
+            }
+
+            # Create a copy of the set to safely iterate over
+            websockets = self.active_websockets[chain_id].copy()
+            disconnected = set()
 
             # Broadcast to all connected clients for this chain
-            for websocket in self.active_websockets[chain_id]:
+            for websocket in websockets:
                 try:
-                    await websocket.send_json(status.model_dump())
+                    await websocket.send_json(
+                        status_data
+                    )  # Send the dictionary directly
                 except Exception as e:
                     logger.error(f"Error broadcasting to websocket: {str(e)}")
-                    # Remove failed websocket
-                    self.active_websockets[chain_id].remove(websocket)
+                    disconnected.add(websocket)
+
+            # Remove disconnected websockets after iteration
+            if disconnected:
+                self.active_websockets[chain_id] -= disconnected
+                if not self.active_websockets[chain_id]:
+                    del self.active_websockets[chain_id]
+
+    async def _handle_graph_event(self, event: dict):
+        if event["chain_id"] in self.active_websockets:
+            # Convert datetime objects to ISO format strings in the event dictionary
+            serializable_event = event.copy()
+            for key, value in serializable_event.items():
+                if isinstance(value, datetime):
+                    serializable_event[key] = value.isoformat()
+
+            # Create a copy of the set to safely iterate over
+            websockets = self.active_websockets[event["chain_id"]].copy()
+            disconnected = set()
+
+            for websocket in websockets:
+                try:
+                    await websocket.send_json(serializable_event)
+                except Exception as e:
+                    logger.error(f"Error sending event: {str(e)}")
+                    disconnected.add(websocket)
+
+            # Remove disconnected websockets after iteration
+            if disconnected:
+                self.active_websockets[event["chain_id"]] -= disconnected
+                if not self.active_websockets[event["chain_id"]]:
+                    del self.active_websockets[event["chain_id"]]
 
 
 def create_graph_service(

@@ -201,7 +201,6 @@ class Graph(BaseGraph):
         # Reset state to first assigned state (from graph init)
         self._reset_state(new_state)
 
-    @internal_only
     def _update_chain_status(self, status: ChainStatus):
         self.chain_status = status
         logger.debug(f"Chain status updated to: {status}")

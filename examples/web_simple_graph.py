@@ -7,6 +7,7 @@ import logging
 from typing import List
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from tiny_graph.buffer.factory import History
 from tiny_graph.checkpoint.local_storage import LocalStorage
@@ -14,11 +15,32 @@ from tiny_graph.constants import END, START
 from tiny_graph.graph.executable import Graph
 from tiny_graph.models.state import GraphState
 from tiny_graph.web import create_graph_service
+from tiny_graph.web.graph_wrapper import wrap_graph_with_websocket
 
 logging.basicConfig(level=logging.DEBUG)
 
 # Create FastAPI app
 app = FastAPI()
+
+
+# Explicitly set logging levels for key loggers
+logging.getLogger("uvicorn").setLevel(logging.DEBUG)
+logging.getLogger("fastapi").setLevel(logging.DEBUG)
+logging.getLogger("websockets").setLevel(logging.DEBUG)
+logging.getLogger("tiny_graph").setLevel(logging.DEBUG)
+
+# Your existing imports...
+
+app = FastAPI(debug=True)  # Enable debug mode
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with specific origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # Your existing routes
@@ -111,20 +133,22 @@ graph2 = Graph(state=state2, checkpoint_storage=storage2)
 
 
 @graph2.node()
-def step1(state: GraphState):
+async def step1(state: GraphState):
     logging.debug("step1")
     return {"messages": "Hello"}
 
 
-@graph2.node(interrupt="after")
-def step2(state: GraphState):
+@graph2.node(interrupt="before")
+async def step2(state: GraphState):
+    await step2.emit_event("step2_event", {"messages": "World"})
     logging.debug("step2")
     logging.debug("we stop")
     return {"messages": "World"}
 
 
 @graph2.node()
-def step3(state: GraphState):
+async def step3(state: GraphState):
+    await step3.emit_event("step3_event", {"messages": "!"})
     logging.debug("step3")
     return {"messages": "!"}
 
@@ -142,14 +166,13 @@ graph2.compile()
 # Add endpoints to inspect state and storage
 @app.get("/graphs/workflow2/state", tags=["workflow2"])
 async def get_state2():
-    print(state2)
     return {"messages": state2.messages}
 
 
 @app.get("/graphs/workflow2/storage", tags=["workflow2"])
 async def get_storage2():
     # Get all chain IDs and their checkpoints
-    print(storage2._storage)
+
     chain_data = {}
     for key, value in storage2._storage.items():
         chain_data[key] = value
@@ -157,8 +180,24 @@ async def get_storage2():
 
 
 # Create graph service
+
 service2 = create_graph_service(graph2, storage2, path_prefix="/graphs/workflow2")
+graph2 = wrap_graph_with_websocket(graph2, service2)
 app.include_router(service2.router, tags=["workflow2"])
+
+
+@app.get("/debug/routes")
+async def debug_routes():
+    routes = []
+    for route in app.routes:
+        routes.append(
+            {
+                "path": route.path,
+                "name": route.name,
+                "methods": getattr(route, "methods", None),
+            }
+        )
+    return routes
 
 
 if __name__ == "__main__":

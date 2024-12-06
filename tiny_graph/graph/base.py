@@ -1,6 +1,7 @@
 import ast
 import inspect
 from dataclasses import dataclass
+from datetime import datetime
 from typing import (
     Any,
     Callable,
@@ -33,13 +34,12 @@ class Edge:
 class Node(NamedTuple):
     name: str
     action: Callable[..., None]
-    metadata: Optional[Dict[str, Any]] = (
-        None  # TODO: Add methods to submit metadata to nodes from function execution
-    )
+    metadata: Optional[Dict[str, Any]] = None
     is_async: bool = False
     is_router: bool = False
     possible_routes: Optional[Set[str]] = None
     interrupt: Union[Literal["before", "after"], None] = None
+    emit_event: Optional[Callable] = None
 
 
 class BaseGraph:
@@ -50,6 +50,7 @@ class BaseGraph:
         self.edges: Set[Edge] = set()
         self.is_compiled: bool = False
         self.tasks: List[Callable[..., None]] = []
+        self.event_handlers: List[Callable] = []
 
         # Validate state type
         if state is not None and not isinstance(state, (BaseModel, NamedTuple)):
@@ -141,6 +142,22 @@ class BaseGraph:
                         f"Update your function definition to: def {func.__name__}(state) -> Dict"
                     )
 
+            # Create event emitter closure
+            async def emit_event(event_type: str, data: Any = None):
+                if hasattr(self, "event_handlers"):
+                    event = {
+                        "type": event_type,
+                        "node_id": node_name,
+                        "chain_id": getattr(self, "chain_id", None),
+                        "timestamp": datetime.now(),
+                        "data": data,
+                    }
+                    for handler in self.event_handlers:
+                        await handler(event)
+
+            # Attach emit_event to the function
+            func.emit_event = emit_event
+
             self.nodes[node_name] = Node(
                 node_name,
                 func,
@@ -149,6 +166,7 @@ class BaseGraph:
                 is_router,
                 return_values if is_router else None,
                 interrupt,
+                emit_event=emit_event,
             )
             return func
 
