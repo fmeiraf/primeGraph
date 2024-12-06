@@ -1,27 +1,33 @@
+import asyncio
+
 from tiny_graph.graph.executable import Graph
-from tiny_graph.types import ChainStatus
 
 from .service import GraphService
 
 
 def wrap_graph_with_websocket(graph: Graph, service: GraphService):
     """Wraps a Graph instance to add WebSocket broadcasting capabilities"""
-    original_update_chain_status = graph._update_chain_status
 
-    def new_update_chain_status(status: ChainStatus):
-        # Call original synchronously
-        original_update_chain_status(status)
+    # Store original methods
+    original_save_checkpoint = graph._save_checkpoint
 
-        # Create and run broadcast coroutine if chain_id exists
+    def sync_broadcast_node_completion(node_name: str):
         if hasattr(graph, "chain_id"):
-            import asyncio
+            loop = asyncio.get_event_loop()
+            loop.create_task(service.broadcast_status_update(graph.chain_id))
 
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(service.broadcast_status_update(graph.chain_id))
-            except RuntimeError:
-                # Handle case where there's no running event loop
-                asyncio.run(service.broadcast_status_update(graph.chain_id))
+    async def async_broadcast_node_completion(node_name: str):
+        if hasattr(graph, "chain_id"):
+            await service.broadcast_status_update(graph.chain_id)
 
-    graph._update_chain_status = new_update_chain_status
+    # Override checkpoint method to include broadcasting
+    def new_save_checkpoint(node_name: str):
+        original_save_checkpoint(node_name)
+        sync_broadcast_node_completion(node_name)
+
+    # Replace the method
+    graph._save_checkpoint = new_save_checkpoint
+    # Store async version for async contexts
+    graph._async_save_checkpoint = async_broadcast_node_completion
+
     return graph

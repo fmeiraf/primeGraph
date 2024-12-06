@@ -219,7 +219,6 @@ class Graph(BaseGraph):
             else:
                 buffer.update(getattr(self.state, field_name), "update_from_state")
 
-    @internal_only
     def _save_checkpoint(self, node_name: str):
         if self.state:
             if self.checkpoint_storage:
