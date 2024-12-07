@@ -285,13 +285,14 @@ class BaseGraph:
         for node_name, node in subgraph.nodes.items():
             if node_name not in [START, END]:
                 new_node_name = prefix + node_name
-                # Create metadata that preserves subgraph hierarchy
+                # Create metadata that preserves subgraph hierarchy and pure name
                 new_metadata = {
                     **(node.metadata or {}),
                     "parent_subgraph": subgraph_node,
-                    "is_subgraph": node.is_subgraph,  # Preserve subgraph flag
+                    "is_subgraph": node.is_subgraph,
                     "subgraph_type": "nested" if node.is_subgraph else "child",
-                    "subgraph_cluster": subgraph_node,  # Add cluster info for visualization
+                    "subgraph_cluster": subgraph_node,
+                    "pure_name": node_name,  # Preserve the original node name
                 }
 
                 self.nodes[new_node_name] = Node(
@@ -617,13 +618,16 @@ class BaseGraph:
         return self
 
     def visualize(self, output_file: str = "graph") -> None:
-        """
-        Visualize the graph using Graphviz.
-
-        Args:
-            output_file: Name of the output file (without extension)
-        """
+        """Visualize the graph using Graphviz."""
         from graphviz import Digraph
+
+        def get_display_name(node_name: str, node) -> str:
+            """Get clean display name from node metadata."""
+            if node_name in [START, END]:
+                return node_name
+            if node.metadata is None:
+                return node_name
+            return node.metadata.get("pure_name", node_name)
 
         self._force_compile()
 
@@ -673,7 +677,7 @@ class BaseGraph:
                 for node_name in nodes:
                     cluster.node(
                         node_name,
-                        node_name,
+                        get_display_name(node_name, self.nodes[node_name]),
                         style="rounded,filled",
                         fillcolor="lightblue",
                         shape="box",
@@ -706,7 +710,7 @@ class BaseGraph:
                         }
                     )
 
-                dot.node(node_name, node_name, **node_attrs)
+                dot.node(node_name, get_display_name(node_name, node), **node_attrs)
 
         # Add edges (excluding edges to/from subgraph container nodes)
         for edge in self.edges:
