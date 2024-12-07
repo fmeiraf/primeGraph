@@ -482,7 +482,7 @@ class BaseGraph:
 
         self._force_compile()
 
-        dot = Digraph(comment="Graph Visualization")
+        dot = Digraph(comment="Graph Visualization", format="svg")
         dot.attr(rankdir="LR")  # Left to right layout
 
         # Set global graph attributes for better typography
@@ -523,6 +523,7 @@ class BaseGraph:
                         "penwidth": "1",
                     }
                 )
+                # Different colors for START and END
 
                 node_attrs["fillcolor"] = "#F4E8E8"  # Pale rose
 
@@ -553,8 +554,8 @@ class BaseGraph:
         for edge in self.edges:
             dot.edge(edge.start_node, edge.end_node, penwidth="0.8", arrowsize="0.7")
 
-        # Render the graph
-        dot.render(output_file, view=True, format="pdf", cleanup=True)
+        # Return the SVG source directly instead of saving to file
+        return dot
 
     def find_edges(
         self,
