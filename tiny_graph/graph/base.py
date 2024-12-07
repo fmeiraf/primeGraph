@@ -618,6 +618,8 @@ class BaseGraph:
         return self
 
     def visualize(self, output_file: str = "graph") -> None:
+        # TODO: Remove the subgraph name from the node display name
+        # TODO: Removed parent subgraph name from nested subgraphs labels
         """Visualize the graph using Graphviz."""
         from graphviz import Digraph
 
