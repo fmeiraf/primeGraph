@@ -350,7 +350,14 @@ class Graph(BaseGraph):
                             )
                 else:
                     # Base case: execute individual task
-                    node_name = getattr(tasks, "__name__", str(tasks))
+                    node_name = next(
+                        (
+                            name
+                            for name, node in self.nodes.items()
+                            if node.action == tasks
+                        ),
+                        str(tasks),  # fallback to str(tasks) if not found
+                    )
 
                     # Skip if node was already executed
                     if node_name in self.executed_nodes:
@@ -655,7 +662,10 @@ class Graph(BaseGraph):
                         self._save_checkpoint(self.execution_plan[node_index].node_name)
             else:
                 # Base case: execute individual task
-                node_name = getattr(tasks, "__name__", str(tasks))
+                node_name = next(
+                    (name for name, node in self.nodes.items() if node.action == tasks),
+                    str(tasks),  # fallback to str(tasks) if not found
+                )
 
                 # Skip if node was already executed
                 if node_name in self.executed_nodes:

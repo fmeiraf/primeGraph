@@ -40,6 +40,8 @@ class Node(NamedTuple):
     possible_routes: Optional[Set[str]] = None
     interrupt: Union[Literal["before", "after"], None] = None
     emit_event: Optional[Callable] = None
+    is_subgraph: bool = False
+    subgraph: Optional["BaseGraph"] = None
 
 
 class BaseGraph:
@@ -173,22 +175,157 @@ class BaseGraph:
 
         return decorator
 
+    def subgraph(
+        self,
+        name: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        interrupt: Union[Literal["before", "after"], None] = None,
+    ):
+        """Decorator to add a subgraph as a node to the graph
+
+        Args:
+            name: Optional name for the subgraph node. If None, uses the function name
+            metadata: Optional metadata dictionary
+        """
+
+        def decorator(func: Callable[[], "BaseGraph"]):
+            if self.is_compiled:
+                raise ValueError("Cannot add nodes after compiling the graph")
+
+            # Use function name if name not provided
+            node_name = name if name is not None else func.__name__
+
+            # Check for reserved names
+            if node_name in [START, END]:
+                raise ValueError(f"Node name '{node_name}' is reserved")
+
+            # Create a dummy action that will be replaced during execution
+            def subgraph_action():
+                pass
+
+            # Add metadata about being a subgraph
+            combined_metadata = {
+                **(metadata or {}),
+                "is_subgraph": True,
+                "subgraph_type": "nested" if "_" in node_name else "parent",
+            }
+
+            # Execute the function to get the subgraph
+            subgraph = func()
+
+            # Create the node with the subgraph
+            self.nodes[node_name] = Node(
+                name=node_name,
+                action=subgraph_action,
+                metadata=combined_metadata,
+                is_async=False,  # Will be determined during execution
+                is_router=False,
+                possible_routes=None,
+                interrupt=interrupt,
+                emit_event=None,
+                is_subgraph=True,
+                subgraph=subgraph,
+            )
+            return func
+
+        return decorator
+
     def add_edge(
         self, start_node: str, end_node: str, id: Optional[str] = None
     ) -> Self:
+        """Modified add_edge to handle subgraph connections"""
         if start_node not in self.nodes or end_node not in self.nodes:
             raise ValueError(
-                f"Both start_node '{start_node}' and end_node '{end_node}' must be added to the graph before adding an edge"
+                f"Either start_node '{start_node}' or end_node '{end_node}' must be added to the graph before adding an edge"
             )
 
-        # Auto-generate edge ID if not provided
-        if id is None:
-            node_pair = (start_node, end_node)
-            self.edge_counter[node_pair] = self.edge_counter.get(node_pair, 0) + 1
-            id = f"{start_node}_to_{end_node}_{self.edge_counter[node_pair]}"
+        # Check if either node is a subgraph
+        start_is_subgraph = self.nodes[start_node].is_subgraph
+        end_is_subgraph = self.nodes[end_node].is_subgraph
 
-        self.edges.add(Edge(id=id, start_node=start_node, end_node=end_node))
+        # Handle subgraph connections
+        if start_is_subgraph:
+            subgraph = self.nodes[start_node].subgraph
+            # Connect subgraph's END to the end_node
+            self._merge_subgraph(subgraph, start_node, connect_end=end_node)
+        elif end_is_subgraph:
+            subgraph = self.nodes[end_node].subgraph
+            # Connect start_node to subgraph's START
+            self._merge_subgraph(subgraph, end_node, connect_start=start_node)
+        else:
+            # Normal edge connection
+            if id is None:
+                node_pair = (start_node, end_node)
+                self.edge_counter[node_pair] = self.edge_counter.get(node_pair, 0) + 1
+                id = f"{start_node}_to_{end_node}_{self.edge_counter[node_pair]}"
+
+            self.edges.add(Edge(id=id, start_node=start_node, end_node=end_node))
+
         return self
+
+    def _merge_subgraph(
+        self,
+        subgraph: "BaseGraph",
+        subgraph_node: str,
+        connect_start: Optional[str] = None,
+        connect_end: Optional[str] = None,
+    ) -> None:
+        """Internal method to merge a subgraph into the main graph"""
+        prefix = f"{subgraph_node}_"
+
+        # Find first and last nodes in subgraph (excluding START and END)
+        first_nodes = {
+            edge.end_node for edge in subgraph.edges if edge.start_node == START
+        }
+        last_nodes = {
+            edge.start_node for edge in subgraph.edges if edge.end_node == END
+        }
+
+        # Copy nodes from subgraph (excluding START and END)
+        for node_name, node in subgraph.nodes.items():
+            if node_name not in [START, END]:
+                new_node_name = prefix + node_name
+                # Preserve subgraph flag when copying nodes
+                is_subgraph = (
+                    node.is_subgraph or node.metadata.get("is_subgraph", False)
+                    if node.metadata
+                    else False
+                )
+                self.nodes[new_node_name] = Node(
+                    name=new_node_name,
+                    action=node.action,
+                    metadata={
+                        **(node.metadata or {}),
+                        "parent_subgraph": subgraph_node,
+                    },
+                    is_async=node.is_async,
+                    is_router=node.is_router,
+                    possible_routes=node.possible_routes,
+                    interrupt=node.interrupt,
+                    emit_event=node.emit_event,
+                    is_subgraph=is_subgraph,  # Preserve subgraph status
+                    subgraph=node.subgraph,  # Preserve subgraph reference
+                )
+
+        # Copy and adjust edges
+        for edge in subgraph.edges:
+            if edge.start_node == START and connect_start:
+                # Connect incoming edge to all first nodes of subgraph
+                for first_node in first_nodes:
+                    self.add_edge(connect_start, prefix + first_node)
+            elif edge.end_node == END and connect_end:
+                # Connect all last nodes of subgraph to outgoing edge
+                for last_node in last_nodes:
+                    self.add_edge(prefix + last_node, connect_end)
+            elif edge.start_node != START and edge.end_node != END:
+                self.add_edge(
+                    prefix + edge.start_node,
+                    prefix + edge.end_node,
+                    id=prefix + (edge.id or ""),
+                )
+
+        # # Remove the original subgraph node as it's been expanded
+        # del self.nodes[subgraph_node]
 
     def validate(self) -> Self:
         """Validate that the graph starts with '__start__', ends with '__end__', and all nodes are on valid paths.
@@ -213,9 +350,13 @@ class BaseGraph:
 
         # Check for orphaned nodes (nodes not reachable from __start__)
         orphaned_nodes = set(self.nodes.keys()) - visited
-        if orphaned_nodes:
+        # Filter out subgraph nodes from orphaned nodes check
+        non_subgraph_orphans = {
+            node for node in orphaned_nodes if not self.nodes[node].is_subgraph
+        }
+        if non_subgraph_orphans:
             raise ValueError(
-                f"Found orphaned nodes not reachable from '__start__': {orphaned_nodes}"
+                f"Found orphaned nodes not reachable from '__start__': {non_subgraph_orphans}"
             )
 
         # Check for graphs with only one node added or less
@@ -225,9 +366,13 @@ class BaseGraph:
         # Check for dead ends (nodes with no outgoing edges, except END)
         nodes_with_outgoing_edges = {edge.start_node for edge in self.edges}
         dead_ends = set(self.nodes.keys()) - nodes_with_outgoing_edges - {END}
-        if dead_ends:
+        # Filter out subgraph nodes from dead ends check
+        non_subgraph_dead_ends = {
+            node for node in dead_ends if not self.nodes[node].is_subgraph
+        }
+        if non_subgraph_dead_ends:
             raise ValueError(
-                f"Found dead-end nodes with no outgoing edges: {dead_ends}"
+                f"Found dead-end nodes with no outgoing edges: {non_subgraph_dead_ends}"
             )
 
         # Validate router nodes
@@ -484,13 +629,83 @@ class BaseGraph:
 
         dot = Digraph(comment="Graph Visualization", format="svg")
         dot.attr(rankdir="LR")  # Left to right layout
-
-        # Set global graph attributes for better typography
         dot.attr("node", fontname="Helvetica", fontsize="10", margin="0.2,0.1")
         dot.attr("edge", fontname="Helvetica", fontsize="9")
 
+        # Group nodes by subgraph, handling nested structure
+        subgraph_groups = {}
+        for node_name, node in self.nodes.items():
+            if node.metadata and "parent_subgraph" in node.metadata:
+                parent = node.metadata["parent_subgraph"]
+                if parent not in subgraph_groups:
+                    subgraph_groups[parent] = {"nodes": [], "nested": {}}
+
+                # If this node is itself a subgraph, create a nested group
+                if node.is_subgraph:
+                    subgraph_groups[parent]["nested"][node_name] = []
+                else:
+                    # Check if this node belongs to a nested subgraph
+                    node_parts = node_name.split("_")
+                    if (
+                        len(node_parts) > 2
+                        and "_".join(node_parts[:-1])
+                        in subgraph_groups[parent]["nested"]
+                    ):
+                        nested_subgraph = "_".join(node_parts[:-1])
+                        subgraph_groups[parent]["nested"][nested_subgraph].append(
+                            node_name
+                        )
+                    else:
+                        subgraph_groups[parent]["nodes"].append(node_name)
+
+        # Create subgraph clusters with proper nesting
+        def create_cluster(name, nodes, nested, parent_cluster=dot):
+            with parent_cluster.subgraph(name=f"cluster_{name}") as cluster:
+                cluster.attr(
+                    label=f"Subgraph: {name}",
+                    style="filled,rounded",
+                    fillcolor="#44444422",
+                    color="#AAAAAA",
+                    penwidth="1.0",
+                    labeljust="l",
+                    fontname="Helvetica",
+                    fontsize="10",
+                    margin="15",
+                )
+
+                # Add regular nodes to this cluster
+                for node_name in nodes:
+                    node = self.nodes[node_name]
+                    label = node_name
+                    if node.metadata or node.is_async or node.is_router:
+                        metadata_dict = node.metadata or {}
+                        metadata_str = "\n".join(
+                            f"{k}: {v}" for k, v in metadata_dict.items()
+                        )
+                        label = f"{node_name}\n{metadata_str}"
+
+                    node_attrs = {
+                        "style": "rounded,filled",
+                        "fillcolor": "lightblue",
+                        "shape": "box",
+                        "height": "0.4",
+                        "width": "0.6",
+                        "margin": "0.15",
+                    }
+                    cluster.node(node_name, label, **node_attrs)
+
+                # Create nested subgraph clusters
+                for nested_name, nested_nodes in nested.items():
+                    create_cluster(nested_name, nested_nodes, {}, cluster)
+
+        # Create all clusters
+        for parent, group in subgraph_groups.items():
+            create_cluster(parent, group["nodes"], group["nested"])
+
         # Add nodes with styling
         for node_name, node in self.nodes.items():
+            if node.is_subgraph:
+                continue
             # Create label with metadata if it exists
             label = node_name
             if node.metadata or node.is_async or node.is_router:
