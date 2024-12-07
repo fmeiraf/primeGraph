@@ -285,26 +285,26 @@ class BaseGraph:
         for node_name, node in subgraph.nodes.items():
             if node_name not in [START, END]:
                 new_node_name = prefix + node_name
-                # Preserve subgraph flag when copying nodes
-                is_subgraph = (
-                    node.is_subgraph or node.metadata.get("is_subgraph", False)
-                    if node.metadata
-                    else False
-                )
+                # Create metadata that preserves subgraph hierarchy
+                new_metadata = {
+                    **(node.metadata or {}),
+                    "parent_subgraph": subgraph_node,
+                    "is_subgraph": node.is_subgraph,  # Preserve subgraph flag
+                    "subgraph_type": "nested" if node.is_subgraph else "child",
+                    "subgraph_cluster": subgraph_node,  # Add cluster info for visualization
+                }
+
                 self.nodes[new_node_name] = Node(
                     name=new_node_name,
                     action=node.action,
-                    metadata={
-                        **(node.metadata or {}),
-                        "parent_subgraph": subgraph_node,
-                    },
+                    metadata=new_metadata,
                     is_async=node.is_async,
                     is_router=node.is_router,
                     possible_routes=node.possible_routes,
                     interrupt=node.interrupt,
                     emit_event=node.emit_event,
-                    is_subgraph=is_subgraph,  # Preserve subgraph status
-                    subgraph=node.subgraph,  # Preserve subgraph reference
+                    is_subgraph=node.is_subgraph,
+                    subgraph=node.subgraph,
                 )
 
         # Copy and adjust edges
@@ -632,34 +632,31 @@ class BaseGraph:
         dot.attr("node", fontname="Helvetica", fontsize="10", margin="0.2,0.1")
         dot.attr("edge", fontname="Helvetica", fontsize="9")
 
-        # Group nodes by subgraph, handling nested structure
+        # Group nodes by subgraph, maintaining hierarchy
         subgraph_groups = {}
         for node_name, node in self.nodes.items():
+            # Skip subgraph container nodes
+            if node.is_subgraph:
+                continue
+
             if node.metadata and "parent_subgraph" in node.metadata:
                 parent = node.metadata["parent_subgraph"]
-                if parent not in subgraph_groups:
-                    subgraph_groups[parent] = {"nodes": [], "nested": {}}
+                node_prefix = f"{parent}_"
 
-                # If this node is itself a subgraph, create a nested group
-                if node.is_subgraph:
-                    subgraph_groups[parent]["nested"][node_name] = []
+                # Check if this node belongs to a nested subgraph
+                if node_name.startswith(node_prefix + "inner_nested_"):
+                    nested_subgraph = f"{parent}_inner_nested"
+                    if parent not in subgraph_groups:
+                        subgraph_groups[parent] = {"nodes": set(), "nested": {}}
+                    if nested_subgraph not in subgraph_groups[parent]["nested"]:
+                        subgraph_groups[parent]["nested"][nested_subgraph] = set()
+                    subgraph_groups[parent]["nested"][nested_subgraph].add(node_name)
                 else:
-                    # Check if this node belongs to a nested subgraph
-                    node_parts = node_name.split("_")
-                    if (
-                        len(node_parts) > 2
-                        and "_".join(node_parts[:-1])
-                        in subgraph_groups[parent]["nested"]
-                    ):
-                        nested_subgraph = "_".join(node_parts[:-1])
-                        subgraph_groups[parent]["nested"][nested_subgraph].append(
-                            node_name
-                        )
-                    else:
-                        subgraph_groups[parent]["nodes"].append(node_name)
+                    if parent not in subgraph_groups:
+                        subgraph_groups[parent] = {"nodes": set(), "nested": {}}
+                    subgraph_groups[parent]["nodes"].add(node_name)
 
-        # Create subgraph clusters with proper nesting
-        def create_cluster(name, nodes, nested, parent_cluster=dot):
+        def create_cluster(name, nodes, nested, parent_cluster):
             with parent_cluster.subgraph(name=f"cluster_{name}") as cluster:
                 cluster.attr(
                     label=f"Subgraph: {name}",
@@ -667,109 +664,58 @@ class BaseGraph:
                     fillcolor="#44444422",
                     color="#AAAAAA",
                     penwidth="1.0",
-                    labeljust="l",
-                    fontname="Helvetica",
-                    fontsize="10",
-                    margin="15",
+                    fontname="Helvetica",  # Match node font
+                    fontcolor="#444444",  # Dark grey
+                    margin="20",  # Increased padding
                 )
 
                 # Add regular nodes to this cluster
                 for node_name in nodes:
-                    node = self.nodes[node_name]
-                    label = node_name
-                    if node.metadata or node.is_async or node.is_router:
-                        metadata_dict = node.metadata or {}
-                        metadata_str = "\n".join(
-                            f"{k}: {v}" for k, v in metadata_dict.items()
-                        )
-                        label = f"{node_name}\n{metadata_str}"
-
-                    node_attrs = {
-                        "style": "rounded,filled",
-                        "fillcolor": "lightblue",
-                        "shape": "box",
-                        "height": "0.4",
-                        "width": "0.6",
-                        "margin": "0.15",
-                    }
-                    cluster.node(node_name, label, **node_attrs)
+                    cluster.node(
+                        node_name,
+                        node_name,
+                        style="rounded,filled",
+                        fillcolor="lightblue",
+                        shape="box",
+                    )
 
                 # Create nested subgraph clusters
                 for nested_name, nested_nodes in nested.items():
                     create_cluster(nested_name, nested_nodes, {}, cluster)
 
-        # Create all clusters
+        # Create all clusters with proper nesting
         for parent, group in subgraph_groups.items():
-            create_cluster(parent, group["nodes"], group["nested"])
+            create_cluster(parent, group["nodes"], group["nested"], dot)
 
-        # Add nodes with styling
+        # Add remaining nodes (excluding subgraph container nodes)
         for node_name, node in self.nodes.items():
-            if node.is_subgraph:
-                continue
-            # Create label with metadata if it exists
-            label = node_name
-            if node.metadata or node.is_async or node.is_router:
-                metadata_dict = node.metadata or {}
-                if node.is_router:
-                    metadata_dict = {**metadata_dict, "router": "true"}
-                    if node.possible_routes:
-                        metadata_dict["routes"] = ",".join(node.possible_routes)
-                metadata_str = "\n".join(f"{k}: {v}" for k, v in metadata_dict.items())
-                label = f"{node_name}\n{metadata_str}"
+            if not node.is_subgraph and not (
+                node.metadata and "parent_subgraph" in node.metadata
+            ):
+                node_attrs = {
+                    "style": "rounded,filled",
+                    "fillcolor": "lightblue",
+                    "shape": "box",
+                }
 
-            # Define node styles based on type
-            node_attrs = {
-                "style": "rounded,filled",
-                "fillcolor": "lightblue",
-                "shape": "box",
-                "height": "0.4",
-                "width": "0.6",
-                "margin": "0.15",
-            }
+                if node_name in [START, END]:
+                    node_attrs.update(
+                        {
+                            "shape": "ellipse",
+                            "fillcolor": "#F4E8E8",  # Pale rose
+                        }
+                    )
 
-            # Special styling for different node types
-            if node_name in [START, END]:
-                node_attrs.update(
-                    {
-                        "shape": "ellipse",
-                        "style": "filled",
-                        "height": "0.3",
-                        "width": "0.5",
-                        "penwidth": "1",
-                    }
-                )
-                # Different colors for START and END
-
-                node_attrs["fillcolor"] = "#F4E8E8"  # Pale rose
-
-            elif node.is_router:
-                node_attrs.update(
-                    {"shape": "diamond", "fillcolor": "lightyellow", "height": "0.5"}
-                )
-            elif node.is_async:
-                label = f"<{node_name}<BR/><I><FONT POINT-SIZE='8'>async</FONT></I>>"
-                node_attrs.update(
-                    {
-                        "shape": "box",
-                        "fillcolor": "#E0FFFF",  # Light cyan
-                        "style": "rounded,filled",
-                        "fontname": "Helvetica",
-                        "margin": "0.15",
-                        "height": "0.5",
-                    }
-                )
-
-            # Use HTML-like label for async nodes, regular text for others
-            if node.is_async:
-                dot.node(node_name, label, **node_attrs)
-            else:
                 dot.node(node_name, node_name, **node_attrs)
 
-        # Add edges with refined styling
+        # Add edges (excluding edges to/from subgraph container nodes)
         for edge in self.edges:
-            dot.edge(edge.start_node, edge.end_node, penwidth="0.8", arrowsize="0.7")
+            if not (
+                self.nodes[edge.start_node].is_subgraph
+                or self.nodes[edge.end_node].is_subgraph
+            ):
+                dot.edge(edge.start_node, edge.end_node)
 
-        # Return the SVG source directly instead of saving to file
         return dot
 
     def find_edges(
