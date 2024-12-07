@@ -485,14 +485,16 @@ class BaseGraph:
         dot = Digraph(comment="Graph Visualization")
         dot.attr(rankdir="LR")  # Left to right layout
 
+        # Set global graph attributes for better typography
+        dot.attr("node", fontname="Helvetica", fontsize="10", margin="0.2,0.1")
+        dot.attr("edge", fontname="Helvetica", fontsize="9")
+
         # Add nodes with styling
         for node_name, node in self.nodes.items():
             # Create label with metadata if it exists
             label = node_name
             if node.metadata or node.is_async or node.is_router:
                 metadata_dict = node.metadata or {}
-                if node.is_async:
-                    metadata_dict = {**metadata_dict, "async": "true"}
                 if node.is_router:
                     metadata_dict = {**metadata_dict, "router": "true"}
                     if node.possible_routes:
@@ -500,17 +502,56 @@ class BaseGraph:
                 metadata_str = "\n".join(f"{k}: {v}" for k, v in metadata_dict.items())
                 label = f"{node_name}\n{metadata_str}"
 
-            dot.node(
-                node_name,
-                label,
-                shape="box",
-                style="rounded,filled",
-                fillcolor="lightblue",
-            )
+            # Define node styles based on type
+            node_attrs = {
+                "style": "rounded,filled",
+                "fillcolor": "lightblue",
+                "shape": "box",
+                "height": "0.4",
+                "width": "0.6",
+                "margin": "0.15",
+            }
 
-        # Add edges - modified to use Edge objects
+            # Special styling for different node types
+            if node_name in [START, END]:
+                node_attrs.update(
+                    {
+                        "shape": "ellipse",
+                        "style": "filled",
+                        "height": "0.3",
+                        "width": "0.5",
+                        "penwidth": "1",
+                    }
+                )
+
+                node_attrs["fillcolor"] = "#F4E8E8"  # Pale rose
+
+            elif node.is_router:
+                node_attrs.update(
+                    {"shape": "diamond", "fillcolor": "lightyellow", "height": "0.5"}
+                )
+            elif node.is_async:
+                label = f"<{node_name}<BR/><I><FONT POINT-SIZE='8'>async</FONT></I>>"
+                node_attrs.update(
+                    {
+                        "shape": "box",
+                        "fillcolor": "#E0FFFF",  # Light cyan
+                        "style": "rounded,filled",
+                        "fontname": "Helvetica",
+                        "margin": "0.15",
+                        "height": "0.5",
+                    }
+                )
+
+            # Use HTML-like label for async nodes, regular text for others
+            if node.is_async:
+                dot.node(node_name, label, **node_attrs)
+            else:
+                dot.node(node_name, node_name, **node_attrs)
+
+        # Add edges with refined styling
         for edge in self.edges:
-            dot.edge(edge.start_node, edge.end_node)
+            dot.edge(edge.start_node, edge.end_node, penwidth="0.8", arrowsize="0.7")
 
         # Render the graph
         dot.render(output_file, view=True, format="pdf", cleanup=True)
