@@ -741,3 +741,115 @@ class BaseGraph:
             result = {edge for edge in result if edge.end_node == end_node}
 
         return result
+
+    def add_repeating_edge(
+        self,
+        start_node: str,
+        repeat_node: str,
+        end_node: str,
+        repeat: int = 1,
+        parallel: bool = False,
+    ) -> Self:
+        """Add a repeating edge that creates multiple instances of the same node.
+
+        Args:
+            start_node: Starting node name
+            repeat_node: Node to be repeated
+            end_node: Ending node name
+            repeat: Number of times to repeat the node
+            parallel: Whether to run repetitions in parallel
+        """
+        if repeat < 1:
+            raise ValueError("Repeat count must be at least 1")
+
+        if (
+            start_node not in self.nodes
+            or end_node not in self.nodes
+            or repeat_node not in self.nodes
+        ):
+            raise ValueError("All nodes must exist in the graph")
+
+        # Get the original node to be repeated
+        original_node = self.nodes[repeat_node]
+
+        # Create a unique short ID using the edge count
+        short_id = f"{len(self.edges):03x}"  # Using hex to keep it shorter
+
+        # Create a wrapper function that maintains node identity
+        def create_node_action(node_name: str, original_action: Callable):
+            def wrapped_action(*args, **kwargs):
+                return original_action(*args, **kwargs)
+
+            wrapped_action.__node_name__ = node_name
+            for attr in dir(original_action):
+                if not attr.startswith("__"):
+                    setattr(wrapped_action, attr, getattr(original_action, attr))
+            return wrapped_action
+
+        # Create a new version of the original node with updated metadata
+        self.nodes[repeat_node] = Node(
+            name=repeat_node,
+            action=create_node_action(repeat_node, original_node.action),
+            metadata={
+                **(original_node.metadata or {}),
+                "is_repeat": True,
+                "repeat_group": short_id,
+                "repeat_index": 1,
+                "original_node": repeat_node,
+                "parallel": parallel,
+            },
+            is_async=original_node.is_async,
+            is_router=original_node.is_router,
+            possible_routes=original_node.possible_routes,
+            interrupt=original_node.interrupt,
+            emit_event=original_node.emit_event,
+            is_subgraph=original_node.is_subgraph,
+            subgraph=original_node.subgraph,
+        )
+
+        repeated_nodes = [repeat_node]
+
+        # Create n-1 additional repeated nodes
+        for i in range(repeat - 1):
+            repeat_node_name = (
+                f"{repeat_node}_{i+2}_{short_id}"  # e.g., node_2_001, node_3_001
+            )
+
+            self.nodes[repeat_node_name] = Node(
+                name=repeat_node_name,
+                action=create_node_action(repeat_node_name, original_node.action),
+                metadata={
+                    **(original_node.metadata or {}),
+                    "is_repeat": True,
+                    "repeat_group": short_id,
+                    "repeat_index": i + 2,
+                    "original_node": repeat_node,
+                    "parallel": parallel,
+                },
+                is_async=original_node.is_async,
+                is_router=original_node.is_router,
+                possible_routes=original_node.possible_routes,
+                interrupt=original_node.interrupt,
+                emit_event=original_node.emit_event,
+                is_subgraph=original_node.is_subgraph,
+                subgraph=original_node.subgraph,
+            )
+            repeated_nodes.append(repeat_node_name)
+
+        # Connect the nodes based on parallel/sequential execution
+        if parallel:
+            # Connect start node to all repeated nodes
+            for node_name in repeated_nodes:
+                self.add_edge(start_node, node_name)
+
+            # Connect all repeated nodes to end node
+            for node_name in repeated_nodes:
+                self.add_edge(node_name, end_node)
+        else:
+            # Connect nodes sequentially
+            self.add_edge(start_node, repeated_nodes[0])
+            for i in range(len(repeated_nodes) - 1):
+                self.add_edge(repeated_nodes[i], repeated_nodes[i + 1])
+            self.add_edge(repeated_nodes[-1], end_node)
+
+        return self
