@@ -618,8 +618,6 @@ class BaseGraph:
         return self
 
     def visualize(self, output_file: str = "graph") -> None:
-        # TODO: Remove the subgraph name from the node display name
-        # TODO: Removed parent subgraph name from nested subgraphs labels
         """Visualize the graph using Graphviz."""
         from graphviz import Digraph
 
@@ -640,11 +638,26 @@ class BaseGraph:
 
         # Group nodes by subgraph, maintaining hierarchy
         subgraph_groups = {}
+        repeat_groups = {}
+
         for node_name, node in self.nodes.items():
             # Skip subgraph container nodes
             if node.is_subgraph:
                 continue
 
+            # Handle repeated nodes
+            if node.metadata and node.metadata.get("is_repeat"):
+                group_id = node.metadata["repeat_group"]
+                if group_id not in repeat_groups:
+                    repeat_groups[group_id] = {
+                        "nodes": set(),
+                        "original_node": node.metadata["original_node"],
+                        "parallel": node.metadata["parallel"],
+                        "parent_subgraph": node.metadata.get("parent_subgraph"),
+                    }
+                repeat_groups[group_id]["nodes"].add(node_name)
+
+            # Handle subgraph grouping (existing logic)
             if node.metadata and "parent_subgraph" in node.metadata:
                 parent = node.metadata["parent_subgraph"]
                 node_prefix = f"{parent}_"
@@ -662,7 +675,7 @@ class BaseGraph:
                         subgraph_groups[parent] = {"nodes": set(), "nested": {}}
                     subgraph_groups[parent]["nodes"].add(node_name)
 
-        def create_cluster(name, nodes, nested, parent_cluster):
+        def create_cluster(name, nodes, nested, parent_cluster, repeat_nodes=None):
             with parent_cluster.subgraph(name=f"cluster_{name}") as cluster:
                 cluster.attr(
                     label=f"Subgraph: {name}",
@@ -670,20 +683,71 @@ class BaseGraph:
                     fillcolor="#44444422",
                     color="#AAAAAA",
                     penwidth="1.0",
-                    fontname="Helvetica",  # Match node font
-                    fontcolor="#444444",  # Dark grey
-                    margin="20",  # Increased padding
+                    fontname="Helvetica",
+                    fontcolor="#444444",
+                    margin="20",
                 )
 
-                # Add regular nodes to this cluster
+                # Handle repeated nodes in this cluster
+                repeat_clusters = {}
                 for node_name in nodes:
-                    cluster.node(
-                        node_name,
-                        get_display_name(node_name, self.nodes[node_name]),
-                        style="rounded,filled",
-                        fillcolor="lightblue",
-                        shape="box",
-                    )
+                    for group_id, group_info in repeat_groups.items():
+                        if (
+                            node_name in group_info["nodes"]
+                            and group_info["parent_subgraph"] == name
+                            and node_name == group_info["original_node"]
+                        ):  # Only process original nodes
+                            if group_id not in repeat_clusters:
+                                repeat_clusters[group_id] = group_info
+
+                # Create repeat clusters first
+                for group_id, group_info in repeat_clusters.items():
+                    with cluster.subgraph(
+                        name=f"cluster_repeat_{group_id}"
+                    ) as repeat_cluster:
+                        n_repeats = len(group_info["nodes"])
+                        execution_type = (
+                            "Parallel" if group_info["parallel"] else "Sequential"
+                        )
+                        repeat_cluster.attr(
+                            label=f"{n_repeats}x {execution_type}",
+                            style="dashed,rounded",  # Changed to dashed with rounded corners
+                            color="#666666",
+                            fontcolor="#666666",
+                            fontname="Helvetica",
+                            fontsize="10",
+                            margin="8",
+                        )
+
+                        # Only add the original node to the visualization
+                        original_node_name = group_info["original_node"]
+                        if original_node_name in nodes:
+                            repeat_cluster.node(
+                                original_node_name,
+                                get_display_name(
+                                    original_node_name, self.nodes[original_node_name]
+                                ),
+                                style="rounded,filled",
+                                fillcolor="lightblue",
+                                shape="box",
+                            )
+
+                # Add regular nodes that aren't part of repeat groups
+                for node_name in nodes:
+                    if not any(
+                        (
+                            node_name in group["nodes"]
+                            and node_name != group["original_node"]
+                        )
+                        for group in repeat_groups.values()
+                    ):
+                        cluster.node(
+                            node_name,
+                            get_display_name(node_name, self.nodes[node_name]),
+                            style="rounded,filled",
+                            fillcolor="lightblue",
+                            shape="box",
+                        )
 
                 # Create nested subgraph clusters
                 for nested_name, nested_nodes in nested.items():
@@ -693,10 +757,48 @@ class BaseGraph:
         for parent, group in subgraph_groups.items():
             create_cluster(parent, group["nodes"], group["nested"], dot)
 
-        # Add remaining nodes (excluding subgraph container nodes)
+        # Handle repeated nodes that aren't in subgraphs
+        for group_id, group_info in repeat_groups.items():
+            if not group_info["parent_subgraph"]:
+                with dot.subgraph(name=f"cluster_repeat_{group_id}") as repeat_cluster:
+                    n_repeats = len(group_info["nodes"])
+                    execution_type = (
+                        "Parallel" if group_info["parallel"] else "Sequential"
+                    )
+                    repeat_cluster.attr(
+                        label=f"{n_repeats}x {execution_type}",
+                        style="dashed,rounded",  # Changed to dashed with rounded corners
+                        color="#666666",
+                        fontcolor="#666666",
+                        fontname="Helvetica",
+                        fontsize="10",
+                        margin="8",
+                    )
+
+                    # Only add the original node
+                    original_node_name = group_info["original_node"]
+                    repeat_cluster.node(
+                        original_node_name,
+                        get_display_name(
+                            original_node_name, self.nodes[original_node_name]
+                        ),
+                        style="rounded,filled",
+                        fillcolor="lightblue",
+                        shape="box",
+                    )
+
+        # Add remaining nodes (excluding repeated nodes and their copies)
         for node_name, node in self.nodes.items():
-            if not node.is_subgraph and not (
-                node.metadata and "parent_subgraph" in node.metadata
+            if (
+                not node.is_subgraph
+                and not (node.metadata and "parent_subgraph" in node.metadata)
+                and not any(
+                    (
+                        node_name in group["nodes"]
+                        and node_name != group["original_node"]
+                    )
+                    for group in repeat_groups.values()
+                )
             ):
                 node_attrs = {
                     "style": "rounded,filled",
@@ -714,13 +816,43 @@ class BaseGraph:
 
                 dot.node(node_name, get_display_name(node_name, node), **node_attrs)
 
-        # Add edges (excluding edges to/from subgraph container nodes)
+        # Add edges (only for visible nodes)
+        added_visual_edges = set()  # Track edges we've added for visualization
         for edge in self.edges:
-            if not (
-                self.nodes[edge.start_node].is_subgraph
-                or self.nodes[edge.end_node].is_subgraph
+            if (
+                not self.nodes[edge.start_node].is_subgraph
+                and not self.nodes[edge.end_node].is_subgraph
             ):
-                dot.edge(edge.start_node, edge.end_node)
+                # Check if this is a repeated node edge
+                start_metadata = self.nodes[edge.start_node].metadata or {}
+                end_metadata = self.nodes[edge.end_node].metadata or {}
+
+                # Handle repeated node connections
+                if start_metadata.get("is_repeat"):
+                    # repeat_group = start_metadata["repeat_group"]
+                    original_node = start_metadata["original_node"]
+
+                    # If this is the last repeated node connecting to an end node
+                    if not end_metadata.get("is_repeat"):
+                        # Add visual edge from original node to end node if not already added
+                        visual_edge = (original_node, edge.end_node)
+                        if visual_edge not in added_visual_edges:
+                            dot.edge(
+                                original_node,
+                                edge.end_node,
+                                style="dashed",
+                                color="#666666",
+                            )
+                            added_visual_edges.add(visual_edge)
+                    continue  # Skip adding the actual repeated node edge
+
+                # Add normal edges that aren't from/to repeated nodes (except original)
+                if not any(
+                    (node in group["nodes"] and node != group["original_node"])
+                    for group in repeat_groups.values()
+                    for node in (edge.start_node, edge.end_node)
+                ):
+                    dot.edge(edge.start_node, edge.end_node)
 
         return dot
 
