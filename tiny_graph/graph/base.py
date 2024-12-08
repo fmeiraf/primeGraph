@@ -901,6 +901,19 @@ class BaseGraph:
         ):
             raise ValueError("All nodes must exist in the graph")
 
+        if start_node == START:
+            raise ValueError(
+                "Repeating nodes cannot have START as a start node. It needs to be connected to another node."
+            )
+        node_obj = self.nodes[start_node]
+        if not node_obj:
+            raise ValueError(f"Node {start_node} does not exist in the graph")
+
+        if node_obj.metadata and node_obj.metadata.get("is_repeat"):
+            raise ValueError(
+                "Repeating nodes cannot have another repeating node as a start node."
+            )
+
         # Get the original node to be repeated
         original_node = self.nodes[repeat_node]
 
@@ -909,13 +922,24 @@ class BaseGraph:
 
         # Create a wrapper function that maintains node identity
         def create_node_action(node_name: str, original_action: Callable):
-            def wrapped_action(*args, **kwargs):
-                return original_action(*args, **kwargs)
+            if inspect.iscoroutinefunction(original_action):
 
+                async def wrapped_action(*args, **kwargs):
+                    return await original_action(*args, **kwargs)
+            else:
+
+                def wrapped_action(*args, **kwargs):
+                    return original_action(*args, **kwargs)
+
+            # Set the name and node_name attributes
+            wrapped_action.__name__ = node_name
             wrapped_action.__node_name__ = node_name
+
+            # Copy all other attributes from the original action
             for attr in dir(original_action):
                 if not attr.startswith("__"):
                     setattr(wrapped_action, attr, getattr(original_action, attr))
+
             return wrapped_action
 
         # Create a new version of the original node with updated metadata

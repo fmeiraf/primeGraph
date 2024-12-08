@@ -249,8 +249,6 @@ class Graph(BaseGraph):
             timeout: maximum execution time in seconds
         """
 
-        # I believe the problem is that we should only save tasks on the end of execute_tasks, not on each task, that will ensure we get the right state from the graph for checkpoints
-
         def execute_task(task: Callable, node_name: str) -> Any:
             """Execute a single task with proper state handling."""
             logger.debug(f"Executing task in node: {node_name}")
@@ -571,6 +569,9 @@ class Graph(BaseGraph):
                         if self._has_state
                         else await task()
                     )
+                    # Ensure we're getting the actual result, not a coroutine
+                    if inspect.iscoroutine(result):
+                        result = await result
                 else:
                     # Handle CPU-bound sync functions by running them in a thread
                     if self._has_state:
@@ -612,7 +613,11 @@ class Graph(BaseGraph):
                     # Check if any task in the parallel group has a "before" interrupt
                     for task in tasks:
                         if callable(task):
-                            node_name = getattr(task, "__name__", str(task))
+                            node_name = getattr(
+                                task,
+                                "__node_name__",
+                                getattr(task, "__name__", str(task)),
+                            )
                             if self._get_interrupt_status(node_name) == "before":
                                 if not self.start_from:
                                     self.next_execution_node = node_name
@@ -624,7 +629,11 @@ class Graph(BaseGraph):
                     for task in tasks:
                         # If it's a callable (actual task)
                         if callable(task):
-                            node_name = getattr(task, "__name__", str(task))
+                            node_name = getattr(
+                                task,
+                                "__node_name__",
+                                getattr(task, "__name__", str(task)),
+                            )
                             if node_name not in self.executed_nodes:
                                 # Skip nodes until we reach start_from
                                 if self.start_from and self.start_from != node_name:
@@ -647,7 +656,11 @@ class Graph(BaseGraph):
                         # Check if any task in the parallel group has an "after" interrupt
                         for task in tasks:
                             if callable(task):
-                                node_name = getattr(task, "__name__", str(task))
+                                node_name = getattr(
+                                    task,
+                                    "__node_name__",
+                                    getattr(task, "__name__", str(task)),
+                                )
                                 if self._get_interrupt_status(node_name) == "after":
                                     if not self.start_from:
                                         self.next_execution_node = self.execution_plan[
