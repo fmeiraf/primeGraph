@@ -42,6 +42,7 @@ class Node(NamedTuple):
     emit_event: Optional[Callable] = None
     is_subgraph: bool = False
     subgraph: Optional["BaseGraph"] = None
+    router_paths: Dict[str, List[str]] = None
 
 
 class BaseGraph:
@@ -473,6 +474,17 @@ class BaseGraph:
 
             while current != convergence:
                 next_nodes = get_next_nodes(current)
+
+                # Handle router nodes
+                if current in self.nodes and self.nodes[current].is_router:
+                    path.append((parent, current))
+                    # Get the next node after the router
+                    if next_nodes:
+                        current = next_nodes[0]
+                        parent = current
+                        visited.add(current)
+                    continue
+
                 if len(next_nodes) > 1:
                     # Handle nested parallel paths
                     nested_convergence = find_convergence_point(next_nodes)
@@ -481,27 +493,31 @@ class BaseGraph:
                         nested_path = build_path_to_convergence(
                             next_node, nested_convergence, visited.copy(), current
                         )
-                        if nested_path:
-                            nested_paths.append(nested_path)
-                    path.extend(
-                        [(current, current), nested_paths]
-                    )  # Include parent info
+                        if nested_path:  # Only add non-empty paths
+                            if isinstance(nested_path, list) and len(nested_path) == 1:
+                                nested_paths.append(nested_path[0])
+                            else:
+                                nested_paths.append(nested_path)
+
+                    if nested_paths:  # Only extend if there are valid nested paths
+                        path.append([(parent, current), nested_paths])
                     current = nested_convergence
                 elif not next_nodes:
                     path.append((parent, current))
                     visited.add(current)
                     break
                 elif is_convergence_point(current):
-                    if "nested_convergence" in locals():
-                        path.append((parent, current))
+                    path.append((parent, current))
+                    if next_nodes:
                         current = next_nodes[0]
+                        parent = current
                         visited.add(current)
                     else:
                         break
                 else:
                     path.append((parent, current))
                     current = next_nodes[0]
-                    parent = current  # Update parent for next iteration
+                    parent = current
                     visited.add(current)
 
             return path
@@ -565,39 +581,13 @@ class BaseGraph:
 
         return clean_plan(plan)
 
-    def _find_execution_paths_with_edges(self) -> List[Any]:
-        """Similar to _find_execution_paths but returns edge IDs instead of node names."""
-
-        def find_all_edges_with_node(node_name):
-            edges = [edge.id for edge in self.edges if edge.end_node == node_name]
-            if not edges:
-                raise ValueError(f"No edges found for node: {node_name}")
-            return edges if len(edges) > 1 else edges[0]
-
-        def scan_execution_plan(execution_plan):
-            final_edge_plan = []
-            for step in execution_plan:
-                if isinstance(step, list):
-                    nested_result = [
-                        scan_execution_plan(node)
-                        if isinstance(node, list)
-                        else find_all_edges_with_node(node)
-                        for node in step
-                    ]
-
-                    final_edge_plan.append(nested_result)
-                else:
-                    if step != START:
-                        result = find_all_edges_with_node(step)
-                        final_edge_plan.append(result)
-
-            return final_edge_plan
-
-        return scan_execution_plan(self.execution_path)
-
     def compile(self, state: Union[BaseModel, NamedTuple, None] = None) -> Self:
         """Compiles the graph by validating and organizing execution paths."""
         self.validate()
+
+        # Analyze router paths before creating execution paths
+        self.router_paths = self._analyze_router_paths()
+
         self.detailed_execution_path = self._find_execution_paths()
 
         def extract_execution_plan(current_item):
@@ -612,7 +602,6 @@ class BaseGraph:
         self.execution_path = [
             extract_execution_plan(item) for item in self.detailed_execution_path
         ]
-        self.execution_plan_with_edges = self._find_execution_paths_with_edges()
 
         self.is_compiled = True
         return self
@@ -854,6 +843,34 @@ class BaseGraph:
                 ):
                     dot.edge(edge.start_node, edge.end_node)
 
+        # Update node visualization for router nodes
+        for node_name, node in self.nodes.items():
+            if node.is_router:
+                node_attrs = {
+                    "style": "rounded,filled",
+                    "fillcolor": "#FFE4B5",  # Light orange for router nodes
+                    "shape": "diamond",
+                    "peripheries": "2",  # Double border
+                }
+                dot.node(node_name, get_display_name(node_name, node), **node_attrs)
+
+                # Add edge labels for router paths if available
+                if node.router_paths:
+                    for first_node, path in node.router_paths.items():
+                        edge = next(
+                            e
+                            for e in self.edges
+                            if e.start_node == node_name and e.end_node == first_node
+                        )
+                        if edge:
+                            dot.edge(
+                                edge.start_node,
+                                edge.end_node,
+                                label=f"route: {first_node}",
+                                style="dashed",
+                                color="#666666",
+                            )
+
         return dot
 
     def find_edges(
@@ -1009,3 +1026,112 @@ class BaseGraph:
             self.add_edge(repeated_nodes[-1], end_node)
 
         return self
+
+    def add_router_edge(self, start_node: str, router_node: str) -> Self:
+        """Add a router edge that can direct flow to different paths based on router node return value.
+
+        Args:
+            start_node: Starting node name
+            router_node: Node that will determine the routing
+        """
+        if not all(node in self.nodes for node in [start_node, router_node]):
+            raise ValueError("All nodes must exist in the graph")
+
+        # Update router node metadata
+        router_metadata = self.nodes[router_node].metadata or {}
+        router_metadata.update({"is_router": True})
+
+        # Get all possible return values from the router function
+        return_values = self._get_return_values(self.nodes[router_node].action)
+        print("return_values", return_values)
+        if not return_values:
+            raise ValueError(
+                f"Router node '{router_node}' must return string literals indicating next nodes"
+            )
+
+        # Create new Node instance with updated metadata and possible routes
+        self.nodes[router_node] = self.nodes[router_node]._replace(
+            is_router=True, metadata=router_metadata, possible_routes=return_values
+        )
+
+        # Add edge from start to router
+        self.add_edge(start_node, router_node)
+
+        # Automatically add edges to all possible return nodes
+        for return_node in return_values:
+            if return_node not in self.nodes:
+                raise ValueError(
+                    f"Return node '{return_node}' does not exist in the graph"
+                )
+            self.add_edge(router_node, return_node)
+
+        return self
+
+    def _analyze_router_paths(self) -> Dict[str, Dict[str, List[str]]]:
+        """Identifies execution paths in the graph with parallel and nested parallel paths."""
+        router_paths = {}
+
+        def get_next_nodes(node: str) -> List[str]:
+            return [edge.end_node for edge in self.edges if edge.start_node == node]
+
+        def get_prev_nodes(node: str) -> List[str]:
+            return [edge.start_node for edge in self.edges if edge.end_node == node]
+
+        def is_convergence_point(node: str) -> bool:
+            return len(get_prev_nodes(node)) > 1
+
+        def follow_path(start_node: str, visited: Set[str] = None) -> List[str]:
+            if visited is None:
+                visited = set()
+
+            if start_node in visited:
+                return []
+
+            current_path = [start_node]
+            current = start_node
+            visited.add(current)
+
+            while True:
+                next_nodes = get_next_nodes(current)
+                if not next_nodes or current == END:
+                    break
+
+                next_node = next_nodes[0]
+                # Check if next node is a router
+                if next_node in self.nodes and self.nodes[next_node].is_router:
+                    # Add the router node but don't follow its paths
+                    current_path.append(next_node)
+                    break
+
+                if is_convergence_point(next_node):
+                    current_path.append(next_node)
+                    break
+
+                current_path.append(next_node)
+                current = next_node
+                visited.add(current)
+
+            return current_path
+
+        for node_name, node in self.nodes.items():
+            if node.is_router and node.possible_routes:
+                paths = {}
+                for route in node.possible_routes:
+                    current_path = follow_path(route)
+                    paths[route] = current_path
+
+                router_paths[node_name] = paths
+
+        # Second pass to handle nested routers
+        for node_name, paths in router_paths.items():
+            for route, path in paths.items():
+                complete_path = []
+                for node in path:
+                    complete_path.append(node)
+                    if node in router_paths:
+                        # If this node is a router, get its default path
+                        next_route = next(iter(router_paths[node].keys()))
+                        complete_path.extend(router_paths[node][next_route][1:])
+                paths[route] = complete_path
+
+        return router_paths

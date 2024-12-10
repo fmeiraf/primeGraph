@@ -256,7 +256,36 @@ class Graph(BaseGraph):
             # added this way to have access to class .self
             def run_task():
                 result = task(state=self.state) if self._has_state else task()
-                if result and self._has_state:
+
+                # Handle router node results
+                if self.nodes[node_name].is_router:
+                    if not result or not isinstance(result, str):
+                        raise ValueError(
+                            f"Router node '{node_name}' must return a valid node name"
+                        )
+
+                    # Validate the returned route
+                    if result not in self.nodes[node_name].possible_routes:
+                        raise ValueError(
+                            f"Router node '{node_name}' returned invalid route: {result}"
+                        )
+
+                    # Get the path for this route
+                    router_paths = self.router_paths.get(node_name, {})
+                    chosen_path = router_paths.get(result, [])
+
+                    if chosen_path:
+                        logger.debug(f"Router {node_name} chose path: {chosen_path}")
+                        # Update execution plan to only include the chosen path
+                        self._update_execution_plan(node_name, chosen_path)
+                        # Set start_from to the first node in the chosen path
+                        self.start_from = chosen_path[0]
+                        logger.debug(
+                            f"Updated execution path: {self.detailed_execution_path}"
+                        )
+                        logger.debug(f"Next node to execute: {self.start_from}")
+
+                elif result and self._has_state:
                     for state_field_name, state_field_value in result.items():
                         self.buffers[state_field_name].update(
                             state_field_value, node_name
@@ -269,7 +298,6 @@ class Graph(BaseGraph):
                     result = future.result(timeout=timeout)
                     self._update_state_from_buffers()
                     self.executed_nodes.add(node_name)
-
                     return result
                 except concurrent.futures.TimeoutError:
                     future.cancel()
@@ -791,3 +819,75 @@ class Graph(BaseGraph):
             await self.execute_async(start_from=start_from)
         else:
             await self.execute_async(start_from=self.next_execution_node)
+
+    def _update_execution_plan(self, router_node: str, chosen_node: str) -> None:
+        """Update detailed execution plan to only include the chosen path from a router node."""
+
+        def _find_node_in_nested(node_name: str, path: List[Any]) -> bool:
+            """Helper function to check if a node exists in a nested structure."""
+            for item in path:
+                if isinstance(item, tuple) and item[1] == node_name:
+                    return True
+                elif isinstance(item, list):
+                    if _find_node_in_nested(node_name, item):
+                        return True
+            return False
+
+        def _find_node_index(node_name: str, path: List[Any]) -> int:
+            """Find the index of a node in the detailed execution path."""
+            for i, item in enumerate(path):
+                # Check tuples (node entries)
+                if isinstance(item, tuple) and item[1] == node_name:
+                    return i
+                # Check nested lists (parallel paths)
+                elif isinstance(item, list):
+                    if any(
+                        _find_node_in_nested(node_name, [subitem]) for subitem in item
+                    ):
+                        return i
+            raise ValueError(f"Node {node_name} not found in detailed execution path")
+
+        def isolate_chosen_path(path: List[Any], chosen_node: str) -> List[Any]:
+            """Find and isolate the path containing the chosen node."""
+            if isinstance(path, list):
+                for item in path:
+                    if isinstance(item, list):
+                        # For nested parallel paths
+                        for subpath in item:
+                            if isinstance(subpath, list):
+                                result = isolate_chosen_path(subpath, chosen_node)
+                                if result:
+                                    return result
+                            elif (
+                                isinstance(subpath, tuple) and subpath[1] == chosen_node
+                            ):
+                                return subpath
+                    elif isinstance(item, tuple) and item[1] == chosen_node:
+                        return path
+            return None
+
+        # Find indices in the detailed execution path
+        router_idx = _find_node_index(router_node, self.detailed_execution_path)
+
+        # Find the parallel paths group that comes after the router
+        if router_idx + 1 >= len(self.detailed_execution_path):
+            return
+
+        parallel_paths = self.detailed_execution_path[router_idx + 1]
+        if not isinstance(parallel_paths, list):
+            return
+
+        # Find the specific path containing the chosen node
+        chosen_path = None
+        for path in parallel_paths:
+            if _find_node_in_nested(chosen_node, [path]):
+                chosen_path = path
+                break
+
+        if not chosen_path:
+            raise ValueError(
+                f"Chosen node {chosen_node} not found in any path after router"
+            )
+
+        # Update the detailed execution path to only include the chosen path
+        self.detailed_execution_path[router_idx + 1] = [chosen_path]
