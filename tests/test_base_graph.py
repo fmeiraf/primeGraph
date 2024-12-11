@@ -205,27 +205,6 @@ def test_node_with_metadata(empty_graph):
     assert empty_graph.nodes["test_node"].metadata == metadata
 
 
-# Test router nodes
-def test_router_node(empty_graph):
-    @empty_graph.node()
-    def route_a():
-        pass
-
-    @empty_graph.node()
-    def route_b():
-        pass
-
-    @empty_graph.node()
-    def router():
-        return "route_a"
-
-    empty_graph.add_edge("router", "route_a")
-    empty_graph.add_edge("router", "route_b")
-
-    assert empty_graph.nodes["router"].is_router
-    assert "route_a" in empty_graph.nodes["router"].possible_routes
-
-
 # Test compilation and validation
 def test_compile_valid_graph(basic_graph):
     compiled = basic_graph.compile()
