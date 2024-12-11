@@ -95,7 +95,7 @@ class BaseGraph:
                     # Note: This is a limitation - we can only detect direct string returns
                     # Variable returns would require more complex static analysis
                     pass
-        return
+        return return_values
 
     def _force_compile(self):
         if not self.is_compiled:
@@ -132,10 +132,6 @@ class BaseGraph:
                 "interrupt": interrupt,
             }
 
-            # Check if this is a router node by looking for return statements
-            return_values = self._get_return_values(func)
-            is_router = len(return_values) > 0
-
             # Check if function accepts state parameter when graph has state
             if hasattr(self, "_has_state") and self._has_state:
                 sig = inspect.signature(func)
@@ -167,8 +163,8 @@ class BaseGraph:
                 func,
                 metadata,
                 is_async,
-                is_router,
-                return_values if is_router else None,
+                False,
+                None,
                 interrupt,
                 emit_event=emit_event,
             )
