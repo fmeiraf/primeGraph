@@ -95,7 +95,7 @@ class BaseGraph:
                     # Note: This is a limitation - we can only detect direct string returns
                     # Variable returns would require more complex static analysis
                     pass
-        return return_values
+        return
 
     def _force_compile(self):
         if not self.is_compiled:
@@ -1043,7 +1043,7 @@ class BaseGraph:
 
         # Get all possible return values from the router function
         return_values = self._get_return_values(self.nodes[router_node].action)
-        print("return_values", return_values)
+
         if not return_values:
             raise ValueError(
                 f"Router node '{router_node}' must return string literals indicating next nodes"

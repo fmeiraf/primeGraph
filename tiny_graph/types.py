@@ -6,3 +6,4 @@ class ChainStatus(Enum):
     PAUSE = auto()
     RUNNING = auto()
     FAILED = auto()
+    ROUTING = auto()

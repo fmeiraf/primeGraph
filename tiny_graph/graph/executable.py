@@ -68,6 +68,7 @@ class Graph(BaseGraph):
         self.execution_timeout = execution_timeout
         self.start_from = None
         self.executed_nodes = set()
+        self.execution_id = None  # when router are ran this is used to prevent residual recursive scheduling
 
     def _assign_buffers(self):
         self.buffers = {
@@ -248,6 +249,7 @@ class Graph(BaseGraph):
             start_from: node name to start execution from
             timeout: maximum execution time in seconds
         """
+        execution_id = f"exec_{uuid.uuid4().hex[:8]}"
 
         def execute_task(task: Callable, node_name: str) -> Any:
             """Execute a single task with proper state handling."""
@@ -255,6 +257,22 @@ class Graph(BaseGraph):
 
             # added this way to have access to class .self
             def run_task():
+                # if node_name == "route_b":
+                #     import pdb
+
+                #     pdb.set_trace()
+                # import pdb
+
+                # pdb.set_trace()logger.debug(f"Executing node: {node.node_name}")
+
+                # prevent execution when in routing mode
+                if self.execution_id == execution_id:
+                    return
+
+                logger.debug(f"node_name {node_name}")
+                logger.debug(f"execution_id {execution_id}")
+                logger.debug(f"Chain status: {self.chain_status}")
+                logger.debug(f"execution plan: {self.execution_plan}")
                 result = task(state=self.state) if self._has_state else task()
 
                 # Handle router node results
@@ -277,13 +295,22 @@ class Graph(BaseGraph):
                     if chosen_path:
                         logger.debug(f"Router {node_name} chose path: {chosen_path}")
                         # Update execution plan to only include the chosen path
-                        self._update_execution_plan(node_name, chosen_path)
+                        self._update_execution_plan(node_name, result)
                         # Set start_from to the first node in the chosen path
                         self.start_from = chosen_path[0]
+
+                        # store execution_id for later checks
+                        self.execution_id = execution_id
+
                         logger.debug(
                             f"Updated execution path: {self.detailed_execution_path}"
                         )
                         logger.debug(f"Next node to execute: {self.start_from}")
+
+                        logger.debug("starting_new_execution from strach")
+                        self._update_chain_status(ChainStatus.ROUTING)
+                        self._execute(start_from=chosen_path[0])
+                        return  # Exit this task
 
                 elif result and self._has_state:
                     for state_field_name, state_field_value in result.items():
@@ -339,13 +366,15 @@ class Graph(BaseGraph):
 
             def execute_tasks(tasks, node_index: int):
                 """Recursively execute tasks respecting list (sequential) and tuple (parallel) structures"""
+                if self.chain_status == ChainStatus.ROUTING:
+                    return  # Skip execution if we're restarting
+
                 if isinstance(tasks, (list, tuple)):
                     if isinstance(tasks, list):
                         # Sequential execution
                         for task in tasks:
-                            # Check chain status before continuing
-                            if self.chain_status != ChainStatus.RUNNING:
-                                return
+                            if self.chain_status == ChainStatus.ROUTING:
+                                return  # Exit early if restarting
                             execute_tasks(task, node_index)
                             self._save_checkpoint(
                                 self.execution_plan[node_index].node_name
@@ -355,15 +384,19 @@ class Graph(BaseGraph):
                         with concurrent.futures.ThreadPoolExecutor() as executor:
                             futures = []
                             for task in tasks:
-                                # Check chain status before submitting new tasks
-                                if self.chain_status != ChainStatus.RUNNING:
-                                    return
+                                if self.chain_status == ChainStatus.ROUTING:
+                                    return  # Exit early if restarting
                                 futures.append(
                                     executor.submit(execute_tasks, task, node_index)
                                 )
 
                             # Wait for all futures to complete
                             for future in concurrent.futures.as_completed(futures):
+                                if self.chain_status == ChainStatus.ROUTING:
+                                    # Cancel remaining futures if restarting
+                                    for f in futures:
+                                        f.cancel()
+                                    return
                                 try:
                                     future.result(timeout=timeout)
                                 except Exception as e:
@@ -437,6 +470,9 @@ class Graph(BaseGraph):
                         ) from e
 
             # Extract and execute tasks
+            if self.chain_status == ChainStatus.ROUTING:
+                return  # Skip any remaining executions from previous path
+
             tasks = extract_tasks_from_node(node)
             execute_tasks(tasks, node_index)
 
@@ -444,6 +480,10 @@ class Graph(BaseGraph):
         self._update_chain_status(ChainStatus.RUNNING)
         self.start_from = start_from
         for node_index, node in enumerate(self.execution_plan):
+            # prevent execution when in routing mode
+            if self.execution_id == execution_id:
+                return
+
             if self.chain_status == ChainStatus.RUNNING:
                 execute_node(node, node_index)
             else:
