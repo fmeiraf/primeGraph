@@ -68,7 +68,7 @@ class Graph(BaseGraph):
         self.execution_timeout = execution_timeout
         self.start_from = None
         self.executed_nodes = set()
-        self.execution_id = None  # when router are ran this is used to prevent residual recursive scheduling
+        self.blocking_execution_ids = []  # when router are ran this is used to prevent residual recursive scheduling
 
     def _assign_buffers(self):
         self.buffers = {
@@ -195,6 +195,11 @@ class Graph(BaseGraph):
         self.last_executed_node = None
         self.chain_status = ChainStatus.IDLE
 
+        # reseting routes and execution paths back to compile state
+        self.blocking_execution_ids = []
+        self.router_paths = self._analyze_router_paths()
+        self.detailed_execution_path = self._find_execution_paths()
+
         # Re-assign buffers and reset state
         if self.state_schema:
             self._assign_buffers()
@@ -253,26 +258,17 @@ class Graph(BaseGraph):
 
         def execute_task(task: Callable, node_name: str) -> Any:
             """Execute a single task with proper state handling."""
-            logger.debug(f"Executing task in node: {node_name}")
 
             # added this way to have access to class .self
             def run_task():
-                # if node_name == "route_b":
-                #     import pdb
-
-                #     pdb.set_trace()
-                # import pdb
-
-                # pdb.set_trace()logger.debug(f"Executing node: {node.node_name}")
-
                 # prevent execution when in routing mode
-                if self.execution_id == execution_id:
+                if execution_id in self.blocking_execution_ids:
                     return
 
-                logger.debug(f"node_name {node_name}")
+                logger.debug(f"Executing node: {node_name}")
                 logger.debug(f"execution_id {execution_id}")
                 logger.debug(f"Chain status: {self.chain_status}")
-                logger.debug(f"execution plan: {self.execution_plan}")
+                logger.debug(f"Execution_id_set: {self.blocking_execution_ids}")
                 result = task(state=self.state) if self._has_state else task()
 
                 # Handle router node results
@@ -300,12 +296,11 @@ class Graph(BaseGraph):
                         self.start_from = chosen_path[0]
 
                         # store execution_id for later checks
-                        self.execution_id = execution_id
+                        self.blocking_execution_ids.append(execution_id)
 
                         logger.debug(
                             f"Updated execution path: {self.detailed_execution_path}"
                         )
-                        logger.debug(f"Next node to execute: {self.start_from}")
 
                         logger.debug("starting_new_execution from strach")
                         self._update_chain_status(ChainStatus.ROUTING)
@@ -481,7 +476,7 @@ class Graph(BaseGraph):
         self.start_from = start_from
         for node_index, node in enumerate(self.execution_plan):
             # prevent execution when in routing mode
-            if self.execution_id == execution_id:
+            if execution_id in self.blocking_execution_ids:
                 return
 
             if self.chain_status == ChainStatus.RUNNING:
