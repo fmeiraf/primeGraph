@@ -404,10 +404,18 @@ class BaseGraph:
             stack: Set of nodes in the current DFS stack (for cycle detection)
 
         Raises:
-            ValueError: If a cycle is detected in the graph
+            ValueError: If a cycle is detected in the graph that's not from a router return
         """
         if node in stack:
-            raise ValueError(f"Cycle detected in graph involving node: {node}")
+            # Check if the cycle is due to a router return
+            is_router_return = any(
+                node in (router_node.possible_routes or set())
+                for router_node in self.nodes.values()
+                if router_node.is_router
+            )
+            if not is_router_return:
+                raise ValueError(f"Cycle detected in graph involving node: {node}")
+            return  # Allow the cycle if it's from a router return
 
         if node in visited:
             return
@@ -441,12 +449,29 @@ class BaseGraph:
             """Find where multiple paths converge."""
             visited_by_path = {start: set([start]) for start in start_nodes}
             current_nodes = {start: [start] for start in start_nodes}
+            max_iterations = len(self.nodes) * 2  # Safety limit
+            iteration = 0
 
-            while True:
+            while iteration < max_iterations:
+                iteration += 1
                 # For each path, get the next node
                 for start in start_nodes:
                     if current_nodes[start][-1] != END:
-                        next_node = get_next_nodes(current_nodes[start][-1])[0]
+                        current = current_nodes[start][-1]
+                        next_nodes = get_next_nodes(current)
+
+                        if not next_nodes:
+                            continue
+
+                        next_node = next_nodes[0]
+
+                        # Handle router nodes - don't follow cycles
+                        if (
+                            self.nodes[current].is_router
+                            and next_node in visited_by_path[start]
+                        ):
+                            continue
+
                         visited_by_path[start].add(next_node)
                         current_nodes[start].append(next_node)
 
@@ -458,11 +483,19 @@ class BaseGraph:
                         return list(intersection)[0]
                     all_visited.update(nodes)
 
+                # Check if all paths have reached END
+                if all(nodes[-1] == END for nodes in current_nodes.values()):
+                    return END
+
+            # If no convergence found within limit, return END
+            return END
+
         def build_path_to_convergence(
             start: str, convergence: str, visited: Set[str], parent: str
         ) -> List[Any]:
             if start in visited:
-                return []
+                # If we've visited this node before, just add it without following its path
+                return [(parent, start)]
 
             path = []
             current = start
@@ -476,7 +509,11 @@ class BaseGraph:
                     path.append((parent, current))
                     # Get the next node after the router
                     if next_nodes:
-                        current = next_nodes[0]
+                        # Don't follow the path if it leads back to a visited node
+                        next_node = next_nodes[0]
+                        if next_node in visited:
+                            break
+                        current = next_node
                         parent = current
                         visited.add(current)
                     continue
@@ -486,14 +523,19 @@ class BaseGraph:
                     nested_convergence = find_convergence_point(next_nodes)
                     nested_paths = []
                     for next_node in next_nodes:
-                        nested_path = build_path_to_convergence(
-                            next_node, nested_convergence, visited.copy(), current
-                        )
-                        if nested_path:  # Only add non-empty paths
-                            if isinstance(nested_path, list) and len(nested_path) == 1:
-                                nested_paths.append(nested_path[0])
-                            else:
-                                nested_paths.append(nested_path)
+                        # Don't follow paths that lead back to visited nodes
+                        if next_node not in visited:
+                            nested_path = build_path_to_convergence(
+                                next_node, nested_convergence, visited.copy(), current
+                            )
+                            if nested_path:  # Only add non-empty paths
+                                if (
+                                    isinstance(nested_path, list)
+                                    and len(nested_path) == 1
+                                ):
+                                    nested_paths.append(nested_path[0])
+                                else:
+                                    nested_paths.append(nested_path)
 
                     if nested_paths:  # Only extend if there are valid nested paths
                         path.append([(parent, current), nested_paths])

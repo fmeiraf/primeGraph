@@ -63,6 +63,7 @@ class Incremental(BufferTypeMarker[T]):
     pass
 
 
+# TODO: this is not working with typing.Dict
 class LastValue(BufferTypeMarker[T]):
     pass
 

@@ -269,6 +269,7 @@ class Graph(BaseGraph):
                 logger.debug(f"execution_id {execution_id}")
                 logger.debug(f"Chain status: {self.chain_status}")
                 logger.debug(f"Execution_id_set: {self.blocking_execution_ids}")
+                logger.debug(f"Start_from: {self.start_from} \n")
                 result = task(state=self.state) if self._has_state else task()
 
                 # Handle router node results
