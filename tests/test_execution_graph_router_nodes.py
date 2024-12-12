@@ -214,6 +214,7 @@ def test_nested_router_paths():
     assert state.execution_order == ["route_b", "route_c", "route_d"]
 
 
+# TODO: create a warning on compile to advise users on cyclical paths
 def test_cyclical_router():
     state = RouterState(result={}, execution_order=[])
     graph = Graph(state=state)
