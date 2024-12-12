@@ -212,3 +212,66 @@ async def test_router_with_nonexistent_route_async():
         ValueError,
     ):
         graph.add_router_edge(START, "bad_router")
+
+
+@pytest.mark.asyncio
+async def test_cyclical_router():
+    state = RouterState(result={}, execution_order=[])
+    graph = Graph(state=state)
+
+    @graph.node()
+    async def route_a(state):
+        print("Executing route_a")
+        return {"result": {"result": "from route A"}, "execution_order": "route_a"}
+
+    @graph.node(interrupt="after")
+    async def route_b(state):
+        print("Executing route_b")
+        return {"result": {"result": "from route B"}, "execution_order": "route_b"}
+
+    @graph.node()
+    async def route_c(state):
+        print("Executing route_c")
+        if True:
+            return "route_b"
+        return "route_d"
+
+    @graph.node()
+    async def route_d(state):
+        print("Executing route_d")
+        return {"result": {"result": "from route D"}, "execution_order": "route_d"}
+
+    # Add edges
+    # graph.add_edge(START, "process_data")
+    graph.add_edge(START, "route_a")  # No need to specify routes
+    graph.add_edge("route_a", "route_b")
+    graph.add_router_edge("route_b", "route_c")
+    graph.add_edge("route_d", END)
+
+    graph.compile()
+
+    # Initial execution
+    await graph.start_async()
+    assert state.result == {"result": "from route B"}
+    assert state.execution_order == ["route_a", "route_b"]
+
+    # First resume - should execute route_c and pause at route_b
+    await graph.resume_async()
+    assert state.result == {"result": "from route B"}
+    assert state.execution_order == ["route_a", "route_b", "route_b"]
+
+    # Second resume - should execute route_c and pause at route_b again
+    await graph.resume_async()
+    assert state.result == {"result": "from route B"}
+    assert state.execution_order == ["route_a", "route_b", "route_b", "route_b"]
+
+    # Third resume - pattern continues
+    await graph.resume_async()
+    assert state.result == {"result": "from route B"}
+    assert state.execution_order == [
+        "route_a",
+        "route_b",
+        "route_b",
+        "route_b",
+        "route_b",
+    ]
