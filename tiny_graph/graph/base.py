@@ -879,16 +879,31 @@ class BaseGraph:
                     for group in repeat_groups.values()
                     for node in (edge.start_node, edge.end_node)
                 ):
-                    dot.edge(edge.start_node, edge.end_node)
+                    # Check if the edge starts from a router node
+                    is_router_edge = self.nodes[edge.start_node].is_router
+                    edge_style = "dashed" if is_router_edge else "solid"
+                    edge_color = "#666666" if is_router_edge else "black"
+
+                    dot.edge(
+                        edge.start_node,
+                        edge.end_node,
+                        style=edge_style,
+                        color=edge_color,
+                    )
 
         # Update node visualization for router nodes
         for node_name, node in self.nodes.items():
             if node.is_router:
                 node_attrs = {
-                    "style": "rounded,filled",
+                    "style": "rounded, filled",
                     "fillcolor": "#FFE4B5",  # Light orange for router nodes
                     "shape": "diamond",
-                    "peripheries": "2",  # Double border
+                    "margin": "0",
+                    "penwidth": "1.0",
+                    "regular": "true",  # Makes the diamond more regular/symmetric
+                    "fixedsize": "true",  # Helps maintain consistent shape
+                    "width": "1.1",  # Adjust size as needed
+                    "height": "1.1",  # Adjust size as needed
                 }
                 dot.node(node_name, get_display_name(node_name, node), **node_attrs)
 
