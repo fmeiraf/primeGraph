@@ -586,6 +586,7 @@ class Graph(BaseGraph):
         self, start_from: Optional[str] = None, timeout: Union[int, float] = 60 * 5
     ) -> None:
         """Async version of execute method"""
+        execution_id = f"exec_{uuid.uuid4().hex[:8]}"  # Add execution_id
 
         def add_item_to_obj_store(obj_store: Union[List, Tuple], item):
             if isinstance(obj_store, list):
@@ -622,7 +623,10 @@ class Graph(BaseGraph):
             logger.debug(f"Executing task in node: {node_name}")
 
             async def run_task():
-                logger.debug(f"Running task: {task}, has state: {self._has_state}")
+                # prevent execution when in routing mode
+                if execution_id in self.blocking_execution_ids:
+                    return
+
                 if inspect.iscoroutinefunction(task):
                     # Handle async functions
                     result = (
@@ -640,6 +644,42 @@ class Graph(BaseGraph):
                     else:
                         result = await asyncio.to_thread(task)
 
+                # Handle router node results
+                if self.nodes[node_name].is_router:
+                    if not result or not isinstance(result, str):
+                        raise ValueError(
+                            f"Router node '{node_name}' must return a valid node name"
+                        )
+
+                    # Validate the returned route
+                    if result not in self.nodes[node_name].possible_routes:
+                        raise ValueError(
+                            f"Router node '{node_name}' returned invalid route: {result}"
+                        )
+
+                    # Get the path for this route
+                    router_paths = self.router_paths.get(node_name, {})
+                    chosen_path = router_paths.get(result, [])
+
+                    if chosen_path:
+                        # Update execution plan to only include the chosen path
+                        self._update_execution_plan(node_name, result)
+
+                        # Clear executed nodes if the chosen path contains previously executed nodes
+                        if any(node in self.executed_nodes for node in chosen_path):
+                            self.executed_nodes.clear()
+
+                        # Set start_from to the first node in the chosen path
+                        self.start_from = chosen_path[0]
+
+                        # store execution_id for later checks
+                        self.blocking_execution_ids.append(execution_id)
+
+                        self._update_chain_status(ChainStatus.ROUTING)
+                        await self._execute_async(start_from=chosen_path[0])
+                        return  # Exit this task
+
+                # Update state from result
                 if result and self._has_state:
                     for state_field_name, state_field_value in result.items():
                         self.buffers[state_field_name].update(
@@ -650,7 +690,9 @@ class Graph(BaseGraph):
             try:
                 result = await asyncio.wait_for(run_task(), timeout=timeout)
                 self._update_state_from_buffers()
-                self.executed_nodes.add(node_name)
+                # Only add to executed_nodes if it's not a router node
+                if not self.nodes[node_name].is_router:
+                    self.executed_nodes.add(node_name)
                 return result
             except asyncio.TimeoutError:
                 logger.error(f"Timeout in node {node_name}")
@@ -658,6 +700,9 @@ class Graph(BaseGraph):
 
         async def execute_tasks(tasks, node_index: int):
             """Recursively execute tasks respecting list (sequential) and tuple (parallel) structures"""
+            if self.chain_status == ChainStatus.ROUTING:
+                return  # Skip execution if we're restarting
+
             if isinstance(tasks, (list, tuple)):
                 if isinstance(tasks, list):
                     # Sequential execution
@@ -802,6 +847,10 @@ class Graph(BaseGraph):
 
         # Execute nodes
         for node_index, node in enumerate(self.execution_plan):
+            # prevent execution when in routing mode
+            if execution_id in self.blocking_execution_ids:
+                return
+
             if self.chain_status == ChainStatus.RUNNING:
                 await execute_node(node, node_index)
             else:
