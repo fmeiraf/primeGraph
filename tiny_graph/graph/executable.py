@@ -255,26 +255,15 @@ class Graph(BaseGraph):
             timeout: maximum execution time in seconds
         """
         execution_id = f"exec_{uuid.uuid4().hex[:8]}"
-        logger.debug(f"execution_id at creation: {execution_id}")
 
         def execute_task(task: Callable, node_name: str) -> Any:
             """Execute a single task with proper state handling."""
 
             # added this way to have access to class .self
             def run_task():
-                # if node_name == "route_c":
-                #     import pdb
-
-                #     pdb.set_trace()
                 # prevent execution when in routing mode
                 if execution_id in self.blocking_execution_ids:
                     return
-
-                logger.debug(f"Run task - Executing node: {node_name}")
-                logger.debug(f"execution_id {execution_id}")
-                # logger.debug(f"Chain status: {self.chain_status}")
-                # logger.debug(f"Execution_id_set: {self.blocking_execution_ids}")
-                # logger.debug(f"Start_from: {self.start_from} \n")
 
                 result = task(state=self.state) if self._has_state else task()
 
@@ -296,7 +285,6 @@ class Graph(BaseGraph):
                     chosen_path = router_paths.get(result, [])
 
                     if chosen_path:
-                        logger.debug(f"Router {node_name} chose path: {chosen_path}")
                         # Update execution plan to only include the chosen path
                         self._update_execution_plan(node_name, result)
 
@@ -304,9 +292,6 @@ class Graph(BaseGraph):
                         # contains previously executed nodes
                         if any(node in self.executed_nodes for node in chosen_path):
                             self.executed_nodes.clear()
-                            logger.debug(
-                                f"Clearing executed_nodes: {self.executed_nodes}"
-                            )
 
                         # Set start_from to the first node in the chosen path
                         self.start_from = chosen_path[0]
@@ -314,11 +299,6 @@ class Graph(BaseGraph):
                         # store execution_id for later checks
                         self.blocking_execution_ids.append(execution_id)
 
-                        logger.debug(
-                            f"Updated execution path: {self.detailed_execution_path}"
-                        )
-
-                        logger.debug("starting_new_execution from scratch")
                         self._update_chain_status(ChainStatus.ROUTING)
                         self._execute(start_from=chosen_path[0])
                         return  # Exit this task
@@ -337,9 +317,6 @@ class Graph(BaseGraph):
                     self._update_state_from_buffers()
                     # Only add to executed_nodes if it's not a router node
                     if not self.nodes[node_name].is_router:
-                        logger.debug(
-                            f"executed_nodes being added by: {node_name} for task {task}"
-                        )
                         self.executed_nodes.add(node_name)
                     return result
                 except concurrent.futures.TimeoutError:
@@ -498,17 +475,11 @@ class Graph(BaseGraph):
         for node_index, node in enumerate(self.execution_plan):
             # prevent execution when in routing mode
             if execution_id in self.blocking_execution_ids:
-                logger.debug(
-                    f"execution_id {execution_id} in blocking_execution_ids for node {node.node_name}"
-                )
                 return
 
             if self.chain_status == ChainStatus.RUNNING:
                 execute_node(node, node_index)
-                logger.debug(f"node_name on execute loop {node.node_name}")
-                logger.debug(f"executed_nodes: {self.executed_nodes}")
             else:
-                logger.debug(f"chain_status skipped {self.chain_status}")
                 return
 
     @internal_only
