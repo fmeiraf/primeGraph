@@ -101,8 +101,6 @@ def test_complex_router_paths():
 
     # Build graph with multiple routers
     graph.add_router_edge(START, "initial_router")
-    # graph.add_edge("path_a", "secondary_router")
-    # graph.add_edge("path_b", "secondary_router")
     graph.add_router_edge("path_a", "secondary_router")
     graph.add_router_edge("path_b", "secondary_router")
     graph.add_edge("final_a", END)
