@@ -212,3 +212,65 @@ def test_nested_router_paths():
     # Verify execution followed the path: process_data -> route_b -> route_b2 -> route_c -> route_d
     assert state.result == {"result": "from route D"}
     assert state.execution_order == ["route_b", "route_c", "route_d"]
+
+
+def test_cyclical_router():
+    state = RouterState(result={}, execution_order=[])
+    graph = Graph(state=state)
+
+    @graph.node()
+    def route_a(state):
+        print("Executing route_a")
+        return {"result": {"result": "from route A"}, "execution_order": "route_a"}
+
+    @graph.node(interrupt="after")
+    def route_b(state):
+        print("Executing route_b")
+        return {"result": {"result": "from route B"}, "execution_order": "route_b"}
+
+    @graph.node()
+    def route_c(state):
+        print("Executing route_c")
+        if True:
+            return "route_b"
+        return "route_d"
+
+    @graph.node()
+    def route_d(state):
+        print("Executing route_d")
+        return {"result": {"result": "from route D"}, "execution_order": "route_d"}
+
+    # Add edges
+    # graph.add_edge(START, "process_data")
+    graph.add_edge(START, "route_a")  # No need to specify routes
+    graph.add_edge("route_a", "route_b")
+    graph.add_router_edge("route_b", "route_c")
+    graph.add_edge("route_d", END)
+
+    graph.compile()
+
+    # Initial execution
+    graph.start()
+    assert state.result == {"result": "from route B"}
+    assert state.execution_order == ["route_a", "route_b"]
+
+    # First resume - should execute route_c and pause at route_b
+    graph.resume()
+    assert state.result == {"result": "from route B"}
+    assert state.execution_order == ["route_a", "route_b", "route_b"]
+
+    # Second resume - should execute route_c and pause at route_b again
+    graph.resume()
+    assert state.result == {"result": "from route B"}
+    assert state.execution_order == ["route_a", "route_b", "route_b", "route_b"]
+
+    # Third resume - pattern continues
+    graph.resume()
+    assert state.result == {"result": "from route B"}
+    assert state.execution_order == [
+        "route_a",
+        "route_b",
+        "route_b",
+        "route_b",
+        "route_b",
+    ]
