@@ -239,6 +239,10 @@ class Graph(BaseGraph):
         logger.debug(f"Checkpoint saved after node: {node_name}")
 
     @internal_only
+    def _is_blocking_execution(self, execution_id: str):
+        return execution_id in self.blocking_execution_ids
+
+    @internal_only
     def _get_interrupt_status(
         self, node_name: str
     ) -> Union[Literal["before", "after"], None]:
@@ -299,7 +303,6 @@ class Graph(BaseGraph):
                         # store execution_id for later checks
                         self.blocking_execution_ids.append(execution_id)
 
-                        self._update_chain_status(ChainStatus.ROUTING)
                         self._execute(start_from=chosen_path[0])
                         return  # Exit this task
 
@@ -359,14 +362,14 @@ class Graph(BaseGraph):
 
             def execute_tasks(tasks, node_index: int):
                 """Recursively execute tasks respecting list (sequential) and tuple (parallel) structures"""
-                if self.chain_status == ChainStatus.ROUTING:
+                if self._is_blocking_execution(execution_id):
                     return  # Skip execution if we're restarting
 
                 if isinstance(tasks, (list, tuple)):
                     if isinstance(tasks, list):
                         # Sequential execution
                         for task in tasks:
-                            if self.chain_status == ChainStatus.ROUTING:
+                            if self._is_blocking_execution(execution_id):
                                 return  # Exit early if restarting
                             execute_tasks(task, node_index)
                             self._save_checkpoint(
@@ -377,7 +380,7 @@ class Graph(BaseGraph):
                         with concurrent.futures.ThreadPoolExecutor() as executor:
                             futures = []
                             for task in tasks:
-                                if self.chain_status == ChainStatus.ROUTING:
+                                if self._is_blocking_execution(execution_id):
                                     return  # Exit early if restarting
                                 futures.append(
                                     executor.submit(execute_tasks, task, node_index)
@@ -385,7 +388,7 @@ class Graph(BaseGraph):
 
                             # Wait for all futures to complete
                             for future in concurrent.futures.as_completed(futures):
-                                if self.chain_status == ChainStatus.ROUTING:
+                                if self._is_blocking_execution(execution_id):
                                     # Cancel remaining futures if restarting
                                     for f in futures:
                                         f.cancel()
@@ -463,7 +466,7 @@ class Graph(BaseGraph):
                         ) from e
 
             # Extract and execute tasks
-            if self.chain_status == ChainStatus.ROUTING:
+            if self._is_blocking_execution(execution_id):
                 return  # Skip any remaining executions from previous path
 
             tasks = extract_tasks_from_node(node)
@@ -474,7 +477,7 @@ class Graph(BaseGraph):
         self.start_from = start_from
         for node_index, node in enumerate(self.execution_plan):
             # prevent execution when in routing mode
-            if execution_id in self.blocking_execution_ids:
+            if self._is_blocking_execution(execution_id):
                 return
 
             if self.chain_status == ChainStatus.RUNNING:
@@ -624,7 +627,7 @@ class Graph(BaseGraph):
 
             async def run_task():
                 # prevent execution when in routing mode
-                if execution_id in self.blocking_execution_ids:
+                if self._is_blocking_execution(execution_id):
                     return
 
                 if inspect.iscoroutinefunction(task):
@@ -675,7 +678,6 @@ class Graph(BaseGraph):
                         # store execution_id for later checks
                         self.blocking_execution_ids.append(execution_id)
 
-                        self._update_chain_status(ChainStatus.ROUTING)
                         await self._execute_async(start_from=chosen_path[0])
                         return  # Exit this task
 
@@ -700,7 +702,7 @@ class Graph(BaseGraph):
 
         async def execute_tasks(tasks, node_index: int):
             """Recursively execute tasks respecting list (sequential) and tuple (parallel) structures"""
-            if self.chain_status == ChainStatus.ROUTING:
+            if self._is_blocking_execution(execution_id):
                 return  # Skip execution if we're restarting
 
             if isinstance(tasks, (list, tuple)):
@@ -848,7 +850,7 @@ class Graph(BaseGraph):
         # Execute nodes
         for node_index, node in enumerate(self.execution_plan):
             # prevent execution when in routing mode
-            if execution_id in self.blocking_execution_ids:
+            if self._is_blocking_execution(execution_id):
                 return
 
             if self.chain_status == ChainStatus.RUNNING:
