@@ -8,7 +8,7 @@ from primeGraph.constants import END, START
 from primeGraph.graph.executable import Graph
 from primeGraph.models.state import GraphState
 
-# Requires you to be running the docker from tiny_graph/docker
+# Requires you to be running the docker from primeGraph/docker
 
 
 @pytest.fixture
@@ -16,9 +16,9 @@ def postgres_storage():
     storage = PostgreSQLStorage.from_config(
         host="localhost",
         port=5432,
-        user="tiny_graph",
-        password="tiny_graph",
-        database="tiny_graph",
+        user="primegraph",
+        password="primegraph",
+        database="primegraph",
     )
     assert storage.check_schema(), "Schema is not valid"
     return storage

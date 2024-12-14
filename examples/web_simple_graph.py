@@ -27,7 +27,7 @@ app = FastAPI()
 logging.getLogger("uvicorn").setLevel(logging.DEBUG)
 logging.getLogger("fastapi").setLevel(logging.DEBUG)
 logging.getLogger("websockets").setLevel(logging.DEBUG)
-logging.getLogger("tiny_graph").setLevel(logging.DEBUG)
+logging.getLogger("primeGraph").setLevel(logging.DEBUG)
 
 # Your existing imports...
 
