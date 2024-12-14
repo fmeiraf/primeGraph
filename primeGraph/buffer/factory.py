@@ -3,10 +3,10 @@ from typing import Any, Generic, Type, TypeVar, get_args, get_origin
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import CoreSchema, core_schema
 
-from tiny_graph.buffer.base import BaseBuffer
-from tiny_graph.buffer.history import HistoryBuffer
-from tiny_graph.buffer.incremental import IncrementalBuffer
-from tiny_graph.buffer.last_value import LastValueBuffer
+from primeGraph.buffer.base import BaseBuffer
+from primeGraph.buffer.history import HistoryBuffer
+from primeGraph.buffer.incremental import IncrementalBuffer
+from primeGraph.buffer.last_value import LastValueBuffer
 
 T = TypeVar("T")
 

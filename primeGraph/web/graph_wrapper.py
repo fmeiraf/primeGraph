@@ -1,6 +1,6 @@
 import asyncio
 
-from tiny_graph.graph.executable import Graph
+from primeGraph.graph.executable import Graph
 
 from .service import GraphService
 

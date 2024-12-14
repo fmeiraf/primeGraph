@@ -3,7 +3,7 @@ from typing import Optional, Set
 
 from pydantic import BaseModel
 
-from tiny_graph.types import ChainStatus
+from primeGraph.types import ChainStatus
 
 
 class Checkpoint(BaseModel):

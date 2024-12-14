@@ -9,13 +9,13 @@ from typing import List
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from tiny_graph.buffer.factory import History
-from tiny_graph.checkpoint.local_storage import LocalStorage
-from tiny_graph.constants import END, START
-from tiny_graph.graph.executable import Graph
-from tiny_graph.models.state import GraphState
-from tiny_graph.web import create_graph_service
-from tiny_graph.web.graph_wrapper import wrap_graph_with_websocket
+from primeGraph.buffer.factory import History
+from primeGraph.checkpoint.local_storage import LocalStorage
+from primeGraph.constants import END, START
+from primeGraph.graph.executable import Graph
+from primeGraph.models.state import GraphState
+from primeGraph.web import create_graph_service
+from primeGraph.web.graph_wrapper import wrap_graph_with_websocket
 
 logging.basicConfig(level=logging.DEBUG)
 

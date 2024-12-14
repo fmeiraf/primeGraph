@@ -1,7 +1,7 @@
-from tiny_graph.buffer.factory import History, Incremental, LastValue
-from tiny_graph.constants import END, START
-from tiny_graph.graph.executable import Graph
-from tiny_graph.models.state import GraphState
+from primeGraph.buffer.factory import History, Incremental, LastValue
+from primeGraph.constants import END, START
+from primeGraph.graph.executable import Graph
+from primeGraph.models.state import GraphState
 
 
 class SubgraphState(GraphState):

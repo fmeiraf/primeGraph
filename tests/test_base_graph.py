@@ -3,8 +3,8 @@ from typing import NamedTuple
 import pytest
 from pydantic import BaseModel
 
-from tiny_graph.constants import END, START
-from tiny_graph.graph.base import BaseGraph, Edge
+from primeGraph.constants import END, START
+from primeGraph.graph.base import BaseGraph, Edge
 
 
 # Test fixtures and helper classes

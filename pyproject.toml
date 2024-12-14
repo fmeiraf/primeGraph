@@ -1,7 +1,7 @@
 [tool.poetry]
-name = "tiny-graph"
+name = "primeGraph"
 version = "0.0.1"
-description = "A light weight graph approach to LLM workflows"
+description = "A lightweight graph approach to LLM workflows."
 authors = ["Fernando Meira <fmeira.filho@gmail.com>"]
 readme = "README.md"
 

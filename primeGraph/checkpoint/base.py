@@ -4,9 +4,9 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from typing import List, Optional, Set
 
-from tiny_graph.models.checkpoint import Checkpoint
-from tiny_graph.models.state import GraphState
-from tiny_graph.types import ChainStatus
+from primeGraph.models.checkpoint import Checkpoint
+from primeGraph.models.state import GraphState
+from primeGraph.types import ChainStatus
 
 
 class StorageBackend(ABC):

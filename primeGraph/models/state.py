@@ -3,7 +3,7 @@ from typing import Any, Dict, Type, get_args, get_origin, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from tiny_graph.buffer.factory import BufferTypeMarker, History
+from primeGraph.buffer.factory import BufferTypeMarker, History
 
 
 class GraphState(BaseModel):

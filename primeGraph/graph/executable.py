@@ -17,14 +17,14 @@ from typing import (
 
 from pydantic import BaseModel
 
-from tiny_graph.buffer.base import BaseBuffer
-from tiny_graph.buffer.factory import BufferFactory
-from tiny_graph.buffer.history import HistoryBuffer
-from tiny_graph.checkpoint.base import StorageBackend
-from tiny_graph.graph.base import BaseGraph
-from tiny_graph.models.state import GraphState
-from tiny_graph.types import ChainStatus
-from tiny_graph.utils.class_utils import internal_only
+from primeGraph.buffer.base import BaseBuffer
+from primeGraph.buffer.factory import BufferFactory
+from primeGraph.buffer.history import HistoryBuffer
+from primeGraph.checkpoint.base import StorageBackend
+from primeGraph.graph.base import BaseGraph
+from primeGraph.models.state import GraphState
+from primeGraph.types import ChainStatus
+from primeGraph.utils.class_utils import internal_only
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)

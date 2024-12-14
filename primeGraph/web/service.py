@@ -4,8 +4,8 @@ from typing import Dict, Set
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
-from tiny_graph.checkpoint.base import StorageBackend
-from tiny_graph.graph.executable import Graph
+from primeGraph.checkpoint.base import StorageBackend
+from primeGraph.graph.executable import Graph
 
 from .models import ExecutionRequest, ExecutionResponse, GraphStatus
 

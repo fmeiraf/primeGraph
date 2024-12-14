@@ -1,6 +1,6 @@
 from typing import Any
 
-from tiny_graph.buffer.base import BaseBuffer
+from primeGraph.buffer.base import BaseBuffer
 
 
 class LastValueBuffer(BaseBuffer):

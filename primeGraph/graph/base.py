@@ -18,7 +18,7 @@ from typing import (
 
 from pydantic import BaseModel
 
-from tiny_graph.constants import END, START
+from primeGraph.constants import END, START
 
 
 @dataclass(frozen=True)

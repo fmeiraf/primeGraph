@@ -8,11 +8,11 @@ from psycopg2 import DatabaseError, OperationalError
 from psycopg2.extras import DictCursor, Json
 from psycopg2.pool import ThreadedConnectionPool
 
-from tiny_graph.checkpoint.base import StorageBackend
-from tiny_graph.checkpoint.serialization import serialize_model
-from tiny_graph.graph.executable import ChainStatus
-from tiny_graph.models.checkpoint import Checkpoint
-from tiny_graph.models.state import GraphState
+from primeGraph.checkpoint.base import StorageBackend
+from primeGraph.checkpoint.serialization import serialize_model
+from primeGraph.graph.executable import ChainStatus
+from primeGraph.models.checkpoint import Checkpoint
+from primeGraph.models.state import GraphState
 
 logger = logging.getLogger(__name__)
 
