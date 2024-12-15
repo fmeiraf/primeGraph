@@ -65,7 +65,22 @@ class Incremental(BufferTypeMarker[T]):
 
 # TODO: this is not working with typing.Dict
 class LastValue(BufferTypeMarker[T]):
-    pass
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls,
+        source_type: Any,
+        handler: GetCoreSchemaHandler,
+    ) -> CoreSchema:
+        origin = get_origin(source_type)
+        if origin is None:
+            return core_schema.any_schema()
+
+        args = get_args(source_type)
+        if not args:
+            return core_schema.any_schema()
+
+        inner_schema = handler.generate_schema(args[0])
+        return inner_schema
 
 
 # Buffer Factory
@@ -100,3 +115,40 @@ class BufferFactory:
             buffer.value = initial_value
 
         return buffer
+
+    @classmethod
+    def wrap_buffer_types(cls, values):
+        for field_name, field in cls.model_fields.items():
+            if field_name in values:
+                origin_type = get_origin(field.annotation)
+                if origin_type in (History, Incremental, LastValue):
+                    inner_type = get_args(field.annotation)[0]
+                    inner_origin = get_origin(inner_type)
+
+                    # Get the value to check
+                    value = values[field_name]
+
+                    # Handle different type scenarios
+                    if inner_origin is list:
+                        if not isinstance(value, list):
+                            raise TypeError(f"Field {field_name} must be a list")
+                        # Optionally check list contents
+                        list_type_args = get_args(inner_type)
+                        if list_type_args:
+                            # Skip validation of list contents - let Pydantic handle it
+                            pass
+                    elif inner_origin is dict:
+                        if not isinstance(value, dict):
+                            raise TypeError(f"Field {field_name} must be a dict")
+                        # Optionally check dict contents
+                        dict_type_args = get_args(inner_type)
+                        if dict_type_args:
+                            # Skip validation of dict contents - let Pydantic handle it
+                            pass
+                    elif inner_origin is None and not isinstance(inner_type, TypeVar):
+                        # Only check simple, non-generic types
+                        if not isinstance(value, inner_type):
+                            raise TypeError(
+                                f"Field {field_name} must be of type {inner_type}"
+                            )
+        return values

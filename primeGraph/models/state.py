@@ -1,5 +1,5 @@
 import hashlib
-from typing import Any, Dict, Type, get_args, get_origin, get_type_hints
+from typing import Any, Dict, Type, TypeVar, get_args, get_origin, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -70,6 +70,12 @@ class GraphState(BaseModel):
                             raise TypeError(
                                 f"All items in {field_name} must be Dict[{key_type.__name__}, {value_type.__name__}]"
                             )
+                    # For History with List type
+                    elif origin is History and inner_origin is list:
+                        if not all(
+                            isinstance(item, list) for item in values[field_name]
+                        ):
+                            raise TypeError(f"All items in {field_name} must be lists")
                     # For History with simple types
                     elif origin is History:
                         if not all(
@@ -80,15 +86,14 @@ class GraphState(BaseModel):
                             )
                     # For other buffer types with Dict
                     elif inner_origin is dict:
-                        key_type, value_type = get_args(inner_type)
-                        if not check_dict_type(
-                            values[field_name], key_type, value_type
-                        ):
-                            raise TypeError(
-                                f"Field {field_name} must be Dict[{key_type.__name__}, {value_type.__name__}]"
-                            )
+                        if not isinstance(values[field_name], dict):
+                            raise TypeError(f"Field {field_name} must be a dict")
+                    # For other buffer types with List
+                    elif inner_origin is list:
+                        if not isinstance(values[field_name], list):
+                            raise TypeError(f"Field {field_name} must be a list")
                     # For other buffer types with simple types
-                    else:
+                    elif inner_origin is None and not isinstance(inner_type, TypeVar):
                         if not isinstance(values[field_name], inner_type):
                             raise TypeError(
                                 f"Field {field_name} must be of type {inner_type}"
