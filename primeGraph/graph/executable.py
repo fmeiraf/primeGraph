@@ -138,10 +138,18 @@ class Graph(BaseGraph):
                     else:
                         raise ValueError(f"Expected tuple or list, got {type(item)}")
 
-                # Check if all items have the same parent
-                if all(parent == parent_names[0] for parent in parent_names):
-                    execution_type = "parallel"
+                # First check if all items have the same parent
+                if parent_names:
+                    if all(parent == parent_names[0] for parent in parent_names):
+                        execution_type = "parallel"
+                    else:
+                        execution_type = "sequential"
                 else:
+                    execution_type = "sequential"
+
+                # Override with sequential if any parent is a router
+                # setting as parallel will cause the checkpoint logic to save useless checkpoints
+                if any(self.nodes[parent].is_router for parent in parent_names):
                     execution_type = "sequential"
 
                 # Join all node names in the task list for the group name
@@ -372,9 +380,14 @@ class Graph(BaseGraph):
                             if self._is_blocking_execution(execution_id):
                                 return  # Exit early if restarting
                             execute_tasks(task, node_index)
-                            self._save_checkpoint(
-                                self.execution_plan[node_index].node_name
-                            )
+
+                            # this avoids that tasks that turned into blocked_execution after execute_tasks execution
+                            # are not saved as checkpoints
+                            if not self._is_blocking_execution(execution_id):
+                                # TODO: when a router node choses a path, it's saving 1 addiotional checkpoint. Not big deal but should be fixed
+                                self._save_checkpoint(
+                                    self.execution_plan[node_index].node_name
+                                )
                     else:
                         # Parallel execution using concurrent.futures
                         with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -400,6 +413,7 @@ class Graph(BaseGraph):
                                     for f in futures:
                                         f.cancel()
                                     raise e
+
                             self._save_checkpoint(
                                 self.execution_plan[node_index].node_name
                             )
