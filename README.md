@@ -18,6 +18,8 @@ primeGraph is a powerful Python library for building and executing complex workf
 - 🌐 **Web Integration**: Built-in FastAPI integration with WebSocket support
 - 📊 **Visualization**: Generate visual representations of your workflows
 
+<!-- TODO: add type safety -->
+
 ## Installation
 
 ```bash
