@@ -91,7 +91,7 @@ def test_parallel_repeated_nodes():
     # Verify parallel execution by checking timestamps
     execution_times: List[float] = state.execution_times
     max_time_diff = max(
-        abs(t2 - t1) for t1, t2 in zip(execution_times[:-1], execution_times[1:])
+        abs(t2 - t1) for t1, t2 in zip(execution_times[:-1], execution_times[1:], strict=False)
     )
     assert max_time_diff < 0.1  # Tasks should complete very close to each other
 
@@ -159,7 +159,7 @@ def test_mixed_repeated_nodes():
     # Verify parallel part executed in parallel
     parallel_times = state.execution_times[3:]
     max_parallel_diff = max(
-        abs(t2 - t1) for t1, t2 in zip(parallel_times[:-1], parallel_times[1:])
+        abs(t2 - t1) for t1, t2 in zip(parallel_times[:-1], parallel_times[1:], strict=False)
     )
     assert max_parallel_diff < 0.1
 

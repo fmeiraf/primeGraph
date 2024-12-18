@@ -26,7 +26,7 @@ async def test_sequential_repeated_nodes_async():
         return {}
 
     @graph.node()
-    async def repeated_task(state):  # noqa: C901
+    async def repeated_task(state):
         await asyncio.sleep(0.1)  # Simulate some work
         current_time = time.time()
         return {
@@ -94,7 +94,7 @@ async def test_parallel_repeated_nodes_async():
     # Verify parallel execution by checking timestamps
     execution_times: List[float] = state.execution_times
     max_time_diff = max(
-        abs(t2 - t1) for t1, t2 in zip(execution_times[:-1], execution_times[1:])
+        abs(t2 - t1) for t1, t2 in zip(execution_times[:-1], execution_times[1:], strict=False)
     )
     assert max_time_diff < 0.1  # Tasks should complete very close to each other
 
@@ -162,7 +162,7 @@ async def test_mixed_repeated_nodes_async():
     # Verify parallel part executed in parallel
     parallel_times = state.execution_times[3:]
     max_parallel_diff = max(
-        abs(t2 - t1) for t1, t2 in zip(parallel_times[:-1], parallel_times[1:])
+        abs(t2 - t1) for t1, t2 in zip(parallel_times[:-1], parallel_times[1:], strict=False)
     )
     assert max_parallel_diff < 0.1
 
@@ -238,11 +238,11 @@ async def test_large_scale_parallel_performance():
     )
 
     @graph2.node()
-    async def start_task_2(state):  # noqa: C901
+    async def start_task_2(state):
         return {}
 
     @graph2.node()
-    async def cpu_intensive_task_2(state):  # noqa: C901
+    async def cpu_intensive_task_2(state):
         # Same task as above
         await asyncio.sleep(0.1)  # this is needed to simulate i/o blocking tasks
         result = 0

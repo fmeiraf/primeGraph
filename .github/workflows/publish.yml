@@ -51,8 +51,9 @@ jobs:
           curl -sSL https://install.python-poetry.org | python3 -
 
       - name: Configure Poetry
+        # yamllint disable-line rule:line-length
         run: |
-          poetry config pypi-token.pypi ${{ secrets.PYPI_API_TOKEN }}
+          poetry config pypi-token.pypi ${{ secrets.PYPI_API_TOKEN }}  # nosec
 
       - name: Build and publish
         run: |

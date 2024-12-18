@@ -3,6 +3,7 @@ from typing import Optional
 import pytest
 
 from primeGraph.buffer.factory import History, LastValue
+from primeGraph.checkpoint.base import CheckpointData
 from primeGraph.checkpoint.postgresql import PostgreSQLStorage
 from primeGraph.constants import END, START
 from primeGraph.graph.executable import Graph
@@ -35,9 +36,11 @@ def test_save_and_load_checkpoint(postgres_storage):
     graph = Graph(state=state, checkpoint_storage=postgres_storage)
 
     # Save checkpoint
-    checkpoint_id = graph.checkpoint_storage.save_checkpoint(
-        state, graph.chain_id, graph.chain_status
+    checkpoint_data = CheckpointData(
+        chain_id=graph.chain_id,
+        chain_status=graph.chain_status
     )
+    checkpoint_id = graph.checkpoint_storage.save_checkpoint(state, checkpoint_data)
 
     # Load checkpoint
     loaded_state = graph.checkpoint_storage.load_checkpoint(
@@ -55,13 +58,14 @@ def test_list_checkpoints(postgres_storage):
     graph = Graph(state=state, checkpoint_storage=postgres_storage)
 
     # Save multiple checkpoints
-    checkpoint_1 = graph.checkpoint_storage.save_checkpoint(
-        state, graph.chain_id, graph.chain_status
+    checkpoint_data = CheckpointData(
+        chain_id=graph.chain_id,
+        chain_status=graph.chain_status
     )
+    checkpoint_1 = graph.checkpoint_storage.save_checkpoint(state, checkpoint_data)
+    
     state.value = 43
-    checkpoint_2 = graph.checkpoint_storage.save_checkpoint(
-        state, graph.chain_id, graph.chain_status
-    )
+    checkpoint_2 = graph.checkpoint_storage.save_checkpoint(state, checkpoint_data)
 
     checkpoints = graph.checkpoint_storage.list_checkpoints(graph.chain_id)
     assert len(checkpoints) == 2
@@ -74,12 +78,14 @@ def test_delete_checkpoint(postgres_storage):
     graph = Graph(state=state, checkpoint_storage=postgres_storage)
 
     # Save and then delete a checkpoint
-    checkpoint_id = graph.checkpoint_storage.save_checkpoint(
-        state, graph.chain_id, graph.chain_status
+    checkpoint_data = CheckpointData(
+        chain_id=graph.chain_id,
+        chain_status=graph.chain_status
     )
+    checkpoint_id = graph.checkpoint_storage.save_checkpoint(state, checkpoint_data)
     assert len(graph.checkpoint_storage.list_checkpoints(graph.chain_id)) == 1
 
-    graph.checkpoint_storage.delete_checkpoint(checkpoint_id, graph.chain_id)
+    graph.checkpoint_storage.delete_checkpoint(graph.chain_id, checkpoint_id)
     assert len(graph.checkpoint_storage.list_checkpoints(graph.chain_id)) == 0
 
 

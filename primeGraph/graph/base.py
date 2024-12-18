@@ -2,11 +2,14 @@ import ast
 import inspect
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Literal, NamedTuple, Optional, Self, Set, Tuple, Union
+from typing import Any, Callable, Coroutine, Dict, List, Literal, NamedTuple, Optional, Self, Set, Tuple, Union
 
 from pydantic import BaseModel
 
 from primeGraph.constants import END, START
+
+TUPLE_LENGTH = 2
+MIN_VALID_NODES = 3  # START + END + at least one custom node
 
 
 @dataclass(frozen=True)
@@ -15,7 +18,7 @@ class Edge:
   end_node: str
   id: Optional[str]
 
-  def __hash__(self):
+  def __hash__(self) -> int:
     return hash((self.start_node, self.end_node))
 
 
@@ -30,7 +33,7 @@ class Node(NamedTuple):
   emit_event: Optional[Callable] = None
   is_subgraph: bool = False
   subgraph: Optional["BaseGraph"] = None
-  router_paths: Dict[str, List[str]] = None
+  router_paths: Optional[Dict[str, List[str]]] = None
 
 
 class BaseGraph:
@@ -56,7 +59,7 @@ class BaseGraph:
     return list(self.nodes.keys())
 
   @property
-  def _all_edges(self) -> Set[Tuple[str, str]]:
+  def _all_edges(self) -> Set[Edge]:
     return self.edges
 
   def _get_return_values(self, func: Callable) -> Set[str]:
@@ -79,7 +82,7 @@ class BaseGraph:
           pass
     return return_values
 
-  def _force_compile(self):
+  def _force_compile(self) -> None:
     if not self.is_compiled:
       print("Graph not compiled. Compiling now..")
       self.compile()
@@ -89,7 +92,7 @@ class BaseGraph:
     name: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
     interrupt: Union[Literal["before", "after"], None] = None,
-  ):
+  ) -> Callable[..., None]:
     """Decorator to add a node to the graph
 
     Args:
@@ -97,7 +100,7 @@ class BaseGraph:
         metadata: Optional metadata dictionary
     """
 
-    def decorator(func: Callable[..., None]):  # noqa: ARG001, RUF100
+    def decorator(func: Callable[..., None]) -> Callable[..., None]:  # noqa: ARG001, RUF100
       if self.is_compiled:
         raise ValueError("Cannot add nodes after compiling the graph")
 
@@ -109,10 +112,8 @@ class BaseGraph:
       # Checking for async calls
       is_async = inspect.iscoroutinefunction(func)
 
-      # adding metadata to the node
-      func.__metadata__ = {
-        "interrupt": interrupt,
-      }
+      # Create metadata as a dictionary attribute instead of using __metadata__
+      func.metadata = {"interrupt": interrupt}  # type: ignore
 
       # Check if function accepts state parameter when graph has state
       if hasattr(self, "_has_state") and self._has_state:
@@ -124,7 +125,7 @@ class BaseGraph:
           )
 
       # Create event emitter closure
-      async def emit_event(event_type: str, data: Any = None):
+      async def emit_event(event_type: str, data: Any = None) -> None:
         if hasattr(self, "event_handlers"):
           event = {
             "type": "node_event",
@@ -138,7 +139,7 @@ class BaseGraph:
             await handler(event)
 
       # Attach emit_event to the function
-      func.emit_event = emit_event
+      func.emit_event = emit_event  # type: ignore
 
       self.nodes[node_name] = Node(
         node_name,
@@ -152,14 +153,14 @@ class BaseGraph:
       )
       return func
 
-    return decorator
+    return decorator  # type: ignore
 
   def subgraph(
     self,
     name: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
     interrupt: Union[Literal["before", "after"], None] = None,
-  ):
+  ) -> Callable[[], "BaseGraph"]:
     """Decorator to add a subgraph as a node to the graph
 
     Args:
@@ -167,7 +168,7 @@ class BaseGraph:
         metadata: Optional metadata dictionary
     """
 
-    def decorator(func: Callable[[], "BaseGraph"]):
+    def decorator(func: Callable[[], "BaseGraph"]) -> Callable[[], "BaseGraph"]:
       if self.is_compiled:
         raise ValueError("Cannot add nodes after compiling the graph")
 
@@ -179,7 +180,7 @@ class BaseGraph:
         raise ValueError(f"Node name '{node_name}' is reserved")
 
       # Create a dummy action that will be replaced during execution
-      def subgraph_action():
+      def subgraph_action() -> None:
         pass
 
       # Add metadata about being a subgraph
@@ -207,7 +208,7 @@ class BaseGraph:
       )
       return func
 
-    return decorator
+    return decorator  # type: ignore
 
   def add_edge(self, start_node: str, end_node: str, id: Optional[str] = None) -> Self:
     """Modified add_edge to handle subgraph connections"""
@@ -224,11 +225,13 @@ class BaseGraph:
     if start_is_subgraph:
       subgraph = self.nodes[start_node].subgraph
       # Connect subgraph's END to the end_node
-      self._merge_subgraph(subgraph, start_node, connect_end=end_node)
+      if subgraph:
+        self._merge_subgraph(subgraph, start_node, connect_end=end_node)
     elif end_is_subgraph:
       subgraph = self.nodes[end_node].subgraph
       # Connect start_node to subgraph's START
-      self._merge_subgraph(subgraph, end_node, connect_start=start_node)
+      if subgraph:
+        self._merge_subgraph(subgraph, end_node, connect_start=start_node)
     else:
       # Normal edge connection
       if id is None:
@@ -298,7 +301,7 @@ class BaseGraph:
           id=prefix + (edge.id or ""),
         )
 
-  def validate(self) -> Self:
+  def validate(self) -> bool:
     """Validate that the graph starts with '__start__', ends with '__end__', and all nodes are on valid paths.
 
     Raises:
@@ -311,8 +314,8 @@ class BaseGraph:
       raise ValueError("Graph must have an '__end__' node")
 
     # Track visited nodes starting from __start__
-    visited = set()
-    stack = set()  # For cycle detection
+    visited: Set[str] = set()
+    stack: Set[str] = set()  # For cycle detection
     self._dfs_validate(START, visited, stack)
 
     # Check if __end__ is reachable
@@ -327,7 +330,7 @@ class BaseGraph:
       raise ValueError(f"Found orphaned nodes not reachable from '__start__': {non_subgraph_orphans}")
 
     # Check for graphs with only one node added or less
-    if len(self.nodes) <= 3:
+    if len(self.nodes) <= MIN_VALID_NODES:
       raise ValueError("Graph with only one node is not valid")
 
     # Check for dead ends (nodes with no outgoing edges, except END)
@@ -402,7 +405,7 @@ class BaseGraph:
 
     def find_convergence_point(start_nodes: List[str]) -> str:
       """Find where multiple paths converge."""
-      visited_by_path = {start: set([start]) for start in start_nodes}
+      visited_by_path = {start: {start} for start in start_nodes}
       current_nodes = {start: [start] for start in start_nodes}
       max_iterations = len(self.nodes) * 2  # Safety limit
       iteration = 0
@@ -428,11 +431,11 @@ class BaseGraph:
             current_nodes[start].append(next_node)
 
         # Check if any node is visited by multiple paths
-        all_visited = set()
+        all_visited: Set[str] = set()
         for nodes in visited_by_path.values():
           intersection = all_visited.intersection(nodes)
           if intersection:
-            return list(intersection)[0]
+            return next(iter(intersection))
           all_visited.update(nodes)
 
         # Check if all paths have reached END
@@ -442,7 +445,7 @@ class BaseGraph:
       # If no convergence found within limit, return END
       return END
 
-    def build_path_to_convergence(start: str, convergence: str, visited: Set[str], parent: str) -> List[Any]:
+    def build_path_to_convergence(start: str, convergence: str, visited: Set[str], parent: str) -> List[Any]:  # noqa: PLR0912
       if start in visited:
         # If we've visited this node before, just add it without following its path
         return [(parent, start)]
@@ -483,7 +486,7 @@ class BaseGraph:
                   nested_paths.append(nested_path)
 
           if nested_paths:  # Only extend if there are valid nested paths
-            path.append([(parent, current), nested_paths])
+            path.append([(parent, current), nested_paths])  # type: ignore
           current = nested_convergence
         elif not next_nodes:
           path.append((parent, current))
@@ -526,15 +529,15 @@ class BaseGraph:
             path = path[0]
           parallel_paths.append(path)
 
-        return [(parent, current), parallel_paths] + build_execution_plan(convergence, current)
+        return [(parent, current), parallel_paths, *build_execution_plan(convergence, current)]
 
       # Handle sequential path
-      return [(parent, current)] + build_execution_plan(next_nodes[0], current)
+      return [(parent, current), *build_execution_plan(next_nodes[0], current)]
 
     # Build and clean the execution plan
     plan = build_execution_plan(START)
 
-    def clean_plan(p):
+    def clean_plan(p: Any) -> Any:
       # Handle non-list items (like tuples)
       if not isinstance(p, list):
         return p
@@ -554,13 +557,13 @@ class BaseGraph:
         if item is not None
         and (
           not isinstance(item, tuple)  # Handle non-tuple items
-          or (len(item) == 2 and item[1] != START)  # Handle tuples
+          or (len(item) == TUPLE_LENGTH and item[1] != START)  # Handle tuples
         )
       ]
 
-    return clean_plan(plan)
+    return clean_plan(plan)  # type: ignore
 
-  def compile(self, state: Union[BaseModel, NamedTuple, None] = None) -> Self:
+  def compile(self) -> Self:
     """Compiles the graph by validating and organizing execution paths."""
     self.validate()
 
@@ -569,7 +572,7 @@ class BaseGraph:
 
     self.detailed_execution_path = self._find_execution_paths()
 
-    def extract_execution_plan(current_item):
+    def extract_execution_plan(current_item: Any) -> Any:
       if isinstance(current_item, list):
         return [extract_execution_plan(item) for item in current_item]
 
@@ -583,11 +586,11 @@ class BaseGraph:
     self.is_compiled = True
     return self
 
-  def visualize(self, output_file: str = "graph") -> None:
+  def visualize(self) -> Any:  # noqa: PLR0912
     """Visualize the graph using Graphviz."""
-    from graphviz import Digraph
+    from graphviz import Digraph  # type: ignore
 
-    def get_display_name(node_name: str, node) -> str:
+    def get_display_name(node_name: str, node: Node) -> Any:
       """Get clean display name from node metadata."""
       if node_name in [START, END]:
         return node_name
@@ -603,8 +606,8 @@ class BaseGraph:
     dot.attr("edge", fontname="Helvetica", fontsize="9")
 
     # Group nodes by subgraph, maintaining hierarchy
-    subgraph_groups = {}
-    repeat_groups = {}
+    subgraph_groups: Dict[str, Any] = {}
+    repeat_groups: Dict[str, Any] = {}
 
     for node_name, node in self.nodes.items():
       # Skip subgraph container nodes
@@ -641,7 +644,7 @@ class BaseGraph:
             subgraph_groups[parent] = {"nodes": set(), "nested": {}}
           subgraph_groups[parent]["nodes"].add(node_name)
 
-    def create_cluster(name, nodes, nested, parent_cluster, repeat_nodes=None):
+    def create_cluster(name: str, nodes: Set[str], nested: Dict[str, Any], parent_cluster: Any) -> None:
       with parent_cluster.subgraph(name=f"cluster_{name}") as cluster:
         cluster.attr(
           label=f"Subgraph: {name}",
@@ -662,9 +665,9 @@ class BaseGraph:
               node_name in group_info["nodes"]
               and group_info["parent_subgraph"] == name
               and node_name == group_info["original_node"]
-            ):  # Only process original nodes
-              if group_id not in repeat_clusters:
-                repeat_clusters[group_id] = group_info
+              and node_name not in repeat_clusters
+            ):
+              repeat_clusters[group_id] = group_info
 
         # Create repeat clusters first
         for group_id, group_info in repeat_clusters.items():
@@ -774,7 +777,6 @@ class BaseGraph:
 
         # Handle repeated node connections
         if start_metadata.get("is_repeat"):
-          # repeat_group = start_metadata["repeat_group"]
           original_node = start_metadata["original_node"]
 
           # If this is the last repeated node connecting to an end node
@@ -827,7 +829,7 @@ class BaseGraph:
 
         # Add edge labels for router paths if available
         if node.router_paths:
-          for first_node, path in node.router_paths.items():
+          for first_node, _ in node.router_paths.items():
             edge = next(e for e in self.edges if e.start_node == node_name and e.end_node == first_node)
             if edge:
               dot.edge(
@@ -897,19 +899,21 @@ class BaseGraph:
     short_id = f"{len(self.edges):03x}"  # Using hex to keep it shorter
 
     # Create a wrapper function that maintains node identity
-    def create_node_action(node_name: str, original_action: Callable):
+    def create_node_action(
+      node_name: str, original_action: Callable
+    ) -> Callable[..., Union[Any, Coroutine[Any, Any, Any]]]:
       if inspect.iscoroutinefunction(original_action):
 
-        async def wrapped_action(*args, **kwargs):
+        async def wrapped_action(*args: Any, **kwargs: Any) -> Any:
           return await original_action(*args, **kwargs)
       else:
 
-        def wrapped_action(*args, **kwargs):
+        def wrapped_action(*args: Any, **kwargs: Any) -> Any:  # type: ignore
           return original_action(*args, **kwargs)
 
       # Set the name and node_name attributes
       wrapped_action.__name__ = node_name
-      wrapped_action.__node_name__ = node_name
+      wrapped_action.__node_name__ = node_name  # type: ignore
 
       # Copy all other attributes from the original action
       for attr in dir(original_action):
@@ -921,7 +925,7 @@ class BaseGraph:
     # Create a new version of the original node with updated metadata
     self.nodes[repeat_node] = Node(
       name=repeat_node,
-      action=create_node_action(repeat_node, original_node.action),
+      action=create_node_action(repeat_node, original_node.action),  # type: ignore
       metadata={
         **(original_node.metadata or {}),
         "is_repeat": True,
@@ -947,7 +951,7 @@ class BaseGraph:
 
       self.nodes[repeat_node_name] = Node(
         name=repeat_node_name,
-        action=create_node_action(repeat_node_name, original_node.action),
+        action=create_node_action(repeat_node_name, original_node.action),  # type: ignore
         metadata={
           **(original_node.metadata or {}),
           "is_repeat": True,
@@ -1022,7 +1026,7 @@ class BaseGraph:
 
   def _analyze_router_paths(self) -> Dict[str, Dict[str, List[str]]]:
     """Identifies execution paths in the graph with parallel and nested parallel paths."""
-    router_paths = {}
+    router_paths: Dict[str, Dict[str, List[str]]] = {}
 
     def get_next_nodes(node: str) -> List[str]:
       return [edge.end_node for edge in self.edges if edge.start_node == node]
@@ -1033,7 +1037,7 @@ class BaseGraph:
     def is_convergence_point(node: str) -> bool:
       return len(get_prev_nodes(node)) > 1
 
-    def follow_path(start_node: str, visited: Set[str] = None) -> List[str]:
+    def follow_path(start_node: str, visited: Optional[Set[str]] = None) -> List[str]:
       if visited is None:
         visited = set()
 
@@ -1066,9 +1070,10 @@ class BaseGraph:
 
       return current_path
 
+    # First pass to collect all router paths
     for node_name, node in self.nodes.items():
       if node.is_router and node.possible_routes:
-        paths = {}
+        paths: Dict[str, List[str]] = {}
         for route in node.possible_routes:
           current_path = follow_path(route)
           paths[route] = current_path
@@ -1076,15 +1081,15 @@ class BaseGraph:
         router_paths[node_name] = paths
 
     # Second pass to handle nested routers
-    for node_name, paths in router_paths.items():
+    for _, paths in router_paths.items():
       for route, path in paths.items():
-        complete_path = []
-        for node in path:
-          complete_path.append(node)
-          if node in router_paths:
+        complete_path: List[str] = []
+        for node_name in path:
+          complete_path.append(node_name)
+          if node_name in router_paths:
             # If this node is a router, get its default path
-            next_route = next(iter(router_paths[node].keys()))
-            complete_path.extend(router_paths[node][next_route][1:])
+            next_route = next(iter(router_paths[node_name].keys()))
+            complete_path.extend(router_paths[node_name][next_route][1:])
         paths[route] = complete_path
 
     return router_paths
