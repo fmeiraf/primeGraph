@@ -20,6 +20,7 @@ build = "^1.2.2.post1"
 twine = "^6.0.1"
 ruff = "^0.8.3"
 mypy = "^1.13.0"
+types-psycopg2 = "^2.9.21.20241019"
 
 
 [tool.poetry.group.dev.dependencies]
@@ -74,7 +75,7 @@ exclude = [
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "C4", "ARG", "SIM", "ERA", "PL", "RUF"]
-ignore = []
+ignore = ["PLR0915"]
 fixable = ["ALL"]
 unfixable = []
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"

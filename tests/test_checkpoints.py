@@ -3,6 +3,7 @@ from typing import Optional
 import pytest
 
 from primeGraph.buffer.factory import History, LastValue
+from primeGraph.checkpoint.base import CheckpointData
 from primeGraph.checkpoint.local_storage import LocalStorage
 from primeGraph.constants import END, START
 from primeGraph.graph.executable import Graph
@@ -19,10 +20,12 @@ def test_save_and_load_checkpoint():
     state = StateForTest(value=42, text="initial")
     graph = Graph(state=state, checkpoint_storage=LocalStorage())
 
-    # Save checkpoint
-    checkpoint_id = graph.checkpoint_storage.save_checkpoint(
-        state, graph.chain_id, graph.chain_status
+    # Save checkpoint using CheckpointData
+    checkpoint_data = CheckpointData(
+        chain_id=graph.chain_id,
+        chain_status=graph.chain_status,
     )
+    checkpoint_id = graph.checkpoint_storage.save_checkpoint(state, checkpoint_data)
 
     # Load checkpoint
     loaded_state = graph.checkpoint_storage.load_checkpoint(
@@ -39,14 +42,15 @@ def test_list_checkpoints():
     state = StateForTest(value=42)
     graph = Graph(state=state, checkpoint_storage=LocalStorage())
 
-    # Save multiple checkpoints
-    checkpoint_1 = graph.checkpoint_storage.save_checkpoint(
-        state, graph.chain_id, graph.chain_status
+    # Save multiple checkpoints using CheckpointData
+    checkpoint_data = CheckpointData(
+        chain_id=graph.chain_id,
+        chain_status=graph.chain_status,
     )
+    checkpoint_1 = graph.checkpoint_storage.save_checkpoint(state, checkpoint_data)
+    
     state.value = 43
-    checkpoint_2 = graph.checkpoint_storage.save_checkpoint(
-        state, graph.chain_id, graph.chain_status
-    )
+    checkpoint_2 = graph.checkpoint_storage.save_checkpoint(state, checkpoint_data)
 
     checkpoints = graph.checkpoint_storage.list_checkpoints(graph.chain_id)
     assert len(checkpoints) == 2
@@ -58,13 +62,14 @@ def test_delete_checkpoint():
     state = StateForTest(value=42)
     graph = Graph(state=state, checkpoint_storage=LocalStorage())
 
-    # Save and then delete a checkpoint
-    checkpoint_id = graph.checkpoint_storage.save_checkpoint(
-        state, graph.chain_id, graph.chain_status
+    checkpoint_data = CheckpointData(
+        chain_id=graph.chain_id,
+        chain_status=graph.chain_status,
     )
+    checkpoint_id = graph.checkpoint_storage.save_checkpoint(state, checkpoint_data)
     assert len(graph.checkpoint_storage.list_checkpoints(graph.chain_id)) == 1
 
-    graph.checkpoint_storage.delete_checkpoint(checkpoint_id, graph.chain_id)
+    graph.checkpoint_storage.delete_checkpoint(graph.chain_id, checkpoint_id)
     assert len(graph.checkpoint_storage.list_checkpoints(graph.chain_id)) == 0
 
 
@@ -77,9 +82,12 @@ def test_version_mismatch():
     # Save with original version
     state = StateForTest(value=42)
     graph = Graph(state=state, checkpoint_storage=LocalStorage())
-    checkpoint_id = graph.checkpoint_storage.save_checkpoint(
-        state, graph.chain_id, graph.chain_status
+    
+    checkpoint_data = CheckpointData(
+        chain_id=graph.chain_id,
+        chain_status=graph.chain_status,
     )
+    checkpoint_id = graph.checkpoint_storage.save_checkpoint(state, checkpoint_data)
 
     # Try to save with new version
     with pytest.raises(ValueError):

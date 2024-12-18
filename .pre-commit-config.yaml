@@ -1,14 +1,46 @@
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.1.3
+  - repo: local
     hooks:
-      - id: ruff
-        args: [--fix]
+      - id: ruff-check
+        name: ruff check
+        entry: poetry run ruff check
+        language: system
+        types: [python]
+        pass_filenames: true
+        exclude: >
+          (?x)^(
+            tests/.*|
+            examples/.*|
+            notebooks/.*|
+            \.git/.*|
+            \.mypy_cache/.*|
+            \.ruff_cache/.*|
+            \.venv/.*|
+            build/.*|
+            dist/.*
+          )$
       - id: ruff-format
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.5.1
-    hooks:
+        name: ruff format
+        entry: poetry run ruff format
+        language: system
+        types: [python]
+        pass_filenames: true
+        exclude: >
+          (?x)^(
+            tests/.*|
+            examples/.*|
+            notebooks/.*|
+            \.git/.*|
+            \.mypy_cache/.*|
+            \.ruff_cache/.*|
+            \.venv/.*|
+            build/.*|
+            dist/.*
+          )$
       - id: mypy
-        additional_dependencies:
-          - types-setuptools
-          - types-requests
+        name: mypy
+        entry: poetry run mypy --config-file mypy.ini
+        language: system
+        types: [python]
+        pass_filenames: true
+        exclude: ^(tests/|examples/|notebooks/)
