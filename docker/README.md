@@ -17,7 +17,7 @@ docker compose up
 ### Accessing the database
 
 ```bash
-docker exec -it tiny_graph_postgres psql -U tiny_graph -d tiny_graph
+docker exec -it primeGraph_postgres psql -U primeGraph -d primeGraph
 ```
 
 ### Accessing pgAdmin
