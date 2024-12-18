@@ -44,3 +44,10 @@ repos:
         types: [python]
         pass_filenames: true
         exclude: ^(tests/|examples/|notebooks/)
+      - id: pytest
+        name: pytest
+        entry: poetry run pytest -v
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [commit]
