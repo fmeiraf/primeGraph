@@ -661,6 +661,9 @@ class BaseGraph:
           fontname="Helvetica",
           fontcolor="#444444",
           margin="20",
+          fontsize="10",  # Match node font size
+          labelloc="t",  # Position at top
+          labeljust="l",  # Left align
         )
 
         # Handle repeated nodes in this cluster
