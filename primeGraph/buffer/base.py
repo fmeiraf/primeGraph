@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from threading import Lock
-from typing import Any, Dict, Union, get_args, get_origin
+from typing import Any, Dict, get_args, get_origin
 
 
 class BaseBuffer(ABC):
@@ -48,20 +48,35 @@ class BaseBuffer(ABC):
 
   def _enforce_type(self, new_value: Any) -> None:
     """Enforce the type of the buffer value."""
-    if self.field_type is None:
+    if self.field_type is None or new_value is None:
       return
 
-    # Get the origin type (e.g., List from List[str])
-    origin = get_origin(self.field_type) or self.field_type
+    def validate_dict_contents(value: dict, key_type: type, value_type: type) -> None:
+      for k, v in value.items():
+        if not isinstance(k, key_type):
+          raise TypeError(f"Dict key must be {key_type}, got {type(k)}")
+        validate_value(v, value_type)
 
-    # Handle Union types specially
-    if origin is Union:
-      # Get the allowed types from the Union
-      allowed_types = get_args(self.field_type)
-      if not any(isinstance(new_value, t) for t in allowed_types):
-        raise TypeError(f"Buffer value must be one of types {allowed_types}, got {type(new_value)}")
-      return
+    def validate_list_contents(value: list, item_type: type) -> None:
+      for item in value:
+        validate_value(item, item_type)
 
-    # For non-Union types, proceed with normal isinstance check
-    if not isinstance(new_value, origin) and new_value:
-      raise TypeError(f"Buffer value must be of type {self.field_type}, got {type(new_value)}")
+    def validate_value(value: Any, expected_type: type) -> None:
+      origin = get_origin(expected_type)
+      if origin is None:
+        if not isinstance(value, expected_type):
+          raise TypeError(f"Value must be {expected_type}, got {type(value)}")
+        return
+
+      if origin is dict:
+        if not isinstance(value, dict):
+          raise TypeError(f"Value must be dict, got {type(value)}")
+        key_type, value_type = get_args(expected_type)
+        validate_dict_contents(value, key_type, value_type)
+      elif origin is list:
+        if not isinstance(value, list):
+          raise TypeError(f"Value must be list, got {type(value)}")
+        item_type = get_args(expected_type)[0]
+        validate_list_contents(value, item_type)
+
+    validate_value(new_value, self.field_type)

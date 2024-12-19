@@ -1,7 +1,8 @@
 import time
-from typing import Dict
+from typing import Any, Dict, List
 
 import pytest
+from pydantic import ValidationError
 
 from primeGraph.buffer.factory import History, Incremental, LastValue
 from primeGraph.constants import END, START
@@ -160,33 +161,7 @@ def test_execution_plan_conversion(basic_graph):
     ]
     result = basic_graph._convert_execution_plan()
 
-    # Execpted result:
-    #     [
-    #     ExecutableNode(
-    #         node_name='group_aa_bb',
-    #         task_list=[<function aa at 0x10c756ac0>, <function bb at 0x10c7551c0>],
-    #         node_list=['aa', 'bb'],
-    #         execution_type='sequential',
-    #         interrupt=None
-    #     ),
-    #     ExecutableNode(
-    #         node_name='group_escape_(dd_cc)_hh',
-    #         task_list=[
-    #             <function escape at 0x10c756b60>,
-    #             ExecutableNode(
-    #                 node_name='group_dd_cc',
-    #                 task_list=[<function dd at 0x10c7568e0>, <function cc at 0x10c755ee0>],
-    #                 node_list=['dd', 'cc'],
-    #                 execution_type='parallel',
-    #                 interrupt=None
-    #             ),
-    #             <function hh at 0x10c756c00>
-    #         ],
-    #         node_list=['escape', ['dd', 'cc'], 'hh'],
-    #         execution_type='sequential',
-    #         interrupt=None
-    #     )
-    # ]
+    
 
     assert len(result) == 2
     assert result[1].task_list[1].node_name == "group_dd_cc"
@@ -645,3 +620,178 @@ def test_state_modification_during_execution():
         "task3",
         "task4",
     ]
+
+
+def test_graph_state_simple_types():
+    class SimpleState(GraphState):
+        counter: Incremental[int]
+        status: LastValue[str]
+        metrics: History[float]
+
+    # Test valid initialization
+    state = SimpleState(counter=0, status="ready", metrics=[1.0, 2.0, 3.0])
+    assert state.counter == 0
+    assert state.status == "ready"
+    assert state.metrics == [1.0, 2.0, 3.0]
+
+    # Test invalid types
+    with pytest.raises(TypeError):
+        SimpleState(counter="invalid", status="ready", metrics=[1.0])
+    with pytest.raises(TypeError):
+        SimpleState(counter=0, status=123, metrics=[1.0])
+    with pytest.raises(TypeError):
+        SimpleState(counter=0, status="ready", metrics=1.0)  # Should be list
+
+
+def test_graph_state_dict_types():
+    class DictState(GraphState):
+        simple_dict: LastValue[Dict[str, int]]
+        nested_dict: LastValue[Dict[str, Dict[str, float]]]
+        dict_history: History[Dict[str, str]]
+
+    # Test valid initialization
+    state = DictState(
+        simple_dict={"a": 1, "b": 2},
+        nested_dict={"x": {"y": 1.0}},
+        dict_history=[{"status": "start"}, {"status": "end"}]
+    )
+    assert state.simple_dict == {"a": 1, "b": 2}
+    assert state.nested_dict == {"x": {"y": 1.0}}
+    assert state.dict_history == [{"status": "start"}, {"status": "end"}]
+
+    # Test invalid types
+    with pytest.raises((TypeError, ValidationError)):
+        DictState(
+            simple_dict=[1, 2],  # Should be dict
+            nested_dict={"x": {"y": 1.0}},
+            dict_history=[{"status": "start"}]
+        )
+    with pytest.raises((TypeError, ValidationError)):
+        DictState(
+            simple_dict={"a": 1},
+            nested_dict={"x": 1.0},  # Should be nested dict
+            dict_history=[{"status": "start"}]
+        )
+    with pytest.raises((TypeError, ValidationError)):
+        DictState(
+            simple_dict={"a": 1},
+            nested_dict={"x": {"y": 1.0}},
+            dict_history={"status": "start"}  # Should be list
+        )
+
+
+def test_graph_state_list_types():
+    class ListState(GraphState):
+        simple_list: LastValue[List[int]]
+        nested_list: LastValue[List[List[str]]]
+        list_history: History[List[float]]
+
+    # Test valid initialization
+    state = ListState(
+        simple_list=[1, 2, 3],
+        nested_list=[["a", "b"], ["c", "d"]],
+        list_history=[[1.0, 2.0], [3.0, 4.0]]
+    )
+    assert state.simple_list == [1, 2, 3]
+    assert state.nested_list == [["a", "b"], ["c", "d"]]
+    assert state.list_history == [[1.0, 2.0], [3.0, 4.0]]
+
+    # Test invalid types
+    with pytest.raises((TypeError, ValidationError)):
+        ListState(
+            simple_list=1,  # Should be list
+            nested_list=[["a", "b"]],
+            list_history=[[1.0, 2.0]]
+        )
+    with pytest.raises((TypeError, ValidationError)):
+        ListState(
+            simple_list=[1, 2],
+            nested_list=["a", "b"],  # Should be nested list
+            list_history=[[1.0, 2.0]]
+        )
+    with pytest.raises((TypeError, ValidationError)):
+        ListState(
+            simple_list=[1, 2],
+            nested_list=[["a", "b"]],
+            list_history=[1.0, 2.0]  # Should be list of lists
+        )
+
+
+def test_graph_state_complex_types():
+    class ComplexState(GraphState):
+        dict_list: LastValue[Dict[str, List[int]]]
+        list_dict: LastValue[List[Dict[str, float]]]
+        complex_history: History[Dict[str, List[Dict[str, Any]]]]
+
+    # Test valid initialization
+    state = ComplexState(
+        dict_list={"a": [1, 2], "b": [3, 4]},
+        list_dict=[{"x": 1.0}, {"y": 2.0}],
+        complex_history=[
+            {"data": [{"value": 1}, {"value": 2}]},
+            {"data": [{"value": 3}, {"value": 4}]}
+        ]
+    )
+    assert state.dict_list == {"a": [1, 2], "b": [3, 4]}
+    assert state.list_dict == [{"x": 1.0}, {"y": 2.0}]
+    assert state.complex_history == [
+        {"data": [{"value": 1}, {"value": 2}]},
+        {"data": [{"value": 3}, {"value": 4}]}
+    ]
+
+    # Test invalid types
+    with pytest.raises((TypeError, ValidationError)):
+        ComplexState(
+            dict_list=[1, 2],  # Should be dict
+            list_dict=[{"x": 1.0}],
+            complex_history=[{"data": [{"value": 1}]}]
+        )
+    with pytest.raises((TypeError, ValidationError)):
+        ComplexState(
+            dict_list={"a": [1, 2]},
+            list_dict={"x": 1.0},  # Should be list
+            complex_history=[{"data": [{"value": 1}]}]
+        )
+    with pytest.raises((TypeError, ValidationError)):
+        ComplexState(
+            dict_list={"a": [1, 2]},
+            list_dict=[{"x": 1.0}],
+            complex_history={"data": [{"value": 1}]}  # Should be list
+        )
+
+
+def test_graph_state_incremental_types():
+    class IncrementalState(GraphState):
+        simple_counter: Incremental[int]
+        float_counter: Incremental[float]
+        dict_counter: Incremental[Dict[str, int]]
+
+    # Test valid initialization
+    state = IncrementalState(
+        simple_counter=0,
+        float_counter=0.0,
+        dict_counter={"count": 0}
+    )
+    assert state.simple_counter == 0
+    assert state.float_counter == 0.0
+    assert state.dict_counter == {"count": 0}
+
+    # Test invalid types
+    with pytest.raises((TypeError, ValidationError)):
+        IncrementalState(
+            simple_counter="0",  # Should be int
+            float_counter=0.0,
+            dict_counter={"count": 0}
+        )
+    with pytest.raises((TypeError, ValidationError)):
+        IncrementalState(
+            simple_counter=0,
+            float_counter="0.0",  # Should be float
+            dict_counter={"count": 0}
+        )
+    with pytest.raises((TypeError, ValidationError)):
+        IncrementalState(
+            simple_counter=0,
+            float_counter=0.0,
+            dict_counter=[0]  # Should be dict
+        )

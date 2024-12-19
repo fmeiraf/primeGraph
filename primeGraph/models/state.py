@@ -1,5 +1,5 @@
 import hashlib
-from typing import Any, Dict, Type, TypeVar, get_args, get_origin, get_type_hints
+from typing import Any, Dict, Type, get_args, get_origin, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -30,50 +30,57 @@ class GraphState(BaseModel):
 
   @model_validator(mode="before")
   @classmethod
-  def wrap_buffer_types(cls, values: Dict[str, Any]) -> Dict[str, Any]:  # noqa: PLR0912
+  def wrap_buffer_types(cls, values: Dict[str, Any]) -> Dict[str, Any]:
     hints = get_type_hints(cls)
 
-    def check_dict_type(value: Any, key_type: Type, value_type: Type) -> bool:
-      if not isinstance(value, dict):
-        return False
-      return all(isinstance(k, key_type) and isinstance(v, value_type) for k, v in value.items())
+    def validate_dict_contents(value: dict, key_type: Type, value_type: Type) -> None:
+      for k, v in value.items():
+        if not isinstance(k, key_type):
+          raise TypeError(f"Dict key must be {key_type}, got {type(k)}")
+        validate_value(v, value_type)
+
+    def validate_list_contents(value: list, item_type: Type) -> None:
+      for item in value:
+        validate_value(item, item_type)
+
+    def validate_value(value: Any, expected_type: Type) -> None:
+      # Special case: Any accepts everything
+      if expected_type is Any:
+        return
+
+      origin = get_origin(expected_type)
+      if origin is None:
+        if not isinstance(value, expected_type):
+          raise TypeError(f"Value must be {expected_type}, got {type(value)}")
+        return
+
+      if origin is dict:
+        if not isinstance(value, dict):
+          raise TypeError(f"Value must be dict, got {type(value)}")
+        key_type, value_type = get_args(expected_type)
+        validate_dict_contents(value, key_type, value_type)
+      elif origin is list:
+        if not isinstance(value, list):
+          raise TypeError(f"Value must be list, got {type(value)}")
+        item_type = get_args(expected_type)[0]
+        validate_list_contents(value, item_type)
 
     for field_name, field_type in hints.items():
-      if field_name in values:
-        origin = get_origin(field_type)
-        if origin is not None and issubclass(origin, BufferTypeMarker):
-          inner_type = field_type.__args__[0]
-          inner_origin = get_origin(inner_type)
+      if field_name not in values:
+        continue
 
-          # For History, ensure it's a list
-          if origin is History and not isinstance(values[field_name], list):
+      origin = get_origin(field_type)
+      if origin is not None and issubclass(origin, BufferTypeMarker):
+        inner_type = get_args(field_type)[0]
+        value = values[field_name]
+
+        if origin is History:
+          if not isinstance(value, list):
             raise TypeError(f"Field {field_name} must be a list")
-
-          # For History with Dict type
-          if origin is History and inner_origin is dict:
-            key_type, value_type = get_args(inner_type)
-            if not all(check_dict_type(item, key_type, value_type) for item in values[field_name]):
-              raise TypeError(f"All items in {field_name} must be Dict[{key_type.__name__}, {value_type.__name__}]")
-          # For History with List type
-          elif origin is History and inner_origin is list:
-            if not all(isinstance(item, list) for item in values[field_name]):
-              raise TypeError(f"All items in {field_name} must be lists")
-          # For History with simple types
-          elif origin is History:
-            if not all(isinstance(item, inner_type) for item in values[field_name]):
-              raise TypeError(f"All items in {field_name} must be of type {inner_type}")
-          # For other buffer types with Dict
-          elif inner_origin is dict:
-            if not isinstance(values[field_name], dict):
-              raise TypeError(f"Field {field_name} must be a dict")
-          # For other buffer types with List
-          elif inner_origin is list:
-            if not isinstance(values[field_name], list):
-              raise TypeError(f"Field {field_name} must be a list")
-          # For other buffer types with simple types
-          elif inner_origin is None and not isinstance(inner_type, TypeVar):
-            if not isinstance(values[field_name], inner_type):
-              raise TypeError(f"Field {field_name} must be of type {inner_type}")
+          for item in value:
+            validate_value(item, inner_type)
+        else:
+          validate_value(value, inner_type)
 
     return values
 
