@@ -601,7 +601,13 @@ class BaseGraph:
     self._force_compile()
 
     dot = Digraph(comment="Graph Visualization", format="svg")
-    dot.attr(rankdir="LR")  # Left to right layout
+    # Balanced layout settings
+    dot.attr(rankdir="TB")
+    dot.attr(margin="0.3")  # Reduced margin further
+    dot.attr(center="true")
+    dot.attr(splines="ortho")
+    dot.attr(ranksep="0.4")
+    dot.attr(nodesep="0.3")  # Added to control horizontal spacing
     dot.attr("node", fontname="Helvetica", fontsize="10", margin="0.2,0.1")
     dot.attr("edge", fontname="Helvetica", fontsize="9")
 
@@ -818,14 +824,19 @@ class BaseGraph:
           "style": "rounded, filled",
           "fillcolor": "#FFE4B5",  # Light orange for router nodes
           "shape": "diamond",
-          "margin": "0",
+          "margin": "0.2",  # Added margin inside node
           "penwidth": "1.0",
           "regular": "true",  # Makes the diamond more regular/symmetric
-          "fixedsize": "true",  # Helps maintain consistent shape
-          "width": "1.1",  # Adjust size as needed
-          "height": "1.1",  # Adjust size as needed
+          "width": "1.5",  # Increased width
+          "height": "1.5",  # Increased height
+          "fixedsize": "false",  # Allow node to resize based on label
         }
-        dot.node(node_name, get_display_name(node_name, node), **node_attrs)
+
+        # Format the label to ensure it fits
+        display_name = get_display_name(node_name, node)
+        formatted_label = display_name.replace("_", "\n")  # Break long names with newlines
+
+        dot.node(node_name, formatted_label, **node_attrs)
 
         # Add edge labels for router paths if available
         if node.router_paths:
