@@ -21,6 +21,9 @@ from primeGraph.utils.class_utils import internal_only
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
+# Silence graphviz debug logs
+logging.getLogger("graphviz").setLevel(logging.WARNING)
+
 
 class ExecutableNode(NamedTuple):
   node_name: str
