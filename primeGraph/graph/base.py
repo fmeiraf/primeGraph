@@ -682,12 +682,14 @@ class BaseGraph:
             execution_type = "Parallel" if group_info["parallel"] else "Sequential"
             repeat_cluster.attr(
               label=f"{n_repeats}x {execution_type}",
-              style="dashed,rounded",  # Changed to dashed with rounded corners
+              style="dashed,rounded",
               color="#666666",
               fontcolor="#666666",
               fontname="Helvetica",
               fontsize="10",
               margin="8",
+              labelloc="t",  # Place label at top
+              labeljust="r",  # Align label to right
             )
 
             # Only add the original node to the visualization
@@ -730,12 +732,14 @@ class BaseGraph:
           execution_type = "Parallel" if group_info["parallel"] else "Sequential"
           repeat_cluster.attr(
             label=f"{n_repeats}x {execution_type}",
-            style="dashed,rounded",  # Changed to dashed with rounded corners
+            style="dashed,rounded",
             color="#666666",
             fontcolor="#666666",
             fontname="Helvetica",
             fontsize="10",
             margin="8",
+            labelloc="t",  # Place label at top
+            labeljust="r",  # Align label to right
           )
 
           # Only add the original node
