@@ -9,7 +9,6 @@ from pydantic import BaseModel
 
 from primeGraph.buffer.base import BaseBuffer
 from primeGraph.buffer.factory import BufferFactory
-from primeGraph.buffer.history import HistoryBuffer
 from primeGraph.checkpoint.base import CheckpointData, StorageBackend
 from primeGraph.graph.base import BaseGraph
 from primeGraph.models.checkpoint import Checkpoint
@@ -218,10 +217,7 @@ class Graph(BaseGraph):
   @internal_only
   def _update_buffers_from_state(self) -> None:
     for field_name, buffer in self.buffers.items():
-      if isinstance(buffer, HistoryBuffer):
-        buffer.set_value(getattr(self.state, field_name))
-      else:
-        buffer.update(getattr(self.state, field_name), "update_from_state")
+      buffer.set_value(getattr(self.state, field_name))
 
   def _save_checkpoint(self, node_name: str) -> None:
     if self.state and self.checkpoint_storage:

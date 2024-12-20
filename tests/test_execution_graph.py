@@ -795,3 +795,55 @@ def test_graph_state_incremental_types():
             float_counter=0.0,
             dict_counter=[0]  # Should be dict
         )
+
+
+def test_execution_steps_with_interrupt():
+    class StateWithSteps(GraphState):
+        number_of_executed_steps: Incremental[int]
+        current_status: LastValue[str]
+
+    # Initialize state
+    state = StateWithSteps(
+        number_of_executed_steps=0,
+        current_status="initializing"
+    )
+    graph = Graph(state=state)
+
+    @graph.node()
+    def task1(state):
+        return {
+            "number_of_executed_steps": 1,
+            "current_status": "task1_complete"
+        }
+
+    @graph.node(interrupt="before")
+    def task2(state):
+        return {
+            "number_of_executed_steps": 1,
+            "current_status": "task2_complete"
+        }
+
+    @graph.node()
+    def task3(state):
+        return {
+            "number_of_executed_steps": 1,
+            "current_status": "task3_complete"
+        }
+
+    # Create workflow
+    graph.add_edge(START, "task1")
+    graph.add_edge("task1", "task2")
+    graph.add_edge("task2", "task3")
+    graph.add_edge("task3", END)
+    graph.compile()
+
+    # First execution - should stop before task2
+    graph.start()
+    assert graph.state.number_of_executed_steps == 1  # Only task1 executed
+    assert graph.state.current_status == "task1_complete"
+    assert graph.next_execution_node == "task2"
+
+    # Resume execution - should complete remaining tasks
+    graph.resume()
+    assert graph.state.number_of_executed_steps == 3  # All tasks executed
+    assert graph.state.current_status == "task3_complete"
