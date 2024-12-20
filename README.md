@@ -38,6 +38,10 @@ _Note from the author: This project came to life through my experience of creati
 
 ## Installation
 
+```bash
+pip install primeGraph
+```
+
 ## Usage
 
 ### Basic Usage
