@@ -586,7 +586,7 @@ class BaseGraph:
     self.is_compiled = True
     return self
 
-  def visualize(self) -> Any:  # noqa: PLR0912
+  def visualize(self, transparent: bool = True) -> Any:  # noqa: PLR0912
     """Visualize the graph using Graphviz."""
     from graphviz import Digraph  # type: ignore
 
@@ -610,6 +610,10 @@ class BaseGraph:
     dot.attr(nodesep="0.3")  # Added to control horizontal spacing
     dot.attr("node", fontname="Helvetica", fontsize="10", margin="0.2,0.1")
     dot.attr("edge", fontname="Helvetica", fontsize="9")
+
+    # Add transparent background if requested
+    if transparent:
+      dot.attr(bgcolor="transparent")
 
     # Group nodes by subgraph, maintaining hierarchy
     subgraph_groups: Dict[str, Any] = {}

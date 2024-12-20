@@ -40,10 +40,7 @@ _Note from the author: This project came to life through my experience of creati
 
 ## Usage
 
-#### Basic Usage
-
-<div class="code-image-container" style="display: flex; margin: 20px 0;">
-  <div class="code-block" style="flex: 1; margin-right: 20px;">
+### Basic Usage
 
 ```python
 from primeGraph import Graph, GraphState
@@ -111,16 +108,11 @@ print(state)
 
 ```
 
-  </div>
-  <div class="image-block" style="flex: 1;">
-    <img src="docs/images/readme_base_usage.svg" alt="Basic Usage Graph Visualization" style="width: 100%; height: 100%; object-fit: contain;">
-  </div>
-</div>
+<p align="center">
+  <img src="docs/images/readme_base_usage.png" alt="Basic Usage Graph Visualization" width="400"/>
+</p>
 
-#### Router Nodes
-
-<div class="code-image-container" style="display: flex; margin: 20px 0;">
-  <div class="code-block" style="flex: 1; margin-right: 20px;">
+### Router Nodes
 
 ```python
 # previous Basic Usage ...example
@@ -189,16 +181,11 @@ print(state)
 #   number_of_executed_steps=4)
 ```
 
-  </div>
-  <div class="image-block" style="flex: 1;">
-    <img src="docs/images/readme_router_nodes.svg" alt="Router Nodes visualization" style="width: 100%; height: 100%; object-fit: contain;">
-  </div>
-</div>
+<p align="center">
+  <img src="docs/images/readme_router_nodes.png" alt="Router Nodes visualization" width="400"/>
+</p>
 
-#### Repeatable Nodes
-
-<div class="code-image-container" style="display: flex; margin: 20px 0;">
-  <div class="code-block" style="flex: 1; margin-right: 20px;">
+### Repeatable Nodes
 
 ```python
 # previous Basic Usage ...example
@@ -246,16 +233,11 @@ print(state)
 # number_of_executed_steps=7)
 ```
 
-  </div>
-  <div class="image-block" style="flex: 1;">
-    <img src="docs/images/readme_repeatable_nodes.svg" alt="Repeatable Nodes visualization" style="width: 100%; height: 100%; object-fit: contain;">
-  </div>
-</div>
+<p align="center">
+  <img src="docs/images/readme_repeatable_nodes.png" alt="Repeatable Nodes visualization" width="400"/>
+</p>
 
-#### Subgraphs
-
-<div class="code-image-container" style="display: flex; margin: 20px 0;">
-  <div class="code-block" style="flex: 1; margin-right: 20px;">
+### Subgraphs
 
 ```python
 # previous Basic Usage ...example
@@ -331,16 +313,11 @@ print(state)
 # number_of_executed_steps=3)
 ```
 
-  </div>
-  <div class="image-block" style="flex: 1;">
-    <img src="docs/images/readme_subgraphs.svg" alt="Subgraphs visualization" style="width: 100%; height: 100%; object-fit: contain;">
-  </div>
-</div>
+<p align="center">
+  <img src="docs/images/readme_subgraphs.png" alt="Subgraphs visualization" width="400"/>
+</p>
 
-#### Flow Control
-
-<div class="code-image-container" style="display: flex; margin: 20px 0;">
-  <div class="code-block" style="flex: 1; margin-right: 20px;">
+### Flow Control
 
 ```python
 # previous Basic Usage ...example
@@ -406,11 +383,9 @@ print(state)
 #   number_of_executed_steps=3)
 ```
 
-  </div>
-  <div class="image-block" style="flex: 1;">
-    <img src="docs/images/readme_interrupt.svg" alt="Repeatable Nodes visualization" style="width: 100%; height: 100%; object-fit: contain;">
-  </div>
-</div>
+<p align="center">
+  <img src="docs/images/readme_interrupt.png" alt="Flow Control visualization" width="400"/>
+</p>
 
 #### Persistence
 
