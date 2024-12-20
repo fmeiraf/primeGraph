@@ -10,7 +10,7 @@
 
 ## Overview
 
-**primeGraph** is a Python library for building and executing workflow through graphs, ranging from simple sequential processes to complex parallel execution patterns. While originally optimized for AI applications, its flexible architecture makes it suitable for any workflow orchestration needs.
+**primeGraph** is a Python library for building and executing workflows using graphs, ranging from simple sequential processes to complex parallel execution patterns. While originally optimized for AI applications, its flexible architecture makes it suitable for any workflow orchestration needs.
 
 Key principles:
 
