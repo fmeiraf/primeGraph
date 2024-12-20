@@ -11,9 +11,9 @@ from psycopg2.pool import ThreadedConnectionPool
 
 from primeGraph.checkpoint.base import CheckpointData, StorageBackend
 from primeGraph.checkpoint.serialization import serialize_model
-from primeGraph.graph.executable import ChainStatus
 from primeGraph.models.checkpoint import Checkpoint
 from primeGraph.models.state import GraphState
+from primeGraph.types import ChainStatus
 
 logger = logging.getLogger(__name__)
 
