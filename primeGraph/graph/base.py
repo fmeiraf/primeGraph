@@ -759,7 +759,7 @@ class BaseGraph:
       """Create a small red circle indicator for interrupt."""
       display_name = get_display_name(node_name, self.nodes[node_name])
       # Use a medium dot character and add italic to the interrupt label
-      interrupt_label = f'<FONT COLOR="#AA0000">●</FONT> <I>Intr. {interrupt}</I>'
+      interrupt_label = f'<FONT COLOR="#AA0000">●</FONT> <I>Int. {interrupt}</I>'
 
       if interrupt == "before":
         node_label = f"{interrupt_label} | {display_name}"
