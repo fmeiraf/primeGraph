@@ -755,7 +755,28 @@ class BaseGraph:
             shape="box",
           )
 
-    # Add remaining nodes (excluding repeated nodes and their copies)
+    def create_interrupt_node(dot: Any, node_name: str, interrupt: str) -> None:
+      """Create a small red circle indicator for interrupt."""
+      display_name = get_display_name(node_name, self.nodes[node_name])
+      # Use a medium dot character and add italic to the interrupt label
+      interrupt_label = f'<FONT COLOR="#AA0000">●</FONT> <I>Intr. {interrupt}</I>'
+
+      if interrupt == "before":
+        node_label = f"{interrupt_label} | {display_name}"
+      else:  # after
+        node_label = f"{display_name} | {interrupt_label}"
+
+      dot.node(
+        node_name,
+        f"<{node_label}>",  # Wrap in <> to enable HTML-like formatting
+        style="rounded,filled",
+        fillcolor="lightblue",
+        shape="record",
+        fontname="Helvetica",
+        color="#666666",
+      )
+
+    # Update the node creation section in visualize method:
     for node_name, node in self.nodes.items():
       if (
         not node.is_subgraph
@@ -764,21 +785,18 @@ class BaseGraph:
           (node_name in group["nodes"] and node_name != group["original_node"]) for group in repeat_groups.values()
         )
       ):
-        node_attrs = {
-          "style": "rounded,filled",
-          "fillcolor": "lightblue",
-          "shape": "box",
-        }
-
         if node_name in [START, END]:
-          node_attrs.update(
-            {
-              "shape": "ellipse",
-              "fillcolor": "#F4E8E8",  # Pale rose
-            }
+          dot.node(node_name, node_name, shape="ellipse", fillcolor="#F4E8E8", style="filled")
+        elif node.interrupt:
+          create_interrupt_node(dot, node_name, node.interrupt)
+        else:
+          dot.node(
+            node_name,
+            get_display_name(node_name, node),
+            style="rounded,filled",
+            fillcolor="lightblue",
+            shape="box",
           )
-
-        dot.node(node_name, get_display_name(node_name, node), **node_attrs)
 
     # Add edges (only for visible nodes)
     added_visual_edges = set()  # Track edges we've added for visualization
