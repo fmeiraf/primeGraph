@@ -9,7 +9,7 @@
 
 ## Overview
 
-**primeGraph** is a Python library for building and executing workflow graphs, ranging from simple sequential processes to complex parallel execution patterns. While originally optimized for AI applications, its flexible architecture makes it suitable for any workflow orchestration needs.
+**primeGraph** is a Python library for building and executing workflow through graphs, ranging from simple sequential processes to complex parallel execution patterns. While originally optimized for AI applications, its flexible architecture makes it suitable for any workflow orchestration needs.
 
 Key principles:
 
@@ -17,7 +17,7 @@ Key principles:
 - **Zero Lock-in**: Deploy and run workflows however you want, with no vendor dependencies.
 - **Opinionated Yet Adaptable**: Structured foundations with room for customization.
 
-_Note from the author: This project came to life through my experience of creating AI (wrapper) applications. I want to acknowledge [langgraph](https://www.langchain.com/langgraph) as the main inspiration for this project. As an individual developer, I wanted to gain experience creating my own workflow engine—one that's flexible enough to be deployed however you want, while opening doors for implementing more of my own ideas and learnings. This is a open source project though, so feel free to use it, modify it, and contribute to it._
+_Note from the author: This project came to life through my experience of creating AI applications. I want to acknowledge [langgraph](https://www.langchain.com/langgraph) as the main inspiration for this project. As an individual developer, I wanted to gain experience creating my own workflow engine—one that's flexible enough to be deployed however you want, while opening doors for implementing more of my own ideas and learnings. This is a open source project though, so feel free to use it, modify it, and contribute to it._
 
 #### Features
 
@@ -41,6 +41,9 @@ _Note from the author: This project came to life through my experience of creati
 
 #### Basic Usage
 
+<div class="code-image-container" style="display: flex; margin: 20px 0;">
+  <div class="code-block" style="flex: 1; margin-right: 20px;">
+
 ```python
 from primeGraph import Graph, GraphState
 from primeGraph.buffer.factory import History, LastValue, Incremental
@@ -48,13 +51,13 @@ from primeGraph.buffer.factory import History, LastValue, Incremental
 class DocumentProcessingState(GraphState):
     processed_files: History[str]  # Keeps track of all processed files
     current_status: LastValue[str]  # Current processing status
-    total_processed: Incremental[int]  # Counter for processed documents
+    number_of_executed_steps: Incremental[int]  # Counter for processed documents
 
 # Initialize state
 state = DocumentProcessingState(
     processed_files=[],
     current_status="initializing",
-    total_processed=0
+    number_of_executed_steps=0
 )
 
 # Create graph
@@ -66,7 +69,7 @@ def load_documents(state):
     return {
         "processed_files": "document1.txt",
         "current_status": "loading",
-        "total_processed": 1
+        "number_of_executed_steps": 1
     }
 
 @graph.node()
@@ -74,7 +77,7 @@ def validate_documents(state):
     # Validate loaded documents
     return {
         "current_status": "validating",
-        "total_processed": 1
+        "number_of_executed_steps": 1
     }
 
 @graph.node()
@@ -82,7 +85,7 @@ def process_documents(state):
     # Process documents
     return {
         "current_status": "completed",
-        "total_processed": 1
+        "number_of_executed_steps": 1
     }
 
 # Connect nodes
@@ -95,57 +98,180 @@ graph.add_edge("process_documents", END)
 graph.compile()
 graph.start()
 
+# state after execution
+print(state)
+
+# DocumentProcessingState(version='random_uuid',
+#   processed_files=['document1.txt'],
+#   current_status='completed',
+#   number_of_executed_steps=3)
+
 ```
+
+  </div>
+  <div class="image-block" style="flex: 1;">
+    <img src="docs/images/readme_base_usage.svg" alt="Basic Usage Graph Visualization" style="width: 100%; height: 100%; object-fit: contain;">
+  </div>
+</div>
 
 #### Router Nodes
 
+<div class="code-image-container" style="display: flex; margin: 20px 0;">
+  <div class="code-block" style="flex: 1; margin-right: 20px;">
+
 ```python
+# previous Basic Usage ...example
+
+@graph.node()
+def load_documents(state):
+    # Simulate loading documents
+    return {
+        "processed_files": "document1.txt",
+        "current_status": "loading",
+        "number_of_executed_steps": 1
+    }
+
+@graph.node()
+def validate_documents(state):
+    # Validate loaded documents
+    return {
+        "current_status": "validating",
+        "number_of_executed_steps": 1
+    }
+
+@graph.node()
+def process_documents(state):
+    # Process documents
+    return {
+        "current_status": "completed",
+        "number_of_executed_steps": 1
+    }
+
 @graph.node()
 def route_documents(state):
     # Route based on document type
     if "invoice" in state.current_status:
         return "process_invoice"
-    return "process_regular"
+    return "cancel_invoice"
 
 @graph.node()
 def process_invoice(state):
     return {"current_status": "invoice_processed"}
 
 @graph.node()
-def process_regular(state):
-    return {"current_status": "regular_processed"}
+def cancel_invoice(state):
+    return {"current_status": "invoice_cancelled"}
+
+# Connect nodes
+graph.add_edge(START, "load_documents")
+graph.add_edge("load_documents", "validate_documents")
+graph.add_edge("validate_documents", "process_documents")
+
 
 # Add router edges
-graph.add_router_edge("validate_documents", "route_documents")
-graph.add_edge("route_documents", "process_invoice", id="invoice_path")
-graph.add_edge("route_documents", "process_regular", id="regular_path")
+graph.add_router_edge("process_documents", "route_documents")
+graph.add_edge("process_invoice", END)
+graph.add_edge("cancel_invoice", END)
+
+# Compile and execute
+graph.compile()
+graph.start()
+
+# state after execution
+print(state)
+
+# DocumentProcessingState(version='random_uuid',
+#   processed_files=['document1.txt'],
+#   current_status='invoice_cancelled',
+#   number_of_executed_steps=4)
 ```
+
+  </div>
+  <div class="image-block" style="flex: 1;">
+    <img src="docs/images/readme_router_nodes.svg" alt="Router Nodes visualization" style="width: 100%; height: 100%; object-fit: contain;">
+  </div>
+</div>
 
 #### Repeatable Nodes
 
+<div class="code-image-container" style="display: flex; margin: 20px 0;">
+  <div class="code-block" style="flex: 1; margin-right: 20px;">
+
 ```python
+# previous Basic Usage ...example
+
 @graph.node()
-def process_batch(state):
+def repeating_process_batch(state):
     return {
-        "processed_files": f"batch_{state.total_processed}",
-        "total_processed": 1
+        "processed_files": f"batch_{state.number_of_executed_steps}",
+        "number_of_executed_steps": 1
     }
+
+@graph.node()
+def conclude_documents(state):
+    return {
+        "current_status": "completed",
+        "number_of_executed_steps": 1
+    }
+
+# Connect nodes
+graph.add_edge(START, "load_documents")
+graph.add_edge("load_documents", "validate_documents")
+graph.add_edge("validate_documents", "process_documents")
 
 # Add repeating edge to process multiple batches
 graph.add_repeating_edge(
-    "load_documents",
-    "process_batch",
-    "validate_documents",
-    repeat=3,  # Process 3 batches
-    parallel=True  # Process in parallel
+    "process_documents",
+    "repeating_process_batch",
+    "conclude_documents",
+    repeat=3,
+    parallel=True
 )
 
+graph.add_edge("conclude_documents", END)
+
+# Compile and execute
+graph.compile()
+graph.start()
+
+# state after execution
+print(state)
+
+# DocumentProcessingState(version='random_uuid',
+# processed_files=['document1.txt', 'batch_3', 'batch_3', 'batch_5'],
+# current_status='completed',
+# number_of_executed_steps=7)
 ```
+
+  </div>
+  <div class="image-block" style="flex: 1;">
+    <img src="docs/images/readme_repeatable_nodes.svg" alt="Repeatable Nodes visualization" style="width: 100%; height: 100%; object-fit: contain;">
+  </div>
+</div>
 
 #### Subgraphs
 
+<div class="code-image-container" style="display: flex; margin: 20px 0;">
+  <div class="code-block" style="flex: 1; margin-right: 20px;">
+
 ```python
-@graph.subgraph()
+# previous Basic Usage ...example
+
+# Create graph
+main_graph = Graph(state=state)
+
+@main_graph.node()
+def load_documents(state):
+    # Simulate loading documents
+    return {
+        "processed_files": "document1.txt",
+        "current_status": "loading",
+        "number_of_executed_steps": 1
+    }
+
+# a subgbraph decorator is execting the function (which is now a new node) to return a subgraph
+# you can either declare your subgraph in the function or reference from an existing subgraph
+@main_graph.subgraph()
 def validation_subgraph():
     subgraph = Graph(state=state)
 
@@ -163,11 +289,125 @@ def validation_subgraph():
 
     return subgraph
 
-# Use subgraph in main flow
-graph.add_edge("load_documents", "validation_subgraph")
-graph.add_edge("validation_subgraph", "process_documents")
+@main_graph.node()
+def pre_process_documents(state):
+    # Process documents
+    return {
+        "current_status": "completed",
+        "number_of_executed_steps": 1
+    }
 
+
+@main_graph.node()
+def conclude_documents(state):
+    return {
+        "current_status": "completed",
+        "number_of_executed_steps": 1
+    }
+
+
+
+# Connect nodes
+main_graph.add_edge(START, "load_documents")
+main_graph.add_edge("load_documents", "validation_subgraph") # subgreaph added as a normal node
+main_graph.add_edge("load_documents", "pre_process_documents")
+main_graph.add_edge("validation_subgraph", "conclude_documents")
+main_graph.add_edge("pre_process_documents", "conclude_documents")
+main_graph.add_edge("conclude_documents", END)
+
+# Compile and execute
+main_graph.compile()
+main_graph.start()
+
+# state after execution
+print(state)
+
+# DocumentProcessingState(version='random_uuid',
+# processed_files=['document1.txt'],
+# current_status='completed',
+# number_of_executed_steps=3)
 ```
+
+  </div>
+  <div class="image-block" style="flex: 1;">
+    <img src="docs/images/readme_subgraphs.svg" alt="Subgraphs visualization" style="width: 100%; height: 100%; object-fit: contain;">
+  </div>
+</div>
+
+#### Flow Control
+
+<div class="code-image-container" style="display: flex; margin: 20px 0;">
+  <div class="code-block" style="flex: 1; margin-right: 20px;">
+
+```python
+# previous Basic Usage ...example
+
+# Create graph
+graph = Graph(state=state)
+
+@graph.node()
+def load_documents(state):
+    # Simulate loading documents
+    return {
+        "processed_files": "document1.txt",
+        "current_status": "loading",
+        "number_of_executed_steps": 1
+    }
+
+# using interrupt="before" will interrupt the execution before this node is executed
+# using interrupt="after" will interrupt the execution after this node is executed
+@graph.node(interrupt="before")
+def review_documents(state):
+    # Validate loaded documents
+    return {
+        "current_status": "validating",
+        "number_of_executed_steps": 1
+    }
+
+@graph.node()
+def process_documents(state):
+    # Process documents
+    return {
+        "current_status": "completed",
+        "number_of_executed_steps": 1
+    }
+
+# Connect nodes
+graph.add_edge(START, "load_documents")
+graph.add_edge("load_documents", "review_documents")
+graph.add_edge("review_documents", "process_documents")
+graph.add_edge("process_documents", END)
+
+# Compile and execute
+graph.compile()
+graph.start()
+
+
+# state until interrupted
+print(state)
+
+# DocumentProcessingState(version='random_uuid',
+#   processed_files=['document1.txt'],
+#   current_status='loading',
+#   number_of_executed_steps=1)
+
+
+graph.resume()
+
+# state after finishing
+print(state)
+
+# DocumentProcessingState(version='random_uuid',
+#   processed_files=['document1.txt'],
+#   current_status='completed',
+#   number_of_executed_steps=3)
+```
+
+  </div>
+  <div class="image-block" style="flex: 1;">
+    <img src="docs/images/readme_interrupt.svg" alt="Repeatable Nodes visualization" style="width: 100%; height: 100%; object-fit: contain;">
+  </div>
+</div>
 
 #### Persistence
 
@@ -190,7 +430,7 @@ def validate_documents(state):
     return {"current_status": "needs_review"}
 
 # Start execution
-graph.start()
+chain_id = graph.start()
 
 # Later, resume from checkpoint
 graph.load_from_checkpoint(chain_id)
@@ -211,10 +451,6 @@ async def async_document_process(state):
 # Execute async graph
 await graph.start_async()
 ```
-
-#### Flow Control
-
-#### Visualization
 
 #### Web Integration
 
