@@ -1,4 +1,4 @@
-.PHONY: clean build test publish lint type-check format check-all
+.PHONY: clean build test publish lint type-check format check-all lock
 
 clean:
 	rm -rf dist/
@@ -21,7 +21,10 @@ format:
 type-check:
 	poetry run mypy .
 
-check-all: lint type-check test
+lock:
+	poetry lock --no-update
+
+check-all: lock lint type-check test
 	poetry check
 	poetry run pip check
 
