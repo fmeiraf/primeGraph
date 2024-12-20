@@ -4,6 +4,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Package Version](https://img.shields.io/badge/package-0.1.0-blue.svg)](https://pypi.org/project/primegraph/)
 
 ---
 
@@ -48,10 +49,12 @@ _Note from the author: This project came to life through my experience of creati
 from primeGraph import Graph, GraphState
 from primeGraph.buffer.factory import History, LastValue, Incremental
 
+
+# primeGraph uses the return values of the nodes to update the state (state is a pydantic model)
 class DocumentProcessingState(GraphState):
-    processed_files: History[str]  # Keeps track of all processed files
-    current_status: LastValue[str]  # Current processing status
-    number_of_executed_steps: Incremental[int]  # Counter for processed documents
+    processed_files: History[str]  # History: stores all the values returned as a list
+    current_status: LastValue[str]  # LastValue: keeps the last value returned
+    number_of_executed_steps: Incremental[int]  # Incremental: increments the current value of the key by the returned value
 
 # Initialize state
 state = DocumentProcessingState(
@@ -450,26 +453,120 @@ async def async_document_process(state):
 
 # Execute async graph
 await graph.start_async()
+
+# Resume async graph
+await graph.resume_async()
 ```
 
 #### Web Integration
 
 ```python
+import os
+import logging
+from typing import List
+
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from primeGraph.buffer import History
+from primeGraph.checkpoint import LocalStorage
+from primeGraph import END, START
+from primeGraph.graph import Graph
+from primeGraph.models import GraphState
 from primeGraph.web import create_graph_service, wrap_graph_with_websocket
 
+logging.basicConfig(level=logging.DEBUG)
+
+# Create FastAPI app
 app = FastAPI()
-graph_service = create_graph_service(
-    graph=graph,
-    checkpoint_storage=storage,
-    path_prefix="/documents"
+
+
+# Explicitly set logging levels for key loggers
+logging.getLogger("uvicorn").setLevel(logging.DEBUG)
+logging.getLogger("fastapi").setLevel(logging.DEBUG)
+logging.getLogger("websockets").setLevel(logging.DEBUG)
+logging.getLogger("primeGraph").setLevel(logging.DEBUG)
+
+# Your existing imports...
+
+app = FastAPI(debug=True)  # Enable debug mode
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with specific origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# Add routes to FastAPI app
-app.include_router(graph_service.router)
 
-# Wrap graph with WebSocket support
-graph = wrap_graph_with_websocket(graph, graph_service)
+# Your existing routes
+@app.get("/hello")
+async def hello():
+    return {"message": "Hello World"}
+
+
+# Create multiple graphs if needed
+graphs: List[Graph] = []
+
+
+# Define state model
+class SimpleGraphState(GraphState):
+    messages: History[str]
+
+
+# Create state instance
+state = SimpleGraphState(messages=[])
+
+# Update graph with state
+storage = LocalStorage()
+graph1 = Graph(state=state, checkpoint_storage=storage)
+
+
+@graph1.node()
+def add_hello(state: GraphState):
+    logging.debug("add_hello")
+    return {"messages": "Hello"}
+
+
+@graph1.node()
+def add_world(state: GraphState):
+    logging.debug("add_world")
+    return {"messages": "World"}
+
+
+@graph1.node()
+def add_exclamation(state: GraphState):
+    logging.debug("add_exclamation")
+    return {"messages": "!"}
+
+
+# Add edges
+graph1.add_edge(START, "add_hello")
+graph1.add_edge("add_hello", "add_world")
+graph1.add_edge("add_world", "add_exclamation")
+graph1.add_edge("add_exclamation", END)
+
+# Add nodes and edges...
+graph1.compile()
+
+
+# Create graph service
+service = create_graph_service(graph1, storage, path_prefix="/graphs/workflow1")
+
+
+# Include the router in your app
+app.include_router(service.router, tags=["workflow1"])
+
+
+
+# access your graph at http://localhost:8000/graphs/workflow1/
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
 ```
 
 ## Roadmap
