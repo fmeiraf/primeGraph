@@ -47,8 +47,9 @@ pip install primeGraph
 ### Basic Usage
 
 ```python
-from primeGraph import Graph, GraphState
-from primeGraph.buffer.factory import History, LastValue, Incremental
+from primeGraph import Graph
+from primeGraph.models import GraphState
+from primeGraph.buffer import History, LastValue, Incremental
 
 
 # primeGraph uses the return values of the nodes to update the state (state is a pydantic model)
@@ -110,6 +111,7 @@ print(state)
 #   current_status='completed',
 #   number_of_executed_steps=3)
 
+graph.visualize()
 ```
 
 <p align="center">
@@ -183,6 +185,8 @@ print(state)
 #   processed_files=['document1.txt'],
 #   current_status='invoice_cancelled',
 #   number_of_executed_steps=4)
+
+graph.visualize()
 ```
 
 <p align="center">
@@ -235,6 +239,8 @@ print(state)
 # processed_files=['document1.txt', 'batch_3', 'batch_3', 'batch_5'],
 # current_status='completed',
 # number_of_executed_steps=7)
+
+graph.visualize()
 ```
 
 <p align="center">
@@ -315,6 +321,8 @@ print(state)
 # processed_files=['document1.txt'],
 # current_status='completed',
 # number_of_executed_steps=3)
+
+graph.visualize()
 ```
 
 <p align="center">
@@ -385,6 +393,8 @@ print(state)
 #   processed_files=['document1.txt'],
 #   current_status='completed',
 #   number_of_executed_steps=3)
+
+graph.visualize()
 ```
 
 <p align="center">
@@ -449,8 +459,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from primeGraph.buffer import History
 from primeGraph.checkpoint import LocalStorage
-from primeGraph import END, START
-from primeGraph.graph import Graph
+from primeGraph import Graph, END, START
 from primeGraph.models import GraphState
 from primeGraph.web import create_graph_service, wrap_graph_with_websocket
 
