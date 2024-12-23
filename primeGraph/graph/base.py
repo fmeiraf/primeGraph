@@ -77,9 +77,12 @@ class BaseGraph:
           return_values.add(node.value.value)
         # Handle string variable returns
         elif isinstance(node.value, ast.Name):
-          # Note: This is a limitation - we can only detect direct string returns
-          # Variable returns would require more complex static analysis
-          pass
+          # Check if the name matches our constants
+          if node.value.id in ["START", "END"]:
+            return_values.add("__" + node.value.id.lower() + "__")
+        # Handle attribute access (for constants.START/END)
+        elif isinstance(node.value, ast.Attribute) and node.value.attr in ["START", "END"]:
+          return_values.add("__" + node.value.attr.lower() + "__")
     return return_values
 
   def _force_compile(self) -> None:
