@@ -16,13 +16,6 @@ from primeGraph.models.state import GraphState
 from primeGraph.types import ChainStatus
 from primeGraph.utils.class_utils import internal_only
 
-# Configure logging
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
-
-# Silence graphviz debug logs
-logging.getLogger("graphviz").setLevel(logging.WARNING)
-
 
 class ExecutableNode(NamedTuple):
   node_name: str
@@ -39,8 +32,20 @@ class Graph(BaseGraph):
     checkpoint_storage: Optional[StorageBackend] = None,
     chain_id: Optional[str] = None,
     execution_timeout: Union[int, float] = 60 * 5,
+    verbose: bool = False,
   ):
     super().__init__(state)
+
+    # Configure logging based on verbose flag
+    self.verbose = verbose
+    if not verbose:
+      self.logger = logging.getLogger(__name__)
+      self.logger.setLevel(logging.WARNING)
+      logging.getLogger("graphviz").setLevel(logging.WARNING)
+    else:
+      self.logger = logging.getLogger(__name__)
+      self.logger.setLevel(logging.DEBUG)
+      logging.getLogger("graphviz").setLevel(logging.WARNING)
 
     # State management
     self.initial_state = state
@@ -208,7 +213,8 @@ class Graph(BaseGraph):
 
   def _update_chain_status(self, status: ChainStatus) -> None:
     self.chain_status = status
-    logger.debug(f"Chain status updated to: {status}")
+    if self.verbose:
+      self.logger.debug(f"Chain status updated to: {status}")
 
   @internal_only
   def _update_state_from_buffers(self) -> None:
@@ -233,7 +239,8 @@ class Graph(BaseGraph):
         state_instance=self.state,
         checkpoint_data=checkpoint_data,
       )
-    logger.debug(f"Checkpoint saved after node: {node_name}")
+    if self.verbose:
+      self.logger.debug(f"Checkpoint saved after node: {node_name}")
 
   @internal_only
   def _is_blocking_execution(self, execution_id: str) -> bool:
@@ -313,7 +320,7 @@ class Graph(BaseGraph):
           return result
         except concurrent.futures.TimeoutError as e:
           future.cancel()
-          logger.error(f"Timeout in node {node_name}")
+          self.logger.error(f"Timeout in node {node_name}")
           raise TimeoutError(f"Execution timeout in node {node_name}") from e
 
     def add_item_to_obj_store(obj_store: Union[List, Tuple], item: Any) -> Union[List, Tuple]:
@@ -448,10 +455,10 @@ class Graph(BaseGraph):
             return result
 
           except concurrent.futures.TimeoutError as e:
-            logger.error(f"Timeout in node {node_name}")
+            self.logger.error(f"Timeout in node {node_name}")
             raise TimeoutError(f"Execution timeout in node {node_name}") from e
           except Exception as e:
-            logger.error(f"Error in node {node_name}: {e!s}")
+            self.logger.error(f"Error in node {node_name}: {e!s}")
             raise RuntimeError(f"Error in node {node_name}: {e!s}") from e
 
       # Extract and execute tasks
@@ -489,7 +496,7 @@ class Graph(BaseGraph):
 
   def resume(self, start_from: Optional[str] = None) -> None:
     if not self.next_execution_node and not start_from:
-      logger.info("resume method should either specify a start_from node or be part of a chain call (execute)")
+      self.logger.info("resume method should either specify a start_from node or be part of a chain call (execute)")
       raise ValueError("resume method should either specify a start_from node or be part of a chain call (execute)")
 
     # ensure that buffers are updated from state
@@ -560,7 +567,7 @@ class Graph(BaseGraph):
       if checkpoint.executed_nodes:
         self.executed_nodes = checkpoint.executed_nodes
 
-    logger.debug(f"Loaded checkpoint {checkpoint_id} for chain {self.chain_id}")
+    self.logger.debug(f"Loaded checkpoint {checkpoint_id} for chain {self.chain_id}")
 
   @internal_only
   async def _execute_async(self, start_from: Optional[str] = None, timeout: Union[int, float] = 60 * 5) -> None:
@@ -597,7 +604,7 @@ class Graph(BaseGraph):
 
     async def execute_task(task: Callable, node_name: str) -> Any:
       """Execute a single task with proper state handling."""
-      logger.debug(f"Executing task in node: {node_name}")
+      self.logger.debug(f"Executing task in node: {node_name}")
 
       async def run_task() -> Any:
         # prevent execution when in routing mode
@@ -662,7 +669,7 @@ class Graph(BaseGraph):
           self.executed_nodes.add(node_name)
         return result
       except asyncio.TimeoutError as e:
-        logger.error(f"Timeout in node {node_name}")
+        self.logger.error(f"Timeout in node {node_name}")
         raise TimeoutError(f"Execution timeout in node {node_name}") from e
 
     async def execute_tasks(tasks: Union[List, Tuple, Any], node_index: int) -> Any:  # noqa: PLR0911, PLR0912
@@ -798,10 +805,10 @@ class Graph(BaseGraph):
           return result
 
         except asyncio.TimeoutError as e:
-          logger.error(f"Timeout in node {node_name}")
+          self.logger.error(f"Timeout in node {node_name}")
           raise TimeoutError(f"Execution timeout in node {node_name}") from e
         except Exception as e:
-          logger.error(f"Error in node {node_name}: {e!s}")
+          self.logger.error(f"Error in node {node_name}: {e!s}")
           raise RuntimeError(f"Error in node {node_name}: {e!s}") from e
 
     async def execute_node(node: ExecutableNode, node_index: int) -> None:
@@ -854,7 +861,7 @@ class Graph(BaseGraph):
   async def resume_async(self, start_from: Optional[str] = None) -> None:
     """Async version of resume method"""
     if not self.next_execution_node and not start_from:
-      logger.info("resume method should either specify a start_from node or be part of a chain call (execute)")
+      self.logger.info("resume method should either specify a start_from node or be part of a chain call (execute)")
       raise ValueError("resume method should either specify a start_from node or be part of a chain call (execute)")
 
     self._update_buffers_from_state()
