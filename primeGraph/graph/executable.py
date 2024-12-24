@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from primeGraph.buffer.base import BaseBuffer
 from primeGraph.buffer.factory import BufferFactory
 from primeGraph.checkpoint.base import CheckpointData, StorageBackend
+from primeGraph.constants import END
 from primeGraph.graph.base import BaseGraph
 from primeGraph.models.checkpoint import Checkpoint
 from primeGraph.models.state import GraphState
@@ -928,6 +929,9 @@ class Graph(BaseGraph):
       if _find_node_in_nested(chosen_node, [path]):
         chosen_path = path
         break
+
+    if chosen_node == END:
+      return
 
     if not chosen_path:
       raise ValueError(f"Chosen node {chosen_node} not found in any path after router")
