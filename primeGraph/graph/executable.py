@@ -64,6 +64,7 @@ class Graph(BaseGraph):
     self.blocking_execution_ids: List[
       str
     ] = []  # when router are ran this is used to prevent residual recursive scheduling
+    self.is_cyclical_run: bool = False
 
   def _assign_buffers(self) -> None:
     if not self.state_schema:
@@ -189,13 +190,14 @@ class Graph(BaseGraph):
     self.next_execution_node = None
     self.executed_nodes = set()
     self.start_from = None
-    self.last_executed_node = None
+    self.last_executed_node: Optional[str] = None
     self.chain_status = ChainStatus.IDLE
 
     # reseting routes and execution paths back to compile state
     self.blocking_execution_ids = []
     self.router_paths = self._analyze_router_paths()
     self.detailed_execution_path = self._find_execution_paths()
+    self.is_cyclical_run = False
 
     # Re-assign buffers and reset state
     if self.state_schema:
@@ -291,6 +293,7 @@ class Graph(BaseGraph):
             # store execution_id for later checks
             self.blocking_execution_ids.append(execution_id)
 
+            self.is_cyclical_run = True
             self._execute(start_from=chosen_path[0])
             return  # Exit this task
 
@@ -344,7 +347,7 @@ class Graph(BaseGraph):
     def execute_node(node: ExecutableNode, node_index: int) -> None:
       """Execute a single node or group of nodes with proper concurrency handling."""
 
-      def execute_tasks(tasks: Union[List, Tuple], node_index: int) -> None:  # noqa: PLR0911, PLR0912
+      def execute_tasks(tasks: Union[List, Tuple, Any], node_index: int) -> Any:  # noqa: PLR0911, PLR0912
         """Recursively execute tasks respecting list (sequential) and tuple (parallel) structures"""
         if self._is_blocking_execution(execution_id):
           return  # Skip execution if we're restarting
@@ -399,18 +402,27 @@ class Graph(BaseGraph):
           if node_name in self.executed_nodes:
             return
 
+          # Skip nodes until we reach start_from
+          if self.start_from and self.start_from != node_name:
+            return
+
+          # Clean start_from when is a cyclical run
+          # so it doesn't infinite loop
+          if self.is_cyclical_run:
+            self.start_from = None
+            self.is_cyclical_run = False
+            self._update_chain_status(ChainStatus.RUNNING)
+
           # Handle before interrupts
+
           if (
             not isinstance(node_name, list)
             and self._get_interrupt_status(node_name) == "before"
-            and not self.start_from
+            and self.start_from != node_name
           ):
             self.next_execution_node = node_name
+            self.is_cyclical_run = False
             self._update_chain_status(ChainStatus.PAUSE)
-            return
-
-          # Skip nodes until we reach start_from
-          if self.start_from and self.start_from != node_name:
             return
 
           # Cleaning up once start_from is reached
@@ -632,6 +644,7 @@ class Graph(BaseGraph):
             # store execution_id for later checks
             self.blocking_execution_ids.append(execution_id)
 
+            self.is_cyclical_run = True
             await self._execute_async(start_from=chosen_path[0])
             return  # Exit this task
 
@@ -652,7 +665,7 @@ class Graph(BaseGraph):
         logger.error(f"Timeout in node {node_name}")
         raise TimeoutError(f"Execution timeout in node {node_name}") from e
 
-    async def execute_tasks(tasks: Union[List, Tuple], node_index: int) -> None:  # noqa: PLR0911, PLR0912
+    async def execute_tasks(tasks: Union[List, Tuple, Any], node_index: int) -> Any:  # noqa: PLR0911, PLR0912
       """Recursively execute tasks respecting list (sequential) and tuple (parallel) structures"""
       if self._is_blocking_execution(execution_id):
         return  # Skip execution if we're restarting
@@ -741,16 +754,25 @@ class Graph(BaseGraph):
         if node_name in self.executed_nodes:
           return
 
+        # Skip nodes until we reach start_from
+        if self.start_from and self.start_from != node_name:
+          return
+
+        # Clean start_from when is a cyclical run
+        # so it doesn't infinite loop
+        if self.is_cyclical_run:
+          self.start_from = None
+          self.is_cyclical_run = False
+          self._update_chain_status(ChainStatus.RUNNING)
+
         # Handle before interrupts
         if (
-          not isinstance(node_name, list) and self._get_interrupt_status(node_name) == "before" and not self.start_from
+          not isinstance(node_name, list)
+          and self._get_interrupt_status(node_name) == "before"
+          and self.start_from != node_name
         ):
           self.next_execution_node = node_name
           self._update_chain_status(ChainStatus.PAUSE)
-          return
-
-        # Skip nodes until we reach start_from
-        if self.start_from and self.start_from != node_name:
           return
 
         # Cleaning up once start_from is reached

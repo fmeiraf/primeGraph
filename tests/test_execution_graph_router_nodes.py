@@ -273,3 +273,58 @@ def test_cyclical_router():
         "route_b",
         "route_b",
     ]
+
+
+def test_cyclical_router_interrupt_before():
+    state = RouterState(result={}, execution_order=[])
+    graph = Graph(state=state)
+
+    @graph.node()
+    def route_a(state):
+        print("Executing route_a")
+        return {"result": {"result": "from route A"}, "execution_order": "route_a"}
+
+    @graph.node(interrupt="before")
+    def route_b(state):
+        print("Executing route_b")
+        return {"result": {"result": "from route B"}, "execution_order": "route_b"}
+
+    @graph.node()
+    def route_c(state):
+        print("Executing route_c")
+        if True:
+            return "route_b"
+        return "route_d"
+
+    @graph.node()
+    def route_d(state):
+        print("Executing route_d")
+        return {"result": {"result": "from route D"}, "execution_order": "route_d"}
+
+    # Add edges
+    graph.add_edge(START, "route_a")
+    graph.add_edge("route_a", "route_b")
+    graph.add_router_edge("route_b", "route_c")
+    graph.add_edge("route_d", END)
+
+    graph.compile()
+
+    # Initial execution - should pause before route_b
+    graph.start()
+    assert state.result == {"result": "from route A"}  # Empty because we pause before route_b
+    assert state.execution_order == ["route_a"]
+
+    # First resume - should execute route_b and pause before route_b again
+    graph.resume()
+    assert state.result == {"result": "from route B"}
+    assert state.execution_order == ["route_a", "route_b"]
+
+    # Second resume - should execute route_b and pause before route_b again
+    graph.resume()
+    assert state.result == {"result": "from route B"}
+    assert state.execution_order == ["route_a", "route_b", "route_b"]
+
+    # Third resume - pattern continues
+    graph.resume()
+    assert state.result == {"result": "from route B"}
+    assert state.execution_order == ["route_a", "route_b", "route_b", "route_b"]
