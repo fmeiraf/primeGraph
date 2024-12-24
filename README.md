@@ -42,9 +42,9 @@ _Note from the author: This project came to life through my experience of creati
 pip install primeGraph
 ```
 
-## Usage
+## Core Features
 
-### Basic Usage
+### The Basics
 
 ```python
 from primeGraph import Graph
@@ -557,6 +557,90 @@ if __name__ == "__main__":
 
 ```
 
+## Basic Usage examples
+
+_Find examples in the [examples](examples) folder._
+
+### Chatbot (yep, one more chatbot example)
+
+```python
+from primeGraph import Graph
+from primeGraph.models import GraphState
+from primeGraph.buffer import History, LastValue, Incremental
+from pydantic import BaseModel, Field
+from openai import OpenAI
+import instructor
+
+class ChatbotState(GraphState):
+    chat_history: History[dict[str, str]]
+    user_wants_to_exit: LastValue[bool] = Field(default=False)
+
+class ChatbotResponse(BaseModel):
+    chat_message: str
+    user_requested_to_quit: bool = Field(description="returns true if user is requesting to quit the chat")
+
+
+chatbot_state = ChatbotState(chat_history=[], user_wants_to_exit=False)
+chatbot_graph = Graph(state=chatbot_state, verbose=False)
+
+@chatbot_graph.node(interrupt="before")
+def chat_with_user(state):
+
+    # user input will be inserted directly into the chat_history on the state
+    # Extract structured data from natural language
+    try:
+        res = client.chat.completions.create(
+            model="gpt-4o-mini",
+            response_model=ChatbotResponse,
+            messages=state.chat_history,
+        )
+        print(res.chat_message)
+        return {"chat_history": {"role": "assistant", "content": res.chat_message},
+                "user_wants_to_exit": res.user_requested_to_quit}
+
+    except Exception as e:
+        raise e
+
+
+@chatbot_graph.node()
+def assess_next_step(state):
+    if state.user_wants_to_exit:
+        return END
+    return "chat_with_user"
+
+chatbot_graph.add_edge(START, "chat_with_user")
+chatbot_graph.add_router_edge("chat_with_user", "assess_next_step")
+
+chatbot_graph.compile()
+chatbot_graph.visualize()
+```
+
+<p align="center">
+  <img src="docs/images/readme_chatbot.png" alt="Chatbot visualization" width="400"/>
+</p>
+
+```python
+# Running the chatbot on a loop
+chatbot_graph.start()
+
+def add_user_message(message: str):
+    chatbot_state.chat_history.append({"role": "user", "content": message})
+
+while not chatbot_state.user_wants_to_exit:
+
+    user_input = input("Your message: ")
+    print(f"You: {user_input}")
+    add_user_message(user_input)
+
+    chatbot_graph.resume()
+
+print("Bye")
+
+
+```
+
+### Async workflow
+
 ## Roadmap
 
 - [ ] Add streaming support
@@ -564,3 +648,7 @@ if __name__ == "__main__":
 - [ ] Add tools for agentic workflows
 - [ ] Add inter node epheral state for short term interactions
 - [ ] Add persistence support for other databases
+
+```
+
+```
