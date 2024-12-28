@@ -1,38 +1,43 @@
-[tool.poetry]
+[project]
+authors = [{ name = "Fernando Meira", email = "fmeira.filho@gmail.com" }]
+license = { text = "MIT" }
+requires-python = "<4.0,>=3.11"
+dependencies = [
+    "graphviz<1.0.0,>=0.20.3",
+    "pydantic<3.0.0,>=2.9.2",
+    "rich<14.0.0,>=13.9.4",
+    "psycopg2-binary<3.0.0,>=2.9.10",
+    "fastapi<1.0.0,>=0.110.0",
+    "uvicorn<1.0.0,>=0.27.0",
+    "websockets<11.0,>=10.0",
+]
 name = "primeGraph"
 version = "0.1.0"
 description = "A lightweight graph approach to LLM workflows."
-authors = ["Fernando Meira <fmeira.filho@gmail.com>"]
 readme = "README.md"
+
+[project.urls]
 repository = "https://github.com/fmeiraf/primeGraph"
-packages = [{ include = "primegraph" }]
 
-[tool.poetry.dependencies]
-python = "^3.11"
-graphviz = "^0.20.3"
-pydantic = "^2.9.2"
-rich = "^13.9.4"
-psycopg2-binary = "^2.9.10"
-fastapi = "^0.110.0"
-uvicorn = "^0.27.0"
-websockets = "^10.0"
+[project.scripts]
+test = "pytest:main"
 
-[tool.poetry.group.dev.dependencies]
-pre-commit = "^4.0.1"
-pytest = "^8.3.3"
-pytest-asyncio = "^0.24.0"
-build = "^1.2.2.post1"
-twine = "^6.0.1"
-ruff = "^0.8.3"
-mypy = "^1.13.0"
-types-psycopg2 = "^2.9.21.20241019"
+[dependency-groups]
+dev = [
+    "pre-commit<5.0.0,>=4.0.1",
+    "pytest<9.0.0,>=8.3.3",
+    "pytest-asyncio<1.0.0,>=0.24.0",
+    "build<2.0.0.0,>=1.2.2.post1",
+    "twine<7.0.0,>=6.0.1",
+    "ruff<1.0.0,>=0.8.3",
+    "mypy<2.0.0,>=1.13.0",
+    "types-psycopg2<3.0.0.0,>=2.9.21.20241019",
+]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-[tool.poetry.scripts]
-test = "pytest:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -40,53 +45,6 @@ python_files = ["test_*.py"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
-
-[tool.ruff]
-line-length = 120
-indent-width = 2
-target-version = "py311"
-
-# Exclude a variety of commonly ignored directories.
-exclude = [
-    ".bzr",
-    ".direnv",
-    ".eggs",
-    ".git",
-    ".git-rewrite",
-    ".hg",
-    ".mypy_cache",
-    ".nox",
-    ".pants.d",
-    ".pytype",
-    ".ruff_cache",
-    ".svn",
-    ".tox",
-    ".venv",
-    "__pypackages__",
-    "_build",
-    "buck-out",
-    "build",
-    "dist",
-    "node_modules",
-    "venv",
-    "tests/*",
-    "examples/*",
-    "notebooks/*",
-]
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "B", "C4", "ARG", "SIM", "ERA", "PL", "RUF"]
-ignore = ["PLR0915"]
-fixable = ["ALL"]
-unfixable = []
-dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
-
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-skip-magic-trailing-comma = false
-line-ending = "auto"
 
 [tool.mypy]
 python_version = "3.11"

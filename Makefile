@@ -1,4 +1,4 @@
-.PHONY: clean build test publish lint type-check format check-all lock
+.PHONY: clean build test publish lint type-check format check-all lock check
 
 clean:
 	rm -rf dist/
@@ -7,36 +7,38 @@ clean:
 	find . -type d -name .ruff_cache -exec rm -rf {} +
 
 test:
-	poetry run pytest -v
+	uv run pytest -v
 
 build: clean
-	poetry build
+	uv build
 
 lint:
-	poetry run ruff check .
+	uv run ruff check .
 
 format:
-	poetry run ruff format .
+	uv run ruff format .
 
 type-check:
-	poetry run mypy .
+	uv run mypy .
 
 lock:
-	poetry lock --no-update
+	uv lock
 
-check-all: lock lint type-check test
-	poetry check
-	poetry run pip check
+check: lock lint type-check test
+	
+
+check-all: lock lint type-check test	
+	uv run pip check
 
 publish-test: check-all build
-	poetry config repositories.testpypi https://test.pypi.org/legacy/
-	poetry publish -r testpypi
+	uv publish --publish-url https://test.pypi.org/legacy/
 
 publish: check-all build
-	poetry publish
+	uv publish
 
 install:
-	poetry install
+	uv venv
+	uv sync
 
 update:
-	poetry update
+	uv update
