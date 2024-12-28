@@ -1,11 +1,10 @@
-name: CI/CD
+name: Test
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+
   pull_request:
-    branches: [main]
 
 jobs:
   test:
@@ -13,49 +12,20 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - name: Set up Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: "3.11"
-
-      - name: Install Poetry
+      - name: Install uv (local testing)
+        if: ${{ env.ACT }}
         run: |
-          curl -sSL https://install.python-poetry.org | python3 -
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install uv (GitHub)
+        if: ${{ !env.ACT }}
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
 
       - name: Install dependencies
-        run: poetry install
+        run: make install
 
-      - name: Run linting
-        run: poetry run ruff check .
-
-      - name: Run type checking
-        run: poetry run mypy .
-
-      - name: Run tests
-        run: poetry run pytest tests/ --ignore=tests/test_postgresql_checkpoint.py
-
-  publish:
-    needs: test
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - uses: actions/checkout@v2
-
-      - name: Set up Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: "3.11"
-
-      - name: Install Poetry
+      - name: Run all checks except PostgreSQL tests
         run: |
-          curl -sSL https://install.python-poetry.org | python3 -
-
-      - name: Configure Poetry
-        # yamllint disable-line rule:line-length
-        run: |
-          poetry config pypi-token.pypi ${{ secrets.PYPI_API_TOKEN }}  # nosec
-
-      - name: Build and publish
-        run: |
-          poetry build
-          poetry publish
+          PYTEST_ADDOPTS="--ignore=tests/test_postgresql_checkpoint.py" make check

@@ -42,3 +42,6 @@ install:
 
 update:
 	uv update
+
+test-actions:
+	act push
