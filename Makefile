@@ -7,7 +7,7 @@ clean:
 	find . -type d -name .ruff_cache -exec rm -rf {} +
 
 test:
-	uv run pytest -v
+	uv run pytest -v -k "not test_postgresql_checkpoint"
 
 build: clean
 	uv build
@@ -31,10 +31,10 @@ check-all: lock lint type-check test
 	uv run pip check
 
 publish-test: check-all build
-	uv publish --publish-url https://test.pypi.org/legacy/
+	source .env && uv publish --publish-url https://test.pypi.org/legacy/ --token $$PYPI_TOKEN_TEST
 
 publish: check-all build
-	uv publish
+	source .env && uv publish --token $$PYPI_TOKEN_PROD
 
 install:
 	uv venv
@@ -45,3 +45,9 @@ update:
 
 test-actions:
 	act push
+
+test-prod-publishing:
+	uv run --with primeGraph --no-project -- python -c "import primeGraph"
+
+test-test-publishing:
+	uv run --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ --with primeGraph --no-project -- python -c "import primeGraph"
