@@ -938,3 +938,103 @@ class Graph(BaseGraph):
 
     # Update the detailed execution path to only include the chosen path
     self.detailed_execution_path[router_idx + 1] = [chosen_path]
+
+  def set_state_and_checkpoint(self, new_state: Union[BaseModel, Dict[str, Any]]) -> None:
+    """Set the graph state and save a checkpoint - ignores buffer type logic.
+
+    Args:
+        new_state: New state instance or dict with updates. If dict, only specified fields will be updated.
+                  Must match the graph's state schema.
+    """
+    if not self.state_schema:
+      raise ValueError("Graph was initialized without state schema, cannot update state")
+
+    if not self.state:
+      raise ValueError("Graph state is not initialized")
+
+    # Handle partial updates via dict
+    if isinstance(new_state, dict):
+      # Validate that all keys exist in current state
+      invalid_keys = set(new_state.keys()) - set(self.state.model_fields.keys())
+      if invalid_keys:
+        raise ValueError(f"Invalid state fields: {invalid_keys}")
+
+      # Create updated state by merging current state with updates
+      current_state_dict = self.state.model_dump()
+      current_state_dict.update(new_state)
+      new_state = self.state.__class__(**current_state_dict)
+
+    # Handle full state update via BaseModel
+    elif not isinstance(new_state, self.state.__class__):
+      raise ValueError(f"New state must be an instance of {self.state.__class__.__name__} or a dict")
+
+    # Update state
+    self.state = new_state
+    self._update_buffers_from_state()
+
+    # Save checkpoint
+    if self.checkpoint_storage:
+      checkpoint_data = CheckpointData(
+        chain_id=self.chain_id,
+        chain_status=self.chain_status,
+        next_execution_node=self.next_execution_node,
+        executed_nodes=self.executed_nodes,
+      )
+      self.checkpoint_storage.save_checkpoint(
+        state_instance=self.state,
+        checkpoint_data=checkpoint_data,
+      )
+      if self.verbose:
+        self.logger.debug("Checkpoint saved after state update")
+
+    elif self.verbose:
+      self.logger.debug("No checkpoint storage configured - state updated without checkpoint")
+
+  def update_state_and_checkpoint(self, updates: Dict[str, Any]) -> None:
+    """Update specific state fields according to their buffer types and save a checkpoint.
+
+    Args:
+        updates: Dict of field updates. Values will be handled according to their buffer type:
+                - History: Values will be appended to existing list
+                - Incremental: Values will be added to current value
+                - LastValue: Values will replace current value
+    """
+    if not self.state_schema:
+      raise ValueError("Graph was initialized without state schema, cannot update state")
+
+    if not self.state:
+      raise ValueError("Graph state is not initialized")
+
+    # Validate that all keys exist in current state
+    invalid_keys = set(updates.keys()) - set(self.state.model_fields.keys())
+    if invalid_keys:
+      raise ValueError(f"Invalid state fields: {invalid_keys}")
+
+    # Update each field according to its buffer type
+    execution_id = f"update_{uuid.uuid4().hex[:8]}"
+    for field_name, new_value in updates.items():
+      buffer = self.buffers[field_name]
+
+      # Update buffer with new value
+      buffer.update(new_value, execution_id)
+
+    # Update state from buffers
+    self._update_state_from_buffers()
+
+    # Save checkpoint
+    if self.checkpoint_storage:
+      checkpoint_data = CheckpointData(
+        chain_id=self.chain_id,
+        chain_status=self.chain_status,
+        next_execution_node=self.next_execution_node,
+        executed_nodes=self.executed_nodes,
+      )
+      self.checkpoint_storage.save_checkpoint(
+        state_instance=self.state,
+        checkpoint_data=checkpoint_data,
+      )
+      if self.verbose:
+        self.logger.debug("Checkpoint saved after state update")
+
+    elif self.verbose:
+      self.logger.debug("No checkpoint storage configured - state updated without checkpoint")

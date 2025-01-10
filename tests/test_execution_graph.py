@@ -847,3 +847,171 @@ def test_execution_steps_with_interrupt():
     graph.resume()
     assert graph.state.number_of_executed_steps == 3  # All tasks executed
     assert graph.state.current_status == "task3_complete"
+
+
+def test_state_update_with_buffers():
+    class TestState(GraphState):
+        counter: Incremental[int]
+        status: LastValue[str]
+        metrics: History[Dict[str, float]]
+
+    # Initialize state with some values
+    initial_state = TestState(
+        counter=5,
+        status="initial",
+        metrics=[{"accuracy": 0.9}]
+    )
+    graph = Graph(state=initial_state)
+
+    # Test partial update (key-only)
+    graph.update_state_and_checkpoint({"counter": 3})
+    # Buffer should be consumed when updating state
+    assert graph.state.counter == 8  # 5 + 3 (Incremental)
+    assert graph.state.status == "initial"  # Unchanged
+    assert graph.state.metrics == [{"accuracy": 0.9}]  # Unchanged
+    assert not graph.buffers['counter']._ready_for_consumption  # Buffer should be consumed
+    
+    # Test multiple keys update
+    graph.update_state_and_checkpoint({
+        "status": "running",
+        "metrics": {"precision": 0.85}
+    })
+    assert graph.state.counter == 8  # Unchanged
+    assert graph.state.status == "running"  # Updated (LastValue)
+    assert graph.state.metrics == [{"accuracy": 0.9}, {"precision": 0.85}]  # Appended (History)
+    assert not graph.buffers['status']._ready_for_consumption  # Buffer should be consumed
+    assert not graph.buffers['metrics']._ready_for_consumption  # Buffer should be consumed
+
+    # Verify buffer values are in sync but consumed
+    for field_name, buffer in graph.buffers.items():
+        assert not buffer._ready_for_consumption  # All buffers should be consumed
+        assert getattr(graph.state, field_name) == buffer.value  # But values should match
+
+
+def test_state_set_complete_reset():
+    class TestState(GraphState):
+        counter: Incremental[int]
+        status: LastValue[str]
+        metrics: History[Dict[str, float]]
+
+    # Initialize state with some values
+    initial_state = TestState(
+        counter=5,
+        status="initial",
+        metrics=[{"accuracy": 0.9}]
+    )
+    graph = Graph(state=initial_state)
+
+    # Test complete state reset
+    new_state = TestState(
+        counter=10,
+        status="complete",
+        metrics=[{"final": 0.95}]
+    )
+    graph.set_state_and_checkpoint(new_state)
+    assert graph.state.counter == 10  # Complete reset, not incremental
+    assert graph.state.status == "complete"  # New value
+    assert graph.state.metrics == [{"final": 0.95}]  # New list, not appended
+
+    # Test partial state update via dict (should still reset those fields)
+    graph.set_state_and_checkpoint({
+        "counter": 3,
+        "metrics": [{"new": 0.80}]
+    })
+    assert graph.state.counter == 3  # Reset to 3, not added to 10
+    assert graph.state.status == "complete"  # Unchanged
+    assert graph.state.metrics == [{"new": 0.80}]  # Reset to new list, not appended
+
+
+def test_state_update_validation():
+    class TestState(GraphState):
+        counter: Incremental[int]
+        status: LastValue[str]
+        metrics: History[Dict[str, float]]
+
+    initial_state = TestState(
+        counter=0,
+        status="initial",
+        metrics=[{"accuracy": 0.9}]
+    )
+    graph = Graph(state=initial_state)
+
+    # Test invalid key for both methods
+    with pytest.raises(ValueError, match="Invalid state fields"):
+        graph.update_state_and_checkpoint({"invalid_key": 123})
+    with pytest.raises(ValueError, match="Invalid state fields"):
+        graph.set_state_and_checkpoint({"invalid_key": 123})
+
+    # Test invalid types
+    with pytest.raises((TypeError, ValidationError)):
+        graph.update_state_and_checkpoint({"counter": "not_an_int"})
+    with pytest.raises((TypeError, ValidationError)):
+        graph.set_state_and_checkpoint({"counter": "not_an_int"})
+
+    # Test invalid model type
+    class DifferentState(GraphState):
+        field: LastValue[str]
+
+    with pytest.raises(ValueError, match="must be an instance of"):
+        graph.set_state_and_checkpoint(DifferentState(field="test"))
+
+    # Verify state remained unchanged after failed updates
+    assert graph.state.counter == 0
+    assert graph.state.status == "initial"
+    assert graph.state.metrics == [{"accuracy": 0.9}]
+
+
+def test_buffer_behavior_differences():
+    class BufferTestState(GraphState):
+        last_value: LastValue[str]
+        history: History[str]
+        increment: Incremental[int]
+
+    initial_state = BufferTestState(
+        last_value="initial",
+        history=["first"],
+        increment=0
+    )
+    graph = Graph(state=initial_state)
+
+    # Test update behavior (using buffers)
+    graph.update_state_and_checkpoint({
+        "last_value": "update1",
+        "history": "second",
+        "increment": 5
+    })
+    assert graph.state.last_value == "update1"  # LastValue: replaced
+    assert graph.state.history == ["first", "second"]  # History: appended
+    assert graph.state.increment == 5  # Incremental: added to 0
+
+    graph.update_state_and_checkpoint({
+        "last_value": "update2",
+        "history": "third",
+        "increment": 3
+    })
+    assert graph.state.last_value == "update2"  # LastValue: replaced
+    assert graph.state.history == ["first", "second", "third"]  # History: appended
+    assert graph.state.increment == 8  # Incremental: added to 5
+
+    # Test set behavior (direct replacement)
+    graph.set_state_and_checkpoint({
+        "last_value": "set1",
+        "history": ["new_first"],
+        "increment": 10
+    })
+    assert graph.state.last_value == "set1"  # Direct replacement
+    assert graph.state.history == ["new_first"]  # Complete reset of list
+    assert graph.state.increment == 10  # Direct replacement, not incremental
+
+    # Verify that subsequent updates after set follow buffer rules
+    graph.update_state_and_checkpoint({
+        "last_value": "update3",
+        "history": "new_second",
+        "increment": 5
+    })
+    assert graph.state.last_value == "update3"  # LastValue: replaced
+    assert graph.state.history == ["new_first", "new_second"]  # History: appended to reset list
+    assert graph.state.increment == 15  # Incremental: added to reset value
+
+
+
