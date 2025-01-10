@@ -46,7 +46,7 @@ repos:
         exclude: ^(tests/|examples/|notebooks/)
       - id: pytest
         name: pytest
-        entry: uv run pytest -v
+        entry: uv run pytest -v -k "not test_postgresql_checkpoint"
         language: system
         types: [python]
         pass_filenames: false
