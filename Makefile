@@ -1,4 +1,4 @@
-.PHONY: clean build test publish lint type-check format check-all lock check
+.PHONY: clean build test publish lint type-check format check-all lock check changelog-check
 
 clean:
 	rm -rf dist/
@@ -30,10 +30,18 @@ check: lock lint type-check test
 check-all: lock lint type-check test	
 	uv run pip check
 
-publish-test: check-all build
+changelog-check:
+	@latest_version=$$(grep -m 1 "## \[.*\]" CHANGELOG.md | grep -o "\[.*\]" | tr -d '[]'); \
+	project_version=$$(grep '^version = ' pyproject.toml | cut -d'"' -f2); \
+	if [ "$$latest_version" != "$$project_version" ]; then \
+		echo "Error: Version mismatch! CHANGELOG.md ($$latest_version) != pyproject.toml ($$project_version)"; \
+		exit 1; \
+	fi
+
+publish-test: changelog-check check-all build
 	source .env && uv publish --publish-url https://test.pypi.org/legacy/ --token $$PYPI_TOKEN_TEST
 
-publish: check-all build
+publish: changelog-check check-all build
 	source .env && uv publish --token $$PYPI_TOKEN_PROD
 
 install:
