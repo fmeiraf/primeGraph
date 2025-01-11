@@ -42,6 +42,12 @@ _Note from the author: This project came to life through my experience of creati
 pip install primeGraph
 ```
 
+#### [Optional] Install Graphviz for visualization
+
+To have the graph.visualize() method work, you need to install Graphviz binary on top of primeGraph package. Here is how to do it:
+
+Link to install Graphviz: https://graphviz.org/download/
+
 ## Core Features
 
 ### The Basics
