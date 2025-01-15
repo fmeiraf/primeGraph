@@ -446,7 +446,13 @@ class Graph(BaseGraph):
             # Handle after interrupts
             if not isinstance(node_name, list) and self._get_interrupt_status(node_name) == "after":
               if not self.start_from:
-                self.next_execution_node = self.execution_plan[node_index + 1].node_name
+                # Check if there is a next node before accessing it
+                if node_index + 1 < len(self.execution_plan):
+                  self.next_execution_node = self.execution_plan[node_index + 1].node_name
+                else:
+                  # We're at the last node, set status to DONE instead
+                  self._update_chain_status(ChainStatus.DONE)
+                  return
                 self._update_chain_status(ChainStatus.PAUSE)
                 return
               else:
@@ -479,6 +485,9 @@ class Graph(BaseGraph):
 
       if self.chain_status == ChainStatus.RUNNING:
         execute_node(node, node_index)
+        # Check if this was the last node
+        if node_index == len(self.execution_plan) - 1:
+          self._update_chain_status(ChainStatus.DONE)
       else:
         return
 
@@ -796,14 +805,20 @@ class Graph(BaseGraph):
           # Handle after interrupts
           if not isinstance(node_name, list) and self._get_interrupt_status(node_name) == "after":
             if not self.start_from:
-              self.next_execution_node = self.execution_plan[node_index + 1].node_name
+              # Check if there is a next node before accessing it
+              if node_index + 1 < len(self.execution_plan):
+                self.next_execution_node = self.execution_plan[node_index + 1].node_name
+              else:
+                # We're at the last node, set status to DONE instead
+                self._update_chain_status(ChainStatus.DONE)
+                return
               self._update_chain_status(ChainStatus.PAUSE)
               return
             else:
               self.start_from = None
               self._update_chain_status(ChainStatus.RUNNING)
 
-          return result
+            return result
 
         except asyncio.TimeoutError as e:
           self.logger.error(f"Timeout in node {node_name}")
@@ -830,6 +845,9 @@ class Graph(BaseGraph):
 
       if self.chain_status == ChainStatus.RUNNING:
         await execute_node(node, node_index)
+
+        if node_index == len(self.execution_plan) - 1:
+          self._update_chain_status(ChainStatus.DONE)
       else:
         return
 

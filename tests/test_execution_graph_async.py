@@ -7,6 +7,7 @@ from primeGraph.buffer.factory import History, Incremental, LastValue
 from primeGraph.constants import END, START
 from primeGraph.graph.executable import Graph
 from primeGraph.models.state import GraphState
+from primeGraph.types import ChainStatus
 
 
 class StateForTestWithHistory(GraphState):
@@ -543,3 +544,75 @@ async def test_async_cyclical_router_interrupt_before():
     await graph.resume_async()
     assert state.result == {"result": "from route B"}
     assert state.execution_order == ["route_a", "route_b", "route_b", "route_b"]
+
+
+@pytest.mark.asyncio
+async def test_async_chain_status_after_completion():
+    state = StateForTestWithHistory(execution_order=[])
+    graph = Graph(state=state)
+
+    @graph.node()
+    async def task1(state):
+        return {"execution_order": "task1"}
+
+    @graph.node()
+    async def task2(state):
+        return {"execution_order": "task2"}
+
+    # Create simple sequential path
+    graph.add_edge(START, "task1")
+    graph.add_edge("task1", "task2")
+    graph.add_edge("task2", END)
+    graph.compile()
+
+    # Execute the graph
+    await graph.start_async()
+
+    # Verify execution completed and chain status is DONE
+    assert graph.state.execution_order == ["task1", "task2"]
+    assert graph.chain_status == ChainStatus.DONE
+
+
+@pytest.mark.asyncio
+async def test_async_chain_status_with_interrupts():
+    state = StateForTestWithHistory(execution_order=[])
+    graph = Graph(state=state)
+
+    @graph.node()
+    async def task1(state):
+        return {"execution_order": "task1"}
+
+    @graph.node(interrupt="before")
+    async def task2(state):
+        return {"execution_order": "task2"}
+
+    @graph.node(interrupt="after")
+    async def task3(state):
+        return {"execution_order": "task3"}
+
+    @graph.node()
+    async def task4(state):
+        return {"execution_order": "task4"}
+
+    # Create path with interrupts
+    graph.add_edge(START, "task1")
+    graph.add_edge("task1", "task2")
+    graph.add_edge("task2", "task3")
+    graph.add_edge("task3", "task4")
+    graph.add_edge("task4", END)
+    graph.compile()
+
+    # First execution - should stop before task2
+    await graph.start_async()
+    assert graph.chain_status == ChainStatus.PAUSE
+    assert graph.state.execution_order == ["task1"]
+
+    # Second execution - should stop after task3
+    await graph.resume_async()
+    assert graph.chain_status == ChainStatus.PAUSE
+    assert graph.state.execution_order == ["task1", "task2", "task3"]
+
+    # Final execution - should complete and set status to DONE
+    await graph.resume_async()
+    assert graph.chain_status == ChainStatus.DONE
+    assert graph.state.execution_order == ["task1", "task2", "task3", "task4"]

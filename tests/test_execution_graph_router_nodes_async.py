@@ -7,6 +7,7 @@ from primeGraph.buffer.factory import History, LastValue
 from primeGraph.constants import END, START
 from primeGraph.graph.executable import Graph
 from primeGraph.models.state import GraphState
+from primeGraph.types import ChainStatus
 
 
 class RouterState(GraphState):
@@ -275,3 +276,78 @@ async def test_cyclical_router():
         "route_b",
         "route_b",
     ]
+
+
+@pytest.mark.asyncio
+async def test_async_chain_status_with_router():
+    state = RouterState(result={}, execution_order=[])
+    graph = Graph(state=state)
+
+    @graph.node()
+    async def route_a(state):
+        return {"result": {"result": "from route A"}, "execution_order": "route_a"}
+
+    @graph.node()
+    async def route_b(state):
+        return {"result": {"result": "from route B"}, "execution_order": "route_b"}
+
+    @graph.node()
+    async def router(state):
+        return "route_b"
+
+    # Add edges
+    graph.add_edge(START, "route_a")
+    graph.add_router_edge("route_a", "router")
+    graph.add_edge("route_b", END)
+
+    graph.compile()
+    await graph.start_async()
+
+    # Verify execution completed and chain status is DONE
+    assert state.result == {"result": "from route B"}
+    assert state.execution_order == ["route_a", "route_b"]
+    assert graph.chain_status == ChainStatus.DONE
+
+
+@pytest.mark.asyncio
+async def test_async_chain_status_with_router_and_interrupts():
+    state = RouterState(result={}, execution_order=[])
+    graph = Graph(state=state)
+
+    @graph.node()
+    async def route_a(state):
+        return {"result": {"result": "from route A"}, "execution_order": "route_a"}
+
+    @graph.node(interrupt="before")
+    async def route_b(state):
+        return {"result": {"result": "from route B"}, "execution_order": "route_b"}
+
+    @graph.node()
+    async def router(state):
+        return "route_b"
+
+    @graph.node()
+    async def route_c(state):
+        return {"result": {"result": "from route C"}, "execution_order": "route_c"}
+
+    # Add edges
+    graph.add_edge(START, "route_a")
+    graph.add_router_edge("route_a", "router")
+    graph.add_edge("route_b", "route_c")
+    graph.add_edge("route_c", END)
+
+    graph.compile()
+
+    # First execution - should stop before route_b
+    await graph.start_async()
+    assert state.result == {"result": "from route A"}
+    assert state.execution_order == ["route_a"]
+    assert graph.chain_status == ChainStatus.PAUSE
+
+    # Second execution - should stop after route_c
+    await graph.resume_async()
+    assert state.result == {"result": "from route C"}
+    assert state.execution_order == ["route_a", "route_b", "route_c"]
+    assert graph.chain_status == ChainStatus.DONE
+
+

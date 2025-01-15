@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+# [0.2.1] - 2025-01-09
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Added ChainStatus.DONE when END node is reached as before it was not flagging the chain as done.
+
 ## [0.2.0] - 2025-01-09
 
 ### Added

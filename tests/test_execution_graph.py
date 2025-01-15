@@ -8,6 +8,7 @@ from primeGraph.buffer.factory import History, Incremental, LastValue
 from primeGraph.constants import END, START
 from primeGraph.graph.executable import ExecutableNode, Graph
 from primeGraph.models.state import GraphState
+from primeGraph.types import ChainStatus
 
 
 @pytest.fixture
@@ -1012,6 +1013,76 @@ def test_buffer_behavior_differences():
     assert graph.state.last_value == "update3"  # LastValue: replaced
     assert graph.state.history == ["new_first", "new_second"]  # History: appended to reset list
     assert graph.state.increment == 15  # Incremental: added to reset value
+
+
+def test_chain_status_after_completion():
+    state = StateForTestWithHistory(execution_order=[])
+    graph = Graph(state=state)
+
+    @graph.node()
+    def task1(state):
+        return {"execution_order": "task1"}
+
+    @graph.node()
+    def task2(state):
+        return {"execution_order": "task2"}
+
+    # Create simple sequential path
+    graph.add_edge(START, "task1")
+    graph.add_edge("task1", "task2")
+    graph.add_edge("task2", END)
+    graph.compile()
+
+    # Execute the graph
+    graph.start()
+
+    # Verify execution completed and chain status is DONE
+    assert graph.state.execution_order == ["task1", "task2"]
+    assert graph.chain_status == ChainStatus.DONE
+
+
+def test_chain_status_with_interrupts():
+    state = StateForTestWithHistory(execution_order=[])
+    graph = Graph(state=state)
+
+    @graph.node()
+    def task1(state):
+        return {"execution_order": "task1"}
+
+    @graph.node(interrupt="before")
+    def task2(state):
+        return {"execution_order": "task2"}
+
+    @graph.node(interrupt="after")
+    def task3(state):
+        return {"execution_order": "task3"}
+
+    @graph.node()
+    def task4(state):
+        return {"execution_order": "task4"}
+
+    # Create path with interrupts
+    graph.add_edge(START, "task1")
+    graph.add_edge("task1", "task2")
+    graph.add_edge("task2", "task3")
+    graph.add_edge("task3", "task4")
+    graph.add_edge("task4", END)
+    graph.compile()
+
+    # First execution - should stop before task2
+    graph.start()
+    assert graph.chain_status == ChainStatus.PAUSE
+    assert graph.state.execution_order == ["task1"]
+
+    # Second execution - should stop after task3
+    graph.resume()
+    assert graph.chain_status == ChainStatus.PAUSE
+    assert graph.state.execution_order == ["task1", "task2", "task3"]
+
+    # Final execution - should complete and set status to DONE
+    graph.resume()
+    assert graph.chain_status == ChainStatus.DONE
+    assert graph.state.execution_order == ["task1", "task2", "task3", "task4"]
 
 
 
