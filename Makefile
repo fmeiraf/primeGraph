@@ -31,7 +31,7 @@ check-all: lock lint type-check test
 	uv run pip check
 
 changelog-check:
-	@latest_version=$$(grep -m 1 "## \[.*\]" CHANGELOG.md | grep -o "\[.*\]" | tr -d '[]'); \
+	@latest_version=$$(grep -m 1 "^#* \[.*\]" CHANGELOG.md | grep -o "\[.*\]" | tr -d '[]'); \
 	project_version=$$(grep '^version = ' pyproject.toml | cut -d'"' -f2); \
 	if [ "$$latest_version" != "$$project_version" ]; then \
 		echo "Error: Version mismatch! CHANGELOG.md ($$latest_version) != pyproject.toml ($$project_version)"; \
