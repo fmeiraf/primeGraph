@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+# [0.2.2] - 2025-01-23
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Fixed the `END` node not flagging the chain as done.
+- Added better error messages for buffer type validation.
+
 # [0.2.1] - 2025-01-14
 
 ### Added
