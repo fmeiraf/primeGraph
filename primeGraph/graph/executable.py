@@ -263,6 +263,10 @@ class Graph(BaseGraph):
 
     def execute_task(task: Callable, node_name: str) -> Any:
       """Execute a single task with proper state handling."""
+      # Special handling for END node
+      if node_name == END:
+        self._update_chain_status(ChainStatus.DONE)
+        return
 
       # added this way to have access to class .self
       def run_task() -> Any:
@@ -450,8 +454,6 @@ class Graph(BaseGraph):
                 if node_index + 1 < len(self.execution_plan):
                   self.next_execution_node = self.execution_plan[node_index + 1].node_name
                 else:
-                  # We're at the last node, set status to DONE instead
-                  self._update_chain_status(ChainStatus.DONE)
                   return
                 self._update_chain_status(ChainStatus.PAUSE)
                 return
@@ -485,9 +487,6 @@ class Graph(BaseGraph):
 
       if self.chain_status == ChainStatus.RUNNING:
         execute_node(node, node_index)
-        # Check if this was the last node
-        if node_index == len(self.execution_plan) - 1:
-          self._update_chain_status(ChainStatus.DONE)
       else:
         return
 
@@ -614,6 +613,11 @@ class Graph(BaseGraph):
 
     async def execute_task(task: Callable, node_name: str) -> Any:
       """Execute a single task with proper state handling."""
+      # Special handling for END node
+      if node_name == END:
+        self._update_chain_status(ChainStatus.DONE)
+        return
+
       self.logger.debug(f"Executing task in node: {node_name}")
 
       async def run_task() -> Any:
@@ -809,8 +813,6 @@ class Graph(BaseGraph):
               if node_index + 1 < len(self.execution_plan):
                 self.next_execution_node = self.execution_plan[node_index + 1].node_name
               else:
-                # We're at the last node, set status to DONE instead
-                self._update_chain_status(ChainStatus.DONE)
                 return
               self._update_chain_status(ChainStatus.PAUSE)
               return
@@ -846,8 +848,6 @@ class Graph(BaseGraph):
       if self.chain_status == ChainStatus.RUNNING:
         await execute_node(node, node_index)
 
-        if node_index == len(self.execution_plan) - 1:
-          self._update_chain_status(ChainStatus.DONE)
       else:
         return
 

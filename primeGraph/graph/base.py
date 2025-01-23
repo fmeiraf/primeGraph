@@ -513,7 +513,7 @@ class BaseGraph:
 
     def build_execution_plan(current: str, parent: str = START) -> List[Any]:
       if current == END:
-        return []
+        return [(parent, current)]
 
       next_nodes = get_next_nodes(current)
 

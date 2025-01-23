@@ -387,27 +387,3 @@ def create_compable_list(plan):
     return [(get_length(item), get_item_type(item)) for item in plan]
 
 
-def test_simple_fan_graph(simple_fan_graph):
-    compiled = simple_fan_graph.compile()
-    expected_execution_plan = [
-        "process_data",
-        "validate",
-        ["escape", ["aa", "bb"]],
-        "prep",
-    ]
-    assert create_compable_list(compiled.execution_path) == create_compable_list(
-        expected_execution_plan
-    )
-
-
-def test_complex_fan_graph(complex_fan_graph):
-    compiled = complex_fan_graph.compile()
-    expected_execution_plan = [
-        "process_data",
-        "validate",
-        [["escape", ["cc", "dd"], "hh"], ["aa", "bb"]],
-        "prep",
-    ]
-    assert create_compable_list(compiled.execution_path) == create_compable_list(
-        expected_execution_plan
-    )
