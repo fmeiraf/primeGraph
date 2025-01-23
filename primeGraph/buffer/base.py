@@ -65,7 +65,10 @@ class BaseBuffer(ABC):
       origin = get_origin(expected_type)
       if origin is None:
         if not isinstance(value, expected_type):
-          raise TypeError(f"Value must be {expected_type}, got {type(value)}")
+          raise TypeError(
+            f"""Field >>{self.field_name}<< must be {expected_type}, got {type(value)}. 
+            Value: {value}, Expected Type: {expected_type}"""
+          )
         return
 
       if origin is dict:
