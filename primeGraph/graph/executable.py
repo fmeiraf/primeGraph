@@ -688,6 +688,7 @@ class Graph(BaseGraph):
 
     async def execute_tasks(tasks: Union[List, Tuple, Any], node_index: int) -> Any:  # noqa: PLR0911, PLR0912
       """Recursively execute tasks respecting list (sequential) and tuple (parallel) structures"""
+
       if self._is_blocking_execution(execution_id):
         return  # Skip execution if we're restarting
 
@@ -831,6 +832,7 @@ class Graph(BaseGraph):
 
     async def execute_node(node: ExecutableNode, node_index: int) -> None:
       """Execute a single node or group of nodes with proper concurrency handling."""
+
       tasks = extract_tasks_from_node(node)
       await execute_tasks(tasks, node_index)
 
@@ -858,7 +860,7 @@ class Graph(BaseGraph):
     timeout: Union[int, float] = 60 * 5,
   ) -> None:
     """Async version of execute method"""
-    if start_from is None:
+    if start_from is None or self.is_cyclical_run:
       self.executed_nodes.clear()
     if not timeout:
       timeout = self.execution_timeout

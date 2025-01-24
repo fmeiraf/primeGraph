@@ -12,7 +12,7 @@ dependencies = [
     "websockets<11.0,>=10.0",
 ]
 name = "primeGraph"
-version = "0.2.2"
+version = "0.2.3"
 description = "A lightweight graph approach to LLM workflows."
 readme = "README.md"
 

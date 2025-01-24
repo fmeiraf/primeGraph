@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+# [0.2.3] - 2025-01-23
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Fixed variable cleaning on resume_async method that was making it get stuck.
+
 # [0.2.2] - 2025-01-23
 
 ### Added
