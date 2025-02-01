@@ -32,6 +32,8 @@ dev = [
     "ruff<1.0.0,>=0.8.3",
     "mypy<2.0.0,>=1.13.0",
     "types-psycopg2<3.0.0.0,>=2.9.21.20241019",
+    "instructor>=1.7.2",
+    "ipykernel>=6.29.5",
 ]
 
 [build-system]
