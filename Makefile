@@ -9,6 +9,9 @@ clean:
 test:
 	uv run pytest -v -k "not test_postgresql_checkpoint"
 
+test-all:
+	uv run pytest -v
+
 build: clean
 	uv build
 
