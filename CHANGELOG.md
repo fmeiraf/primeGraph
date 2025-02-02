@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+# [0.2.5] - 2025-02-02
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Fixed base.py on \_analyze_router_paths method that was not checking if the router node has any possible routes.
+
 # [0.2.4] - 2025-02-02
 
 ### Added

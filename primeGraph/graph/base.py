@@ -1045,51 +1045,43 @@ class BaseGraph:
         raise ValueError(f"Return node '{return_node}' does not exist in the graph")
       self.add_edge(router_node, return_node)
 
+    # Validate that all possible routes from the router node are reachable
+    possible_routes = self.nodes[start_node].possible_routes
+    if possible_routes is not None:
+      for route in possible_routes:
+        if not any(edge.end_node == route for edge in self.edges):
+          raise ValueError(f"Router node '{start_node}' has unreachable route: {route}")
+
     return self
 
   def _analyze_router_paths(self) -> Dict[str, Dict[str, List[str]]]:
-    """Identifies execution paths in the graph with parallel and nested parallel paths."""
+    """Identifies all possible execution paths from router nodes."""
     router_paths: Dict[str, Dict[str, List[str]]] = {}
 
     def get_next_nodes(node: str) -> List[str]:
       return [edge.end_node for edge in self.edges if edge.start_node == node]
 
-    def get_prev_nodes(node: str) -> List[str]:
-      return [edge.start_node for edge in self.edges if edge.end_node == node]
-
-    def is_convergence_point(node: str) -> bool:
-      return len(get_prev_nodes(node)) > 1
-
     def follow_path(start_node: str, visited: Optional[Set[str]] = None) -> List[str]:
       if visited is None:
         visited = set()
 
-      if start_node in visited:
-        return []
+      if start_node in visited or start_node == END:
+        return [start_node]
 
       current_path = [start_node]
-      current = start_node
-      visited.add(current)
+      visited.add(start_node)
 
-      while True:
-        next_nodes = get_next_nodes(current)
-        if not next_nodes or current == END:
-          break
+      next_nodes = get_next_nodes(start_node)
+      if not next_nodes:
+        return current_path
 
-        next_node = next_nodes[0]
-        # Check if next node is a router
-        if next_node in self.nodes and self.nodes[next_node].is_router:
-          # Add the router node but don't follow its paths
-          current_path.append(next_node)
-          break
-
-        if is_convergence_point(next_node):
-          current_path.append(next_node)
-          break
-
-        current_path.append(next_node)
-        current = next_node
-        visited.add(current)
+      # For each next node, follow its path and take the first valid one
+      for next_node in next_nodes:
+        if next_node not in visited:
+          rest_of_path = follow_path(next_node, visited.copy())
+          if rest_of_path:
+            current_path.extend(rest_of_path[1:])  # Skip first node as it's already included
+            break
 
       return current_path
 
@@ -1102,17 +1094,5 @@ class BaseGraph:
           paths[route] = current_path
 
         router_paths[node_name] = paths
-
-    # Second pass to handle nested routers
-    for _, paths in router_paths.items():
-      for route, path in paths.items():
-        complete_path: List[str] = []
-        for node_name in path:
-          complete_path.append(node_name)
-          if node_name in router_paths:
-            # If this node is a router, get its default path
-            next_route = next(iter(router_paths[node_name].keys()))
-            complete_path.extend(router_paths[node_name][next_route][1:])
-        paths[route] = complete_path
 
     return router_paths
