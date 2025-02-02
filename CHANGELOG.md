@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+# [0.2.4] - 2025-02-02
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Fixed base.py build_path when working with cyclical graphs.
+
 # [0.2.3] - 2025-01-23
 
 ### Added

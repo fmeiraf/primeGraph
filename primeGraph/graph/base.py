@@ -407,7 +407,6 @@ class BaseGraph:
       return len(get_prev_nodes(node)) > 1
 
     def find_convergence_point(start_nodes: List[str]) -> str:
-      """Find where multiple paths converge."""
       visited_by_path = {start: {start} for start in start_nodes}
       current_nodes = {start: [start] for start in start_nodes}
       max_iterations = len(self.nodes) * 2  # Safety limit
@@ -415,25 +414,19 @@ class BaseGraph:
 
       while iteration < max_iterations:
         iteration += 1
-        # For each path, get the next node
         for start in start_nodes:
           if current_nodes[start][-1] != END:
             current = current_nodes[start][-1]
             next_nodes = get_next_nodes(current)
-
             if not next_nodes:
               continue
-
             next_node = next_nodes[0]
-
-            # Handle router nodes - don't follow cycles
+            # Handle router nodes, skip cycles
             if self.nodes[current].is_router and next_node in visited_by_path[start]:
               continue
-
             visited_by_path[start].add(next_node)
             current_nodes[start].append(next_node)
 
-        # Check if any node is visited by multiple paths
         all_visited: Set[str] = set()
         for nodes in visited_by_path.values():
           intersection = all_visited.intersection(nodes)
@@ -441,55 +434,47 @@ class BaseGraph:
             return next(iter(intersection))
           all_visited.update(nodes)
 
-        # Check if all paths have reached END
         if all(nodes[-1] == END for nodes in current_nodes.values()):
           return END
-
-      # If no convergence found within limit, return END
       return END
 
     def build_path_to_convergence(start: str, convergence: str, visited: Set[str], parent: str) -> List[Any]:  # noqa: PLR0912
       if start in visited:
-        # If we've visited this node before, just add it without following its path
+        # If we've visited this node before, just add the edge and break out.
         return [(parent, start)]
-
-      path = []
+      path: List[Any] = []  # explicitly mark path as list[Any]
       current = start
       visited.add(current)
-
       while current != convergence:
         next_nodes = get_next_nodes(current)
 
-        # Handle router nodes
+        # Handle router nodes without following cycles
         if current in self.nodes and self.nodes[current].is_router:
           path.append((parent, current))
-          # Get the next node after the router
           if next_nodes:
-            # Don't follow the path if it leads back to a visited node
             next_node = next_nodes[0]
             if next_node in visited:
               break
             current = next_node
             parent = current
             visited.add(current)
-          continue
+            continue
 
         if len(next_nodes) > 1:
-          # Handle nested parallel paths
           nested_convergence = find_convergence_point(next_nodes)
           nested_paths = []
           for next_node in next_nodes:
-            # Don't follow paths that lead back to visited nodes
             if next_node not in visited:
               nested_path = build_path_to_convergence(next_node, nested_convergence, visited.copy(), current)
-              if nested_path:  # Only add non-empty paths
+              if nested_path:
+                # If nested_path is wrapped as a one-item list, unwrap it.
                 if isinstance(nested_path, list) and len(nested_path) == 1:
                   nested_paths.append(nested_path[0])
                 else:
                   nested_paths.append(nested_path)
-
-          if nested_paths:  # Only extend if there are valid nested paths
-            path.append([(parent, current), nested_paths])  # type: ignore
+          if nested_paths:
+            # Now wrap the parallel branch as a tuple instead of a list.
+            path.append(((parent, current), nested_paths))
           current = nested_convergence
         elif not next_nodes:
           path.append((parent, current))
@@ -508,63 +493,58 @@ class BaseGraph:
           current = next_nodes[0]
           parent = current
           visited.add(current)
-
       return path
 
-    def build_execution_plan(current: str, parent: str = START) -> List[Any]:
+    def build_execution_plan(current: str, parent: str = START, visited: Optional[Set[str]] = None) -> List[Any]:
+      if visited is None:
+        visited = set()
+      if current in visited:
+        # Cycle detected, mark the graph as cyclical and break
+        self.is_cyclical_run = True
+        return [(parent, current), "CYCLE"]
+      visited.add(current)
+
       if current == END:
         return [(parent, current)]
 
       next_nodes = get_next_nodes(current)
 
-      # Skip START node
+      # Special handling for the START node to avoid repeating it
       if current == START and len(next_nodes) == 1:
-        return build_execution_plan(next_nodes[0], current)
+        return build_execution_plan(next_nodes[0], current, visited.copy())
 
-      # Handle parallel paths
+      # Handle parallel paths if there are multiple outgoing edges
       if len(next_nodes) > 1:
         convergence = find_convergence_point(next_nodes)
         parallel_paths = []
-
         for next_node in next_nodes:
-          path = build_path_to_convergence(next_node, convergence, set(), current)
+          path = build_path_to_convergence(next_node, convergence, visited.copy(), current)
           if isinstance(path, list) and len(path) == 1:
             path = path[0]
           parallel_paths.append(path)
-
-        return [(parent, current), parallel_paths, *build_execution_plan(convergence, current)]
+        plan = [(parent, current), parallel_paths]
+        plan.extend(build_execution_plan(convergence, current, visited.copy()))
+        return plan
 
       # Handle sequential path
-      return [(parent, current), *build_execution_plan(next_nodes[0], current)]
+      return [(parent, current)] + build_execution_plan(next_nodes[0], current, visited.copy())  # noqa: RUF005
 
-    # Build and clean the execution plan
     plan = build_execution_plan(START)
 
-    def clean_plan(p: Any) -> Any:
-      # Handle non-list items (like tuples)
+    def clean_plan(p: Any) -> Union[List[Any], Any]:
       if not isinstance(p, list):
         return p
-
-      # Handle empty lists
       if not p:
         return p
-
-      # Handle single-item lists
       if len(p) == 1:
         return clean_plan(p[0])
-
-      # Clean the list items
       return [
         clean_plan(item)
         for item in p
-        if item is not None
-        and (
-          not isinstance(item, tuple)  # Handle non-tuple items
-          or (len(item) == TUPLE_LENGTH and item[1] != START)  # Handle tuples
-        )
+        if item is not None and (not isinstance(item, tuple) or (len(item) == TUPLE_LENGTH and item[1] != START))
       ]
 
-    return clean_plan(plan)  # type: ignore
+    return clean_plan(plan)
 
   def compile(self) -> Self:
     """Compiles the graph by validating and organizing execution paths."""
