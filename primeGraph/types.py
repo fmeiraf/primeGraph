@@ -1,9 +1,9 @@
-from enum import Enum, auto
+from enum import Enum
 
 
 class ChainStatus(Enum):
-  IDLE = auto()
-  PAUSE = auto()
-  RUNNING = auto()
-  FAILED = auto()
-  DONE = auto()
+  IDLE = "IDLE"
+  PAUSE = "PAUSE"
+  RUNNING = "RUNNING"
+  FAILED = "FAILED"
+  DONE = "DONE"
