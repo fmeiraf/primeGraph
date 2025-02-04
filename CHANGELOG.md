@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+# [0.2.6] - 2025-02-02
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Changed ChainStatus enum to be a string instead of an integer so it's easier to debug.
+
 # [0.2.5] - 2025-02-02
 
 ### Added
