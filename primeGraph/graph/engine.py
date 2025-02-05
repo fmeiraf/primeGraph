@@ -29,6 +29,8 @@ class GraphExecutor:
         # Frames that represent pending execution branches.
         self.execution_frames = []
 
+        self._visited_nodes = set()
+
     async def _wait_for_resume(self):
         """
         When an interrupt occurs, wait until the user calls resume().
@@ -66,6 +68,12 @@ class GraphExecutor:
             frame = self.execution_frames.pop(0)
             await self._execute_frame(frame)
 
+    def _node_is_executable(self, node_id: str) -> bool:
+        """
+        Check if a node is executable.
+        """
+        return node_id != START and node_id != END and node_id not in self._visited_nodes
+
     async def _execute_frame(self, frame: ExecutionFrame):
         """
         Process one execution branch. This will loop sequentially until a branch
@@ -74,11 +82,9 @@ class GraphExecutor:
         while True:
             node_id = frame.node_id
 
-            # Terminal node reached.
             if node_id == END:
                 return
 
-            # Retrieve the Node object.
             if node_id not in self.graph.nodes:
                 raise Exception(f"Node '{node_id}' not found in graph.")
 
@@ -92,12 +98,14 @@ class GraphExecutor:
             # --- NODE EXECUTION ---
             logger.debug(f"Executing node '{node_id}' with state: {frame.state}")
 
-            if not node_id == START:
+            if self._node_is_executable(node_id):
                 result = None
                 if node.is_async:
                     result = await node.action(frame.state)
                 else:
                     result = await asyncio.to_thread(node.action, frame.state)
+
+            self._visited_nodes.add(node_id)
 
             # Optionally, merge the returned dict (if any) into state.
             # if isinstance(result, dict):
