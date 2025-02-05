@@ -24,20 +24,17 @@ class ExecutionFrame:
 class GraphExecutor:
     def __init__(self, graph: Graph):
         self.graph = graph
-        # This event is used to "pause" execution when an interrupt is hit.
         self._resume_event = asyncio.Event()
-        self._resume_event.set()  # Initially not paused.
+        self._resume_event.clear()
         # Frames that represent pending execution branches.
         self.execution_frames = []
 
     async def _wait_for_resume(self):
         """
         When an interrupt occurs, wait until the user calls resume().
-        Once resumed, clear the event for future pauses.
         """
         logger.debug("Execution paused. Waiting for resume...")
         await self._resume_event.wait()
-        self._resume_event.clear()
         logger.debug("Execution resumed.")
 
     def resume(self):
@@ -46,6 +43,7 @@ class GraphExecutor:
         (In a real system you might trigger this from an external event.)
         """
         self._resume_event.set()
+        self._resume_event.clear()
 
     async def execute(self):
         """
