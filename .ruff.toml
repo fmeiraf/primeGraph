@@ -1,5 +1,5 @@
 line-length = 120
-indent-width = 2
+indent-width = 4
 target-version = "py311"
 
 exclude = [
@@ -41,3 +41,15 @@ quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
+
+[per-file-ignores]
+"notebooks/**/*" = [
+    "F401", # unused imports
+    "F811", # redefinition of unused name
+    "F821", # undefined name
+    "F841", # unused variable
+    "E402", # module level import not at top of file
+    "E501", # line too long
+]
+"**/*.ipynb" = ["F401", "F811", "F821", "F841", "E402", "E501"]
+"*.ipynb" = ["F401", "F811"]
