@@ -72,17 +72,29 @@ class GraphExecutor:
         """
         Check if a node is executable.
         """
-        return node_id != START and node_id != END and node_id not in self._visited_nodes
+        return node_id != START and node_id not in self._visited_nodes
 
     async def _execute_frame(self, frame: ExecutionFrame):
         """
         Process one execution branch. This will loop sequentially until a branch
         forks (parallel execution) or ends.
+
+        Loop works as frame.id is updated and the while loop continues.
+        node_id = node name that is the key on the edges_map dict
+
+        edges_map = {
+            "node_id": ["node_id1", "node_id2", "node_id3"],
+            "node_id1": ["node_id4", "node_id5", "node_id6"],
+            "node_id2": ["node_id7", "node_id8", "node_id9"],
+            "node_id3": ["node_id10", "node_id11", "node_id12"],
+        }
+
         """
         while True:
             node_id = frame.node_id
 
             if node_id == END:
+                logger.debug("Reached END node. Ending branch.")
                 return
 
             if node_id not in self.graph.nodes:
@@ -107,16 +119,15 @@ class GraphExecutor:
 
             self._visited_nodes.add(node_id)
 
-            # Optionally, merge the returned dict (if any) into state.
-            # if isinstance(result, dict):
-            #     frame.state.update(result)
-            # logger.debug(f"Finished node '{node_id}'. Updated state: {frame.state}")
+            # TODO: --- save buffers, update state and checkpoints ---
+            # ...
 
             # --- INTERRUPT AFTER NODE EXECUTION ---
             if node.interrupt == "after":
                 logger.debug(f"[Interrupt-after] Executed node '{node_id}'.")
                 await self._wait_for_resume()
 
+            # TODO: implement router nodes
             # --- ROUTER NODES (OPTIONAL EXTENSION) ---
             if node.is_router:
                 # As an example, assume the node returns a key used to select the branch.
