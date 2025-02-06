@@ -27,7 +27,7 @@ class ExecutionFrame:
 
 
 class GraphExecutor:
-    def __init__(self, graph: Graph):
+    def __init__(self, graph: Graph, timeout: int = 300):
         self.graph = graph
         self._resume_event = asyncio.Event()
         self._resume_event.clear()
@@ -39,6 +39,7 @@ class GraphExecutor:
         self._branch_counter = 0
         self._active_branches = {}  # {convergence_node: set(branch_ids)}
         self._convergence_points = self._identify_convergence_points()
+        self._timeout = timeout
 
     def _identify_convergence_points(self):
         """
@@ -197,10 +198,26 @@ class GraphExecutor:
 
             result = None
             if self._node_is_executable(node_id):
-                if node.is_async:
-                    result = await node.action(frame.state)
-                else:
-                    result = await asyncio.to_thread(node.action, frame.state)
+                try:
+                    # Wrap execution in asyncio.wait_for for timeout
+                    if node.is_async:
+                        result = await asyncio.wait_for(
+                            node.action(frame.state),
+                            timeout=self._timeout,
+                        )
+                    else:
+                        result = await asyncio.wait_for(
+                            asyncio.to_thread(node.action, frame.state),
+                            timeout=self._timeout,
+                        )
+                except asyncio.TimeoutError:
+                    logger.error(f"Node '{node_id}' execution timed out after {self._timeout} seconds")
+                    self.graph._update_chain_status(ChainStatus.FAILED)
+                    return
+                except Exception as e:
+                    logger.error(f"Error executing node '{node_id}': {str(e)}")
+                    self.graph._update_chain_status(ChainStatus.FAILED)
+                    return
 
                 # check return values
                 if not isinstance(result, Union[str, dict]):
