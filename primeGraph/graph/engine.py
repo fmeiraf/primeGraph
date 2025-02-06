@@ -111,7 +111,7 @@ class GraphExecutor:
         """
         Process all pending execution frames.
         """
-        while self.execution_frames:
+        while self.execution_frames and self.graph.chain_status != ChainStatus.DONE:
             frame = self.execution_frames.pop(0)
             await self._execute_frame(frame)
 
@@ -125,17 +125,6 @@ class GraphExecutor:
         """
         Process one execution branch. This will loop sequentially until a branch
         forks (parallel execution) or ends.
-
-        Loop works as frame.id is updated and the while loop continues.
-        node_id = node name that is the key on the edges_map dict
-
-        edges_map = {
-            "node_id": ["node_id1", "node_id2", "node_id3"],
-            "node_id1": ["node_id4", "node_id5", "node_id6"],
-            "node_id2": ["node_id7", "node_id8", "node_id9"],
-            "node_id3": ["node_id10", "node_id11", "node_id12"],
-        }
-
         """
         while True:
             if self.graph.chain_status != ChainStatus.RUNNING:
@@ -143,27 +132,54 @@ class GraphExecutor:
 
             node_id = frame.node_id
 
+            # Add debug logging for branch tracking
+            if frame.branch_id is not None:
+                logger.debug(f"Processing frame with branch_id {frame.branch_id} at node {node_id}")
+                logger.debug(f"Current active branches: {self._active_branches}")
+
             if node_id == END:
                 # Clean up branch tracking if this branch was being tracked
                 if frame.branch_id is not None and frame.target_convergence:
-                    self._active_branches[frame.target_convergence].remove(frame.branch_id)
+                    if frame.branch_id in self._active_branches.get(frame.target_convergence, set()):
+                        self._active_branches[frame.target_convergence].remove(frame.branch_id)
 
+                # Mark execution as complete and return
                 self.graph._update_chain_status(ChainStatus.DONE)
+                # Clear any remaining execution frames to stop further processing
+                self.execution_frames.clear()
                 return
 
             # Check if this is a convergence point
             if node_id in self._convergence_points:
                 if frame.branch_id is not None:
-                    # Remove this branch from tracking
-                    self._active_branches[node_id].remove(frame.branch_id)
+                    # Remove this branch from tracking only if it exists
+                    if (
+                        frame.target_convergence in self._active_branches
+                        and frame.branch_id in self._active_branches[frame.target_convergence]
+                    ):
+                        logger.debug(f"Removing branch {frame.branch_id} from {frame.target_convergence}")
+                        self._active_branches[frame.target_convergence].remove(frame.branch_id)
+                        logger.debug(f"Active branches after removal: {self._active_branches}")
 
-                # Wait if there are still active branches targeting this convergence point
-                if node_id in self._active_branches and self._active_branches[node_id]:
-                    logger.debug(
-                        f"Waiting at convergence point '{node_id}'. "
-                        f"Still waiting for {len(self._active_branches[node_id])} branches"
-                    )
-                    return
+                # Check if we should wait at this convergence point
+                # Only wait if there are unvisited branches that need to converge
+                if node_id in self._active_branches:
+                    unvisited_branches = set()
+                    for branch_id in self._active_branches[node_id]:
+                        # Check if this branch's path hasn't been visited yet
+                        branch_path_nodes = self._get_branch_path_nodes(branch_id)
+                        if not all(node in self._visited_nodes for node in branch_path_nodes):
+                            unvisited_branches.add(branch_id)
+
+                    if unvisited_branches:
+                        logger.debug(
+                            f"Waiting at convergence point '{node_id}'. "
+                            f"Still waiting for branches: {unvisited_branches}"
+                        )
+                        return
+                    else:
+                        # Clear the active branches for this convergence point
+                        self._active_branches[node_id].clear()
 
             if node_id not in self.graph.nodes:
                 raise Exception(f"Node '{node_id}' not found in graph.")
@@ -179,16 +195,12 @@ class GraphExecutor:
             # --- NODE EXECUTION ---
             logger.debug(f"Executing node '{node_id}' with state: {frame.state}")
 
-            # TODO: add try catch with error handling and timeout
-
+            result = None
             if self._node_is_executable(node_id):
-                result = None
                 if node.is_async:
                     result = await node.action(frame.state)
                 else:
                     result = await asyncio.to_thread(node.action, frame.state)
-
-                # --- SAVE BUFFERS, UPDATE STATE AND CHECKPOINTS ---
 
                 # check return values
                 if not isinstance(result, Union[str, dict]):
@@ -204,33 +216,35 @@ class GraphExecutor:
                     # update state
                     self.graph._update_state_from_buffers()
 
-                    # save checkpoints
-                    self.graph._save_checkpoint(node_id, self.get_full_state())
-
+            # Mark node as visited
             self._visited_nodes.add(node_id)
+
+            # Get next node before saving checkpoint
+            children = self.graph.edges_map.get(node_id, [])
+            next_node = children[0] if len(children) == 1 else None
+
+            # If next node is a convergence point, handle branch cleanup before checkpoint
+            if next_node and next_node in self._convergence_points:
+                if frame.branch_id is not None and frame.target_convergence in self._active_branches:
+                    self._active_branches[frame.target_convergence].remove(frame.branch_id)
+
+            # Save checkpoint after branch cleanup
+            if isinstance(result, dict):
+                self.graph._save_checkpoint(node_id, self.get_full_state())
+
             # --- INTERRUPT AFTER NODE EXECUTION ---
             if node.interrupt == "after":
                 logger.debug(f"[Interrupt-after] Executed node '{node_id}'.")
                 self.graph._update_chain_status(ChainStatus.PAUSE)
                 await self._wait_for_resume()
 
-            # TODO: implement router nodes
             # --- ROUTER NODES (OPTIONAL EXTENSION) ---
             if node.is_router:
-                # As an example, assume the node returns a key used to select the branch.
-                # You would need to implement add_router_edge and store conditions.
-                # For now, we assume the first child is always taken.
                 logger.debug(f"Router node '{node_id}' selecting branch based on result: {result}")
 
             # --- DETERMINING NEXT NODES ---
-            children = self.graph.edges_map.get(node_id, [])
-            if not children:
-                # Clean up branch tracking if this branch was being tracked
-                if frame.branch_id is not None and frame.target_convergence:
-                    self._active_branches[frame.target_convergence].remove(frame.branch_id)
-                return
-            elif len(children) == 1:
-                frame.node_id = children[0]
+            if next_node:
+                frame.node_id = next_node
                 continue
             else:
                 logger.debug(f"Node '{node_id}' launches parallel branches: {children}")
@@ -268,21 +282,21 @@ class GraphExecutor:
 
         :return: Dict containing all necessary state information
         """
+        # Clean up any empty or completed branch sets before saving
+        active_branches = {}
+        for conv_point, branch_ids in self._active_branches.items():
+            # Only include convergence points that:
+            # 1. Haven't been visited yet
+            # 2. Still have active branches
+            # 3. Are actual convergence points
+            if conv_point not in self._visited_nodes and branch_ids and conv_point in self._convergence_points:
+                active_branches[conv_point] = list(branch_ids)
+
         return {
-            "execution_frames": [
-                {
-                    "node_id": frame.node_id,
-                    "state": frame.state,
-                    "branch_id": frame.branch_id,
-                    "target_convergence": frame.target_convergence,
-                }
-                for frame in self.execution_frames
-            ],
-            "visited_nodes": list(self._visited_nodes),
+            "execution_frames": self.execution_frames.copy(),
+            "visited_nodes": self._visited_nodes.copy(),
             "branch_counter": self._branch_counter,
-            "active_branches": {
-                conv_point: list(branch_ids) for conv_point, branch_ids in self._active_branches.items()
-            },
+            "active_branches": {k: v.copy() for k, v in self._active_branches.items()},
             "graph_state": self.graph.state,
             "chain_status": self.graph.chain_status.value,
         }
@@ -290,24 +304,66 @@ class GraphExecutor:
     def load_full_state(self, saved_state):
         """
         Restore the complete executor state from a saved snapshot.
-
-        :param saved_state: Dict containing the saved state (as produced by get_full_state)
         """
-        # Restore execution frames with all properties
-        self.execution_frames = []
-        for frame_data in saved_state["execution_frames"]:
-            frame = ExecutionFrame(frame_data["node_id"], frame_data["state"])
-            frame.branch_id = frame_data["branch_id"]
-            frame.target_convergence = frame_data["target_convergence"]
-            self.execution_frames.append(frame)
-
-        # Restore other tracking state
+        # First restore visited nodes as it affects execution logic
         self._visited_nodes = set(saved_state["visited_nodes"])
+
+        # Restore active branches exactly as they were
+        self._active_branches = {}
+        for conv_point, branch_ids in saved_state["active_branches"].items():
+            branch_ids_set = set(branch_ids) if isinstance(branch_ids, list) else branch_ids
+            if branch_ids_set:  # Only restore if there are active branches
+                self._active_branches[conv_point] = branch_ids_set
+
+        # Set branch counter to the saved value
         self._branch_counter = saved_state["branch_counter"]
-        self._active_branches = {
-            conv_point: set(branch_ids) for conv_point, branch_ids in saved_state["active_branches"].items()
-        }
+
+        # Find the next nodes to execute based on visited nodes
+        next_nodes = set()
+        for node_id in self._visited_nodes:
+            children = self.graph.edges_map.get(node_id, [])
+            for child in children:
+                if child not in self._visited_nodes and child != END:
+                    # Check if this is a convergence point
+                    if child in self._convergence_points:
+                        # Only add convergence point if all its dependencies are visited
+                        parents = self._get_node_parents(child)
+                        if all(parent in self._visited_nodes for parent in parents):
+                            next_nodes.add(child)
+                    else:
+                        next_nodes.add(child)
+
+        # Create execution frames for the next nodes
+        self.execution_frames = []
+        for next_node in next_nodes:
+            frame = ExecutionFrame(next_node, self.graph.state)
+            # Find the convergence point this node is heading towards
+            conv_point = self._find_next_convergence_point(next_node)
+            if conv_point and conv_point in self._active_branches:
+                # Only assign branch ID if the convergence point still has active branches
+                active_branches = self._active_branches[conv_point]
+                if active_branches:
+                    frame.branch_id = next(iter(active_branches))  # Get first available branch ID
+                    frame.target_convergence = conv_point
+            self.execution_frames.append(frame)
 
         # Restore graph state
         self.graph.state = saved_state["graph_state"]
         self.graph._update_chain_status(ChainStatus(saved_state["chain_status"]))
+
+    def _get_node_parents(self, node_id: str) -> set:
+        """Get all parent nodes that have edges leading to the given node."""
+        parents = set()
+        for source, targets in self.graph.edges_map.items():
+            if node_id in targets:
+                parents.add(source)
+        return parents
+
+    def _get_branch_path_nodes(self, branch_id: int) -> set:
+        """Helper method to get all nodes in a branch's path."""
+        # This is a simplified version - you might need to adjust based on your graph structure
+        path_nodes = set()
+        for node_id in self.graph.nodes:
+            if node_id not in {START, END} and node_id not in self._visited_nodes:
+                path_nodes.add(node_id)
+        return path_nodes
