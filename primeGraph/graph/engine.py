@@ -230,10 +230,8 @@ class GraphExecutor:
                     for state_field_name, state_field_value in result.items():
                         self.graph.buffers[state_field_name].update(state_field_value, node_id)
 
-                    # update state
                     self.graph._update_state_from_buffers()
 
-            # Mark node as visited
             self._visited_nodes.add(node_id)
 
             # Get next node before saving checkpoint
