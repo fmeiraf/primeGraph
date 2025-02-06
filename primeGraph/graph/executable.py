@@ -15,7 +15,6 @@ from primeGraph.graph.base import BaseGraph
 from primeGraph.models.checkpoint import Checkpoint
 from primeGraph.models.state import GraphState
 from primeGraph.types import ChainStatus
-from primeGraph.utils.class_utils import internal_only
 
 
 class ExecutableNode(NamedTuple):
@@ -205,24 +204,21 @@ class Graph(BaseGraph):
         if self.verbose:
             self.logger.debug(f"Chain status updated to: {status}")
 
-    @internal_only
     def _update_state_from_buffers(self) -> None:
         for field_name, buffer in self.buffers.items():
             if buffer._ready_for_consumption:
                 setattr(self.state, field_name, buffer.consume_last_value())
 
-    @internal_only
     def _update_buffers_from_state(self) -> None:
         for field_name, buffer in self.buffers.items():
             buffer.set_value(getattr(self.state, field_name))
 
-    def _save_checkpoint(self, node_name: str) -> None:
+    def _save_checkpoint(self, node_name: str, engine_state: Dict[str, Any]) -> None:
         if self.state and self.checkpoint_storage:
             checkpoint_data = CheckpointData(
                 chain_id=self.chain_id,
                 chain_status=self.chain_status,
-                next_execution_node=self.next_execution_node,
-                executed_nodes=self.executed_nodes,
+                engine_state=engine_state,
             )
             self.checkpoint_storage.save_checkpoint(
                 state_instance=self.state,
@@ -231,15 +227,12 @@ class Graph(BaseGraph):
         if self.verbose:
             self.logger.debug(f"Checkpoint saved after node: {node_name}")
 
-    @internal_only
     def _is_blocking_execution(self, execution_id: str) -> bool:
         return execution_id in self.blocking_execution_ids
 
-    @internal_only
     def _get_interrupt_status(self, node_name: str) -> Union[Literal["before", "after"], None]:
         return self.nodes[node_name].interrupt
 
-    @internal_only
     def _execute(self, start_from: Optional[str] = None, timeout: Union[int, float] = 60 * 5) -> None:
         """Execute the graph with concurrent and sequential execution based on the execution plan.
 
@@ -480,7 +473,6 @@ class Graph(BaseGraph):
             else:
                 return
 
-    @internal_only
     def execute(
         self,
         start_from: Optional[str] = None,
@@ -572,7 +564,6 @@ class Graph(BaseGraph):
 
         self.logger.debug(f"Loaded checkpoint {checkpoint_id} for chain {self.chain_id}")
 
-    @internal_only
     async def _execute_async(self, start_from: Optional[str] = None, timeout: Union[int, float] = 60 * 5) -> None:
         """Async version of execute method"""
         execution_id = f"exec_{uuid.uuid4().hex[:8]}"  # Add execution_id
@@ -849,7 +840,6 @@ class Graph(BaseGraph):
             else:
                 return
 
-    @internal_only
     async def execute_async(
         self,
         start_from: Optional[str] = None,

@@ -7,8 +7,7 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     state_version VARCHAR,
     data JSONB NOT NULL,
     timestamp TIMESTAMPTZ NOT NULL,
-    next_execution_node VARCHAR,
-    executed_nodes JSONB,
+    engine_state JSONB,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 -- Create indexes

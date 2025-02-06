@@ -1,9 +1,11 @@
 import asyncio
 import copy
 import logging
+from typing import Union
 
 from primeGraph.constants import END, START
 from primeGraph.graph.executable import Graph
+from primeGraph.types import ChainStatus
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -136,12 +138,17 @@ class GraphExecutor:
 
         """
         while True:
+            if self.graph.chain_status != ChainStatus.RUNNING:
+                self.graph._update_chain_status(ChainStatus.RUNNING)
+
             node_id = frame.node_id
 
             if node_id == END:
                 # Clean up branch tracking if this branch was being tracked
                 if frame.branch_id is not None and frame.target_convergence:
                     self._active_branches[frame.target_convergence].remove(frame.branch_id)
+
+                self.graph._update_chain_status(ChainStatus.DONE)
                 return
 
             # Check if this is a convergence point
@@ -166,10 +173,13 @@ class GraphExecutor:
             # --- INTERRUPT BEFORE NODE EXECUTION ---
             if node.interrupt == "before":
                 logger.debug(f"[Interrupt-before] About to execute node '{node_id}'.")
+                self.graph._update_chain_status(ChainStatus.PAUSE)
                 await self._wait_for_resume()
 
             # --- NODE EXECUTION ---
             logger.debug(f"Executing node '{node_id}' with state: {frame.state}")
+
+            # TODO: add try catch with error handling and timeout
 
             if self._node_is_executable(node_id):
                 result = None
@@ -178,14 +188,30 @@ class GraphExecutor:
                 else:
                     result = await asyncio.to_thread(node.action, frame.state)
 
+                # --- SAVE BUFFERS, UPDATE STATE AND CHECKPOINTS ---
+
+                # check return values
+                if not isinstance(result, Union[str, dict]):
+                    raise ValueError(
+                        f"Node '{node_id}' returned invalid result: {result}. Should return a string or a dict (router nodes)."
+                    )
+
+                # update buffers, state and checkpoints
+                if isinstance(result, dict):
+                    for state_field_name, state_field_value in result.items():
+                        self.graph.buffers[state_field_name].update(state_field_value, node_id)
+
+                    # update state
+                    self.graph._update_state_from_buffers()
+
+                    # save checkpoints
+                    self.graph._save_checkpoint(node_id, self.get_full_state())
+
             self._visited_nodes.add(node_id)
-
-            # TODO: --- save buffers, update state and checkpoints ---
-            # ...
-
             # --- INTERRUPT AFTER NODE EXECUTION ---
             if node.interrupt == "after":
                 logger.debug(f"[Interrupt-after] Executed node '{node_id}'.")
+                self.graph._update_chain_status(ChainStatus.PAUSE)
                 await self._wait_for_resume()
 
             # TODO: implement router nodes
@@ -235,21 +261,53 @@ class GraphExecutor:
                 await asyncio.gather(*(self._execute_frame(child_frame) for child_frame in child_frames))
                 return
 
-    def get_state(self):
+    def get_full_state(self):
         """
-        Returns a serializable snapshot of the pending execution frames.
-        (E.g. to save to a database for later resumption.)
-        """
-        state = []
-        for frame in self.execution_frames:
-            state.append({"node_id": frame.node_id, "state": frame.state})
-        return state
+        Returns a complete serializable snapshot of the executor's state.
+        This includes all information needed to resume execution from a pause.
 
-    def load_state(self, saved_state):
+        :return: Dict containing all necessary state information
         """
-        Restore pending execution frames from a saved state.
-        :param saved_state: A list of dicts as produced by get_state().
+        return {
+            "execution_frames": [
+                {
+                    "node_id": frame.node_id,
+                    "state": frame.state,
+                    "branch_id": frame.branch_id,
+                    "target_convergence": frame.target_convergence,
+                }
+                for frame in self.execution_frames
+            ],
+            "visited_nodes": list(self._visited_nodes),
+            "branch_counter": self._branch_counter,
+            "active_branches": {
+                conv_point: list(branch_ids) for conv_point, branch_ids in self._active_branches.items()
+            },
+            "graph_state": self.graph.state,
+            "chain_status": self.graph.chain_status.value,
+        }
+
+    def load_full_state(self, saved_state):
         """
+        Restore the complete executor state from a saved snapshot.
+
+        :param saved_state: Dict containing the saved state (as produced by get_full_state)
+        """
+        # Restore execution frames with all properties
         self.execution_frames = []
-        for frame_data in saved_state:
-            self.execution_frames.append(ExecutionFrame(frame_data["node_id"], frame_data["state"]))
+        for frame_data in saved_state["execution_frames"]:
+            frame = ExecutionFrame(frame_data["node_id"], frame_data["state"])
+            frame.branch_id = frame_data["branch_id"]
+            frame.target_convergence = frame_data["target_convergence"]
+            self.execution_frames.append(frame)
+
+        # Restore other tracking state
+        self._visited_nodes = set(saved_state["visited_nodes"])
+        self._branch_counter = saved_state["branch_counter"]
+        self._active_branches = {
+            conv_point: set(branch_ids) for conv_point, branch_ids in saved_state["active_branches"].items()
+        }
+
+        # Restore graph state
+        self.graph.state = saved_state["graph_state"]
+        self.graph._update_chain_status(ChainStatus(saved_state["chain_status"]))

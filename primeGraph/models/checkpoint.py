@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Set
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel
 
@@ -14,6 +14,4 @@ class Checkpoint(BaseModel):
     state_version: Optional[str] = None
     data: str  # Serialized state data
     timestamp: datetime
-    next_execution_node: Optional[str] = None
-    last_executed_node: Optional[str] = None
-    executed_nodes: Optional[Set[str]] = None
+    engine_state: Optional[Dict[str, Any]] = None
