@@ -19,6 +19,9 @@ class ExecutionFrame:
         """
         self.node_id = node_id
         self.state = state
+        # Add branch tracking
+        self.branch_id = None  # Will be set when branch is created
+        self.target_convergence = None  # The convergence node this branch is heading towards
 
 
 class GraphExecutor:
@@ -30,6 +33,48 @@ class GraphExecutor:
         self.execution_frames = []
 
         self._visited_nodes = set()
+        # Track branches and convergence
+        self._branch_counter = 0
+        self._active_branches = {}  # {convergence_node: set(branch_ids)}
+        self._convergence_points = self._identify_convergence_points()
+
+    def _identify_convergence_points(self):
+        """
+        Identifies nodes that have multiple incoming edges (convergence points).
+        Returns a dict of {node_id: number_of_incoming_edges}.
+        """
+        incoming_edges = {}
+        for source, targets in self.graph.edges_map.items():
+            for target in targets:
+                incoming_edges[target] = incoming_edges.get(target, 0) + 1
+        return {node: count for node, count in incoming_edges.items() if count > 1}
+
+    def _find_next_convergence_point(self, start_node):
+        """
+        BFS to find the next convergence point this path leads to.
+        Returns the convergence point node_id or None if path doesn't lead to one.
+        """
+        visited = set()
+        queue = [(start_node, [])]
+
+        while queue:
+            current, path = queue.pop(0)
+            if current in visited:
+                continue
+
+            visited.add(current)
+
+            # If we found a convergence point, return it
+            if current in self._convergence_points:
+                return current
+
+            # Add children to queue
+            children = self.graph.edges_map.get(current, [])
+            for child in children:
+                if child not in visited and child != END:
+                    queue.append((child, path + [child]))
+
+        return None
 
     async def _wait_for_resume(self):
         """
@@ -94,8 +139,24 @@ class GraphExecutor:
             node_id = frame.node_id
 
             if node_id == END:
-                logger.debug("Reached END node. Ending branch.")
+                # Clean up branch tracking if this branch was being tracked
+                if frame.branch_id is not None and frame.target_convergence:
+                    self._active_branches[frame.target_convergence].remove(frame.branch_id)
                 return
+
+            # Check if this is a convergence point
+            if node_id in self._convergence_points:
+                if frame.branch_id is not None:
+                    # Remove this branch from tracking
+                    self._active_branches[node_id].remove(frame.branch_id)
+
+                # Wait if there are still active branches targeting this convergence point
+                if node_id in self._active_branches and self._active_branches[node_id]:
+                    logger.debug(
+                        f"Waiting at convergence point '{node_id}'. "
+                        f"Still waiting for {len(self._active_branches[node_id])} branches"
+                    )
+                    return
 
             if node_id not in self.graph.nodes:
                 raise Exception(f"Node '{node_id}' not found in graph.")
@@ -138,22 +199,40 @@ class GraphExecutor:
             # --- DETERMINING NEXT NODES ---
             children = self.graph.edges_map.get(node_id, [])
             if not children:
-                # No outgoing edge: branch is complete.
-                logger.debug(f"Node '{node_id}' has no children. Ending branch.")
+                # Clean up branch tracking if this branch was being tracked
+                if frame.branch_id is not None and frame.target_convergence:
+                    self._active_branches[frame.target_convergence].remove(frame.branch_id)
                 return
             elif len(children) == 1:
-                # Only one child: continue sequentially.
                 frame.node_id = children[0]
-                # Loop again with the updated frame.
                 continue
             else:
-                # Multiple children: launch parallel execution.
                 logger.debug(f"Node '{node_id}' launches parallel branches: {children}")
-                # Each child gets its own copy of the state.
-                child_frames = [ExecutionFrame(child, copy.deepcopy(frame.state)) for child in children]
-                # Execute all parallel branches concurrently.
+                child_frames = []
+
+                # Find convergence point for these new branches
+                convergence_point = None
+                for child in children:
+                    conv = self._find_next_convergence_point(child)
+                    if conv:
+                        convergence_point = conv
+                        break
+
+                if convergence_point:
+                    # Initialize tracking for this set of branches
+                    self._active_branches.setdefault(convergence_point, set())
+
+                # Create child frames with branch tracking
+                for child in children:
+                    child_frame = ExecutionFrame(child, copy.deepcopy(frame.state))
+                    if convergence_point:
+                        child_frame.branch_id = self._branch_counter
+                        child_frame.target_convergence = convergence_point
+                        self._active_branches[convergence_point].add(self._branch_counter)
+                        self._branch_counter += 1
+                    child_frames.append(child_frame)
+
                 await asyncio.gather(*(self._execute_frame(child_frame) for child_frame in child_frames))
-                # Once parallel branches finish, this branch is complete.
                 return
 
     def get_state(self):
