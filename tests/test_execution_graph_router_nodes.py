@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 import pytest
@@ -14,7 +15,8 @@ class RouterState(GraphState):
     execution_order: History[str]  # Track execution order
 
 
-def test_simple_router():
+@pytest.mark.asyncio
+async def test_simple_router():
     state = RouterState(result={}, execution_order=[])
     graph = Graph(state=state)
 
@@ -47,14 +49,15 @@ def test_simple_router():
     graph.add_edge("route_b", END)
 
     graph.compile()
-    graph.start()
+    await graph.execute()
 
     # Verify execution followed route_a
     assert state.result == {"path": "A"}
     assert state.execution_order == ["route_a"]
 
 
-def test_complex_router_paths():
+@pytest.mark.asyncio
+async def test_complex_router_paths():
     state = RouterState(result={}, execution_order=[])
     graph = Graph(state=state)
 
@@ -108,14 +111,15 @@ def test_complex_router_paths():
     graph.add_edge("final_b", END)
 
     graph.compile()
-    graph.start()
+    await graph.execute()
 
     # Verify execution followed path_b -> final_b
     assert state.result == {"step": 2, "path": "B-Final"}
     assert state.execution_order == ["path_b", "final_b"]
 
 
-def test_router_error_handling():
+@pytest.mark.asyncio
+async def test_router_error_handling():
     graph = Graph()
 
     @graph.node()
@@ -131,7 +135,8 @@ def test_router_error_handling():
         graph.add_router_edge(START, "invalid_router")
 
 
-def test_router_with_nonexistent_route():
+@pytest.mark.asyncio
+async def test_router_with_nonexistent_route():
     graph = Graph()
 
     @graph.node()
@@ -147,7 +152,8 @@ def test_router_with_nonexistent_route():
         graph.add_router_edge(START, "bad_router")
 
 
-def test_nested_router_paths():
+@pytest.mark.asyncio
+async def test_nested_router_paths():
     state = RouterState(result={}, execution_order=[])
     graph = Graph(state=state)
 
@@ -206,7 +212,7 @@ def test_nested_router_paths():
     graph.add_edge("route_d", END)
 
     graph.compile()
-    graph.start()
+    await graph.execute()
 
     # Verify execution followed the path: process_data -> route_b -> route_b2 -> route_c -> route_d
     assert state.result == {"result": "from route D"}
@@ -214,7 +220,8 @@ def test_nested_router_paths():
 
 
 # TODO: create a warning on compile to advise users on cyclical paths
-def test_cyclical_router():
+@pytest.mark.asyncio
+async def test_cyclical_router():
     state = RouterState(result={}, execution_order=[])
     graph = Graph(state=state)
 
@@ -250,22 +257,22 @@ def test_cyclical_router():
     graph.compile()
 
     # Initial execution
-    graph.start()
+    await graph.execute()
     assert state.result == {"result": "from route B"}
     assert state.execution_order == ["route_a", "route_b"]
 
     # First resume - should execute route_c and pause at route_b
-    graph.resume()
+    await graph.resume()
     assert state.result == {"result": "from route B"}
     assert state.execution_order == ["route_a", "route_b", "route_b"]
 
     # Second resume - should execute route_c and pause at route_b again
-    graph.resume()
+    await graph.resume()
     assert state.result == {"result": "from route B"}
     assert state.execution_order == ["route_a", "route_b", "route_b", "route_b"]
 
     # Third resume - pattern continues
-    graph.resume()
+    await graph.resume()
     assert state.result == {"result": "from route B"}
     assert state.execution_order == [
         "route_a",
@@ -276,7 +283,8 @@ def test_cyclical_router():
     ]
 
 
-def test_cyclical_router_interrupt_before():
+@pytest.mark.asyncio
+async def test_cyclical_router_interrupt_before():
     state = RouterState(result={}, execution_order=[])
     graph = Graph(state=state)
 
@@ -311,27 +319,28 @@ def test_cyclical_router_interrupt_before():
     graph.compile()
 
     # Initial execution - should pause before route_b
-    graph.start()
+    await graph.execute()
     assert state.result == {"result": "from route A"}  # Empty because we pause before route_b
     assert state.execution_order == ["route_a"]
 
     # First resume - should execute route_b and pause before route_b again
-    graph.resume()
+    await graph.resume()
     assert state.result == {"result": "from route B"}
     assert state.execution_order == ["route_a", "route_b"]
 
     # Second resume - should execute route_b and pause before route_b again
-    graph.resume()
+    await graph.resume()
     assert state.result == {"result": "from route B"}
     assert state.execution_order == ["route_a", "route_b", "route_b"]
 
     # Third resume - pattern continues
-    graph.resume()
+    await graph.resume()
     assert state.result == {"result": "from route B"}
     assert state.execution_order == ["route_a", "route_b", "route_b", "route_b"]
 
 
-def test_chain_status_with_router():
+@pytest.mark.asyncio
+async def test_chain_status_with_router():
     state = RouterState(result={}, execution_order=[])
     graph = Graph(state=state)
 
@@ -353,7 +362,7 @@ def test_chain_status_with_router():
     graph.add_edge("route_b", END)
 
     graph.compile()
-    graph.start()
+    await graph.execute()
 
     # Verify execution completed and chain status is DONE
     assert state.result == {"result": "from route B"}
@@ -361,7 +370,8 @@ def test_chain_status_with_router():
     assert graph.chain_status == ChainStatus.DONE
 
 
-def test_chain_status_with_router_and_interrupts():
+@pytest.mark.asyncio
+async def test_chain_status_with_router_and_interrupts():
     state = RouterState(result={}, execution_order=[])
     graph = Graph(state=state)
 
@@ -390,22 +400,17 @@ def test_chain_status_with_router_and_interrupts():
     graph.compile()
 
     # First execution - should stop before route_b
-    graph.start()
+    await graph.execute()
     assert state.result == {"result": "from route A"}
     assert state.execution_order == ["route_a"]
     assert graph.chain_status == ChainStatus.PAUSE
 
     # Second execution - should stop after route_c
-    graph.resume()
+    await graph.resume()
     assert state.result == {"result": "from route C"}
     assert state.execution_order == ["route_a", "route_b", "route_c"]
     assert graph.chain_status == ChainStatus.DONE
 
-
-
-class RouterState(GraphState):
-    result: LastValue[dict]  # Store the result from routes
-    execution_order: History[str]  # Track execution order
 
 
 @pytest.mark.asyncio
@@ -444,21 +449,80 @@ async def test_async_cyclical_router_interrupt_before():
     graph.compile()
 
     # Initial execution - should pause before route_b
-    await graph.start_async()
+    await graph.execute()
     assert state.result == {"result": "from route A"}
     assert state.execution_order == ["route_a"]
 
     # First resume - should execute route_b and pause before route_b again
-    await graph.resume_async()
+    await graph.resume()
     assert state.result == {"result": "from route B"}
     assert state.execution_order == ["route_a", "route_b"]
 
     # Second resume - should execute route_b and pause before route_b again
-    await graph.resume_async()
+    await graph.resume()
     assert state.result == {"result": "from route B"}
     assert state.execution_order == ["route_a", "route_b", "route_b"]
 
     # Third resume - pattern continues
-    await graph.resume_async()
+    await graph.resume()
     assert state.result == {"result": "from route B"}
     assert state.execution_order == ["route_a", "route_b", "route_b", "route_b"]
+
+
+@pytest.mark.asyncio
+async def test_parallel_router_execution_async():
+    state = RouterState(result={}, execution_order=[])
+    graph = Graph(state=state)
+
+    @graph.node()
+    async def start_router(state):
+        if True:
+            return "parallel_a"
+        else:
+            return "parallel_b"
+
+    @graph.node()
+    async def parallel_a(state):
+        await asyncio.sleep(0.2)
+        return {
+            "result": {"path": "A"},
+            "execution_order": "parallel_a",
+        }
+
+    @graph.node()
+    async def parallel_b(state):
+        await asyncio.sleep(0.2)
+        return {
+            "result": {"path": "B"},
+            "execution_order": "parallel_b",
+        }
+
+    @graph.node()
+    async def router_merge(state):
+        return "final"
+
+    @graph.node()
+    async def final(state):
+        return {
+            "result": {"path": "Final"},
+            "execution_order": "final",
+        }
+
+    # Create parallel paths with routers
+    graph.add_router_edge(START, "start_router")
+    graph.add_router_edge("parallel_a", "router_merge")
+    graph.add_router_edge("parallel_b", "router_merge")
+    graph.add_edge("final", END)
+
+    graph.compile()
+
+    start_time = time.time()
+    await graph.execute()
+    execution_time = time.time() - start_time
+
+    # Verify execution path
+    assert state.result == {"path": "Final"}
+    assert state.execution_order == ["parallel_a", "final"]
+
+    # Verify execution time is close to single sleep duration
+    assert execution_time < 0.3  # Should be close to 0.2s if properly parallel

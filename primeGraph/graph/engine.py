@@ -349,7 +349,10 @@ class Engine:
                         logger.debug(f"Removing downstream node '{node_to_clean}' from visited nodes for re-execution")
                         self._visited_nodes.remove(node_to_clean)
 
+                # Reset the frame's interrupt state before routing back.
                 frame.node_id = result
+                frame.resumed = False  # Reset resumed to ensure the interrupt check runs again.
+                frame._pause_event = None  # Clear any previous pause event.
                 continue
 
             # --- DETERMINING NEXT NODES ---
