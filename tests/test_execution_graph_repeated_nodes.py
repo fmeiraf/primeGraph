@@ -15,7 +15,8 @@ class StateWithHistory(GraphState):
   counter: Incremental[int]
 
 
-def test_sequential_repeated_nodes():
+@pytest.mark.asyncio
+async def test_sequential_repeated_nodes():
   state = StateWithHistory(execution_order=[], execution_times=[], counter=0)
   graph = Graph(state=state)
 
@@ -38,7 +39,7 @@ def test_sequential_repeated_nodes():
   graph.add_repeating_edge("start_task", "repeated_task", END, repeat=3, parallel=False)
   graph.compile()
 
-  graph.start()
+  await graph.execute()
 
   # Verify execution order
   assert len(state.execution_order) == 3
@@ -54,7 +55,8 @@ def test_sequential_repeated_nodes():
   assert state.counter == 3  # Each task added 1
 
 
-def test_parallel_repeated_nodes():
+@pytest.mark.asyncio
+async def test_parallel_repeated_nodes():
   state = StateWithHistory(execution_order=[], execution_times=[], counter=0)
   graph = Graph(state=state)
 
@@ -78,7 +80,7 @@ def test_parallel_repeated_nodes():
   graph.compile()
 
   start_time = time.time()
-  graph.start()
+  await graph.execute()
   total_time = time.time() - start_time
 
   # Verify all tasks were executed
@@ -96,7 +98,8 @@ def test_parallel_repeated_nodes():
   assert state.counter == 3  # Each task added 1
 
 
-def test_mixed_repeated_nodes():
+@pytest.mark.asyncio
+async def test_mixed_repeated_nodes():
   state = StateWithHistory(execution_order=[], execution_times=[], counter=0)
   graph = Graph(state=state)
 
@@ -135,7 +138,7 @@ def test_mixed_repeated_nodes():
   graph.add_repeating_edge("intermediate_task", "parallel_task", END, repeat=3, parallel=True)
   graph.compile()
 
-  graph.start()
+  await graph.execute()
 
   # Verify execution count
   assert len(state.execution_order) == 5  # 2 sequential + 3 parallel
@@ -155,7 +158,8 @@ def test_mixed_repeated_nodes():
   assert state.counter == 5  # Total of 6 tasks executed
 
 
-def test_error_handling_in_repeated_nodes():
+@pytest.mark.asyncio
+async def test_error_handling_in_repeated_nodes():
   graph = Graph()
 
   @graph.node()
@@ -177,4 +181,4 @@ def test_error_handling_in_repeated_nodes():
 
   # Verify error propagation
   with pytest.raises(RuntimeError):
-    graph.start()
+    await graph.execute()
