@@ -40,6 +40,8 @@ class GraphExecutor:
         self._active_branches = {}  # {convergence_node: set(branch_ids)}
         self._convergence_points = self._identify_convergence_points()
         self._timeout = timeout
+        self._interrupted_frame = None  # Store the frame where execution was interrupted
+        self._is_interrupted = False
 
     def _identify_convergence_points(self):
         """
@@ -87,13 +89,26 @@ class GraphExecutor:
         await self._resume_event.wait()
         logger.debug("Execution resumed.")
 
-    def resume(self):
+    async def resume(self):
         """
-        Called by the user to resume execution after an interrupt.
-        (In a real system you might trigger this from an external event.)
+        Resume execution from the last interrupted point.
         """
-        self._resume_event.set()
-        self._resume_event.clear()
+        if not self._is_interrupted:
+            logger.warning("Called resume() but execution was not interrupted")
+            return
+
+        logger.debug("Resuming execution...")
+        self.graph._update_chain_status(ChainStatus.RUNNING)
+
+        # If we have an interrupted frame, process it first
+        if self._interrupted_frame:
+            frame_to_resume = self._interrupted_frame
+            self._interrupted_frame = None
+            self._is_interrupted = False
+            await self._execute_frame(frame_to_resume)
+
+        # Continue with any remaining frames
+        await self._execute_all()
 
     async def execute(self):
         """
@@ -191,7 +206,9 @@ class GraphExecutor:
             if node.interrupt == "before":
                 logger.debug(f"[Interrupt-before] About to execute node '{node_id}'.")
                 self.graph._update_chain_status(ChainStatus.PAUSE)
-                await self._wait_for_resume()
+                self._interrupted_frame = frame
+                self._is_interrupted = True
+                return
 
             # --- NODE EXECUTION ---
             logger.debug(f"Executing node '{node_id}' with state: {frame.state}")
@@ -247,20 +264,32 @@ class GraphExecutor:
             if isinstance(result, dict):
                 self.graph._save_checkpoint(node_id, self.get_full_state())
 
-            # --- INTERRUPT AFTER NODE EXECUTION ---
-            if node.interrupt == "after":
-                logger.debug(f"[Interrupt-after] Executed node '{node_id}'.")
-                self.graph._update_chain_status(ChainStatus.PAUSE)
-                await self._wait_for_resume()
-
             # --- ROUTER NODES (OPTIONAL EXTENSION) ---
             if node.is_router:
-                logger.debug(f"Router node '{node_id}' selecting branch based on result: {result}")
+                if not isinstance(result, str):
+                    raise ValueError(
+                        f"Router node '{node_id}' must return a string node_id. Got: {result} of type {type(result)}"
+                    )
+                if result not in self.graph.nodes:
+                    raise ValueError(
+                        f"Router node '{node_id}' returned invalid node_id: '{result}'. Must be a valid node in the graph."
+                    )
+                logger.debug(f"Router node '{node_id}' routing to node: {result}")
+
+                # Remove all downstream nodes from visited_nodes
+                nodes_to_clean = self._get_downstream_nodes(result)
+                for node_to_clean in nodes_to_clean:
+                    if node_to_clean in self._visited_nodes:
+                        logger.debug(f"Removing downstream node '{node_to_clean}' from visited nodes for re-execution")
+                        self._visited_nodes.remove(node_to_clean)
+
+                frame.node_id = result
+                continue
 
             # --- DETERMINING NEXT NODES ---
-            if next_node:
-                frame.node_id = next_node
-                continue
+            children = self.graph.edges_map.get(node_id, [])
+            if len(children) == 1:
+                frame.node_id = children[0]
             else:
                 logger.debug(f"Node '{node_id}' launches parallel branches: {children}")
                 child_frames = []
@@ -287,6 +316,19 @@ class GraphExecutor:
                         self._branch_counter += 1
                     child_frames.append(child_frame)
 
+                self.execution_frames.extend(child_frames)
+
+            # --- INTERRUPT AFTER NODE EXECUTION ---
+            if node.interrupt == "after":
+                logger.debug(f"[Interrupt-after] Executed node '{node_id}'.")
+                self.graph._update_chain_status(ChainStatus.PAUSE)
+                self._interrupted_frame = frame if len(children) == 1 else None
+                self._is_interrupted = True
+                return
+
+            if len(children) == 1:
+                continue
+            else:
                 await asyncio.gather(*(self._execute_frame(child_frame) for child_frame in child_frames))
                 return
 
@@ -307,14 +349,17 @@ class GraphExecutor:
             if conv_point not in self._visited_nodes and branch_ids and conv_point in self._convergence_points:
                 active_branches[conv_point] = list(branch_ids)
 
-        return {
+        state = {
             "execution_frames": self.execution_frames.copy(),
             "visited_nodes": self._visited_nodes.copy(),
             "branch_counter": self._branch_counter,
             "active_branches": {k: v.copy() for k, v in self._active_branches.items()},
             "graph_state": self.graph.state,
             "chain_status": self.graph.chain_status.value,
+            "is_interrupted": self._is_interrupted,
+            "interrupted_frame": self._interrupted_frame,
         }
+        return state
 
     def load_full_state(self, saved_state):
         """
@@ -366,6 +411,9 @@ class GraphExecutor:
         self.graph.state = saved_state["graph_state"]
         self.graph._update_chain_status(ChainStatus(saved_state["chain_status"]))
 
+        self._is_interrupted = saved_state.get("is_interrupted", False)
+        self._interrupted_frame = saved_state.get("interrupted_frame", None)
+
     def _get_node_parents(self, node_id: str) -> set:
         """Get all parent nodes that have edges leading to the given node."""
         parents = set()
@@ -382,3 +430,28 @@ class GraphExecutor:
             if node_id not in {START, END} and node_id not in self._visited_nodes:
                 path_nodes.add(node_id)
         return path_nodes
+
+    def _get_downstream_nodes(self, start_node: str) -> set:
+        """
+        Get all downstream nodes from a starting node using BFS.
+        This includes the start node itself.
+        """
+        downstream_nodes = set([start_node])
+        queue = [start_node]
+        visited = set()
+
+        while queue:
+            current = queue.pop(0)
+            if current in visited:
+                continue
+
+            visited.add(current)
+            children = self.graph.edges_map.get(current, [])
+
+            for child in children:
+                if child != END:  # Don't include END node in downstream nodes
+                    downstream_nodes.add(child)
+                    if child not in visited:
+                        queue.append(child)
+
+        return downstream_nodes
