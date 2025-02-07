@@ -296,16 +296,32 @@ class BaseGraph:
                 # Connect incoming edge to all first nodes of subgraph
                 for first_node in first_nodes:
                     self.add_edge(connect_start, prefix + first_node)
+                    # Update edges_map
+                    self.edges_map[connect_start].append(prefix + first_node)
             elif edge.end_node == END and connect_end:
                 # Connect all last nodes of subgraph to outgoing edge
                 for last_node in last_nodes:
                     self.add_edge(prefix + last_node, connect_end)
+                    # Update edges_map
+                    self.edges_map[prefix + last_node].append(connect_end)
             elif edge.start_node != START and edge.end_node != END:
                 self.add_edge(
                     prefix + edge.start_node,
                     prefix + edge.end_node,
                     id=prefix + (edge.id or ""),
                 )
+                # Update edges_map
+                self.edges_map[prefix + edge.start_node].append(prefix + edge.end_node)
+
+        # Add internal subgraph edges to edges_map if they don't exist
+        for start_node, end_nodes in subgraph.edges_map.items():
+            if start_node not in [START, END]:
+                prefixed_start = prefix + start_node
+                for end_node in end_nodes:
+                    if end_node not in [START, END]:
+                        prefixed_end = prefix + end_node
+                        if prefixed_end not in self.edges_map[prefixed_start]:
+                            self.edges_map[prefixed_start].append(prefixed_end)
 
     def validate(self) -> bool:
         """Validate that the graph starts with '__start__', ends with '__end__', and all nodes are on valid paths.

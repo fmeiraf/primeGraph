@@ -1,3 +1,5 @@
+import pytest
+
 from primeGraph.buffer.factory import History, Incremental, LastValue
 from primeGraph.constants import END, START
 from primeGraph.graph.executable import Graph
@@ -10,7 +12,8 @@ class SubgraphState(GraphState):
     status: LastValue[str]
 
 
-def test_basic_subgraph_execution():
+@pytest.mark.asyncio
+async def test_basic_subgraph_execution():
     state = SubgraphState(execution_order=[], counter=0, status="")
     main_graph = Graph(state=state)
 
@@ -49,7 +52,7 @@ def test_basic_subgraph_execution():
     main_graph.add_edge("end_task", END)
 
     main_graph.compile()
-    main_graph.start()
+    await main_graph.execute()
 
     # Verify execution order
     assert state.execution_order == ["start_task", "process_a", "process_b", "end_task"]
@@ -59,7 +62,8 @@ def test_basic_subgraph_execution():
     assert state.status == "completed"
 
 
-def test_parallel_subgraph_execution():
+@pytest.mark.asyncio
+async def test_parallel_subgraph_execution():
     state = SubgraphState(execution_order=[], counter=0, status="")
     main_graph = Graph(state=state)
 
@@ -119,10 +123,10 @@ def test_parallel_subgraph_execution():
     main_graph.add_edge("finalize", END)
 
     main_graph.compile()
-    main_graph.start()
+    await main_graph.execute()
 
     # Verify all tasks were executed
-    executed_tasks = set(state.execution_order)
+    executed_tasks = set(main_graph.state.execution_order)
     expected_tasks = {
         "initialize",
         "process_1",
@@ -140,7 +144,8 @@ def test_parallel_subgraph_execution():
     assert state.status == "completed"
 
 
-def test_nested_subgraph_execution():
+@pytest.mark.asyncio
+async def test_nested_subgraph_execution():
     state = SubgraphState(execution_order=[], counter=0, status="")
     main_graph = Graph(state=state)
 
@@ -188,7 +193,7 @@ def test_nested_subgraph_execution():
     main_graph.add_edge("parent_subgraph", END)
 
     main_graph.compile()
-    main_graph.start()
+    await main_graph.execute()
 
     # Verify execution order
     assert state.execution_order == [
