@@ -98,9 +98,9 @@ class Engine:
         """
         Resume execution from the last interrupted point.
         """
-        if not self._is_interrupted:
-            logger.warning("Called resume() but execution was not interrupted")
-            return
+        # Raise an error if the execution has not been paused (or not started at all)
+        if not self._is_interrupted and self._interrupted_frame is None:
+            raise RuntimeError("Cannot resume execution because it is not paused or hasn't started yet.")
 
         logger.debug("Resuming execution...")
         self.graph._update_chain_status(ChainStatus.RUNNING)

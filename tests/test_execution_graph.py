@@ -245,12 +245,12 @@ async def test_pause_before_node_execution():
     graph.compile()
 
     # First execution should stop before task2
-    result = await graph.execute()  # Store the result
+    await graph.execute()  # Store the result
     assert graph.state.execution_order == ["task1"]
     assert graph.chain_status == ChainStatus.PAUSE
 
     # Resume execution - make sure to await the result
-    result = await graph.resume()  # Store the result and await it
+    await graph.resume()  # Store the result and await it
     assert graph.state.execution_order == ["task1", "task2", "task3"]
     assert graph.chain_status == ChainStatus.DONE  # Add this check to verify completion
 
@@ -309,8 +309,8 @@ async def test_resume_without_pause():
     graph.compile()
 
     # Should raise error when trying to resume without a pause
-    with pytest.raises(ValueError):
-        graph.resume()
+    with pytest.raises(RuntimeError):
+        await graph.resume()
 
 
 class StateForTestWithHistory(GraphState):
