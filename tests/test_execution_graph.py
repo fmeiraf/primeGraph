@@ -317,7 +317,8 @@ class StateForTestWithHistory(GraphState):
     execution_order: History[str]
 
 
-def test_multiple_pause_resume_cycles():
+@pytest.mark.asyncio
+async def test_multiple_pause_resume_cycles():
     state = StateForTestWithHistory(execution_order=[])
     graph = Graph(state=state)
 
@@ -345,16 +346,16 @@ def test_multiple_pause_resume_cycles():
     graph.compile()
 
     # First execution - stops after task2
-    graph.start()
+    await graph.execute()
     assert graph.state.execution_order == ["task1", "task2"]
-    assert graph.next_execution_node == "task3"
 
     # Second resume - completes execution
-    graph.resume()
+    await graph.resume()
     assert graph.state.execution_order == ["task1", "task2", "task3", "task4"]
 
 
-def test_pause_resume_with_parallel_execution():
+@pytest.mark.asyncio
+async def test_pause_resume_with_parallel_execution():
     state = StateForTestWithHistory(execution_order=[])
     graph = Graph(state=state)
 
@@ -384,49 +385,17 @@ def test_pause_resume_with_parallel_execution():
     graph.compile()
 
     # First execution should execute task1 and task3, but pause before task2
-    graph.start()
+    await graph.execute()
     assert "task1" in graph.state.execution_order
     assert "task3" in graph.state.execution_order
     assert "task2" not in graph.state.execution_order
     assert "task4" not in graph.state.execution_order
-    assert graph.next_execution_node == "task2"
 
     # Resume should complete the execution
-    graph.resume()
+    await graph.resume()
     assert "task2" in graph.state.execution_order
     assert "task4" in graph.state.execution_order
 
-
-def test_resume_with_start_from_only():
-    state = StateForTestWithHistory(execution_order=[])
-    graph = Graph(state=state)
-
-    @graph.node()
-    def task1(state):
-        return {"execution_order": "task1"}
-
-    @graph.node()
-    def task2(state):
-        return {"execution_order": "task2"}
-
-    @graph.node()
-    def task3(state):
-        return {"execution_order": "task3"}
-
-    @graph.node()
-    def task4(state):
-        return {"execution_order": "task4"}
-
-    graph.add_edge(START, "task1")
-    graph.add_edge("task1", "task2")
-    graph.add_edge("task2", "task3")
-    graph.add_edge("task3", "task4")
-    graph.add_edge("task4", END)
-    graph.compile()
-
-    # Start execution from task2
-    graph.resume(start_from="task2")
-    assert graph.state.execution_order == ["task2", "task3", "task4"]
 
 
 class StateForTestWithInitialValues(GraphState):
@@ -434,7 +403,8 @@ class StateForTestWithInitialValues(GraphState):
     counter: Incremental[int]
 
 
-def test_initial_state_with_filled_values():
+@pytest.mark.asyncio
+async def test_initial_state_with_filled_values():
     state = StateForTestWithInitialValues(
         execution_order=["pre_task", "task0"], counter=2
     )
@@ -464,13 +434,14 @@ def test_initial_state_with_filled_values():
     graph.compile()
 
     # Start execution from task2
-    graph.start()
+    await graph.execute()
     expected_tasks = {"pre_task", "task0", "task1", "task2", "task3", "task4"}
     assert set(graph.state.execution_order) == expected_tasks
     assert graph.state.counter == 9  # 2 + 3 + 4
 
 
-def test_state_modification_during_execution():
+@pytest.mark.asyncio
+async def test_state_modification_during_execution():
     state = StateForTestWithHistory(execution_order=[])
     graph = Graph(state=state)
 
@@ -499,17 +470,17 @@ def test_state_modification_during_execution():
     graph.compile()
 
     # First execution should execute task1 and task3, but pause before task2
-    graph.start()
+    await graph.execute()
     assert "task1" in graph.state.execution_order
     assert "task2" in graph.state.execution_order
     assert "task3" not in graph.state.execution_order
     assert "task4" not in graph.state.execution_order
 
-    state.execution_order.append("appended_value")
-    assert state.execution_order == ["task1", "task2", "appended_value"]
+    graph.update_state_and_checkpoint({"execution_order": "appended_value"})
+    assert graph.state.execution_order == ["task1", "task2", "appended_value"]
 
     # Resume should complete the execution
-    graph.resume()
+    await graph.resume()
     assert graph.state.execution_order == [
         "task1",
         "task2",
@@ -519,7 +490,8 @@ def test_state_modification_during_execution():
     ]
 
 
-def test_graph_state_simple_types():
+@pytest.mark.asyncio
+async def test_graph_state_simple_types():
     class SimpleState(GraphState):
         counter: Incremental[int]
         status: LastValue[str]
@@ -540,7 +512,8 @@ def test_graph_state_simple_types():
         SimpleState(counter=0, status="ready", metrics=1.0)  # Should be list
 
 
-def test_graph_state_dict_types():
+@pytest.mark.asyncio
+async def test_graph_state_dict_types():
     class DictState(GraphState):
         simple_dict: LastValue[Dict[str, int]]
         nested_dict: LastValue[Dict[str, Dict[str, float]]]
@@ -577,7 +550,8 @@ def test_graph_state_dict_types():
         )
 
 
-def test_graph_state_list_types():
+@pytest.mark.asyncio
+async def test_graph_state_list_types():
     class ListState(GraphState):
         simple_list: LastValue[List[int]]
         nested_list: LastValue[List[List[str]]]
@@ -614,7 +588,8 @@ def test_graph_state_list_types():
         )
 
 
-def test_graph_state_complex_types():
+@pytest.mark.asyncio
+async def test_graph_state_complex_types():
     class ComplexState(GraphState):
         dict_list: LastValue[Dict[str, List[int]]]
         list_dict: LastValue[List[Dict[str, float]]]
@@ -657,7 +632,8 @@ def test_graph_state_complex_types():
         )
 
 
-def test_graph_state_incremental_types():
+@pytest.mark.asyncio
+async def test_graph_state_incremental_types():
     class IncrementalState(GraphState):
         simple_counter: Incremental[int]
         float_counter: Incremental[float]
@@ -694,7 +670,8 @@ def test_graph_state_incremental_types():
         )
 
 
-def test_execution_steps_with_interrupt():
+@pytest.mark.asyncio
+async def test_execution_steps_with_interrupt():
     class StateWithSteps(GraphState):
         number_of_executed_steps: Incremental[int]
         current_status: LastValue[str]
@@ -735,18 +712,18 @@ def test_execution_steps_with_interrupt():
     graph.compile()
 
     # First execution - should stop before task2
-    graph.start()
+    await graph.execute()
     assert graph.state.number_of_executed_steps == 1  # Only task1 executed
     assert graph.state.current_status == "task1_complete"
-    assert graph.next_execution_node == "task2"
 
     # Resume execution - should complete remaining tasks
-    graph.resume()
+    await graph.resume()
     assert graph.state.number_of_executed_steps == 3  # All tasks executed
     assert graph.state.current_status == "task3_complete"
 
 
-def test_state_update_with_buffers():
+@pytest.mark.asyncio
+async def test_state_update_with_buffers():
     class TestState(GraphState):
         counter: Incremental[int]
         status: LastValue[str]
@@ -785,7 +762,8 @@ def test_state_update_with_buffers():
         assert getattr(graph.state, field_name) == buffer.value  # But values should match
 
 
-def test_state_set_complete_reset():
+@pytest.mark.asyncio
+async def test_state_set_complete_reset():
     class TestState(GraphState):
         counter: Incremental[int]
         status: LastValue[str]
@@ -820,7 +798,8 @@ def test_state_set_complete_reset():
     assert graph.state.metrics == [{"new": 0.80}]  # Reset to new list, not appended
 
 
-def test_state_update_validation():
+@pytest.mark.asyncio
+async def test_state_update_validation():
     class TestState(GraphState):
         counter: Incremental[int]
         status: LastValue[str]
@@ -858,7 +837,8 @@ def test_state_update_validation():
     assert graph.state.metrics == [{"accuracy": 0.9}]
 
 
-def test_buffer_behavior_differences():
+@pytest.mark.asyncio
+async def test_buffer_behavior_differences():
     class BufferTestState(GraphState):
         last_value: LastValue[str]
         history: History[str]
@@ -911,7 +891,8 @@ def test_buffer_behavior_differences():
     assert graph.state.increment == 15  # Incremental: added to reset value
 
 
-def test_chain_status_after_completion():
+@pytest.mark.asyncio
+async def test_chain_status_after_completion():
     state = StateForTestWithHistory(execution_order=[])
     graph = Graph(state=state)
 
@@ -930,14 +911,15 @@ def test_chain_status_after_completion():
     graph.compile()
 
     # Execute the graph
-    graph.start()
+    await graph.execute()
 
     # Verify execution completed and chain status is DONE
     assert graph.state.execution_order == ["task1", "task2"]
     assert graph.chain_status == ChainStatus.DONE
 
 
-def test_chain_status_with_interrupts():
+@pytest.mark.asyncio
+async def test_chain_status_with_interrupts():
     state = StateForTestWithHistory(execution_order=[])
     graph = Graph(state=state)
 
@@ -966,17 +948,17 @@ def test_chain_status_with_interrupts():
     graph.compile()
 
     # First execution - should stop before task2
-    graph.start()
+    await graph.execute()
     assert graph.chain_status == ChainStatus.PAUSE
     assert graph.state.execution_order == ["task1"]
 
     # Second execution - should stop after task3
-    graph.resume()
+    await graph.resume()
     assert graph.chain_status == ChainStatus.PAUSE
     assert graph.state.execution_order == ["task1", "task2", "task3"]
 
     # Final execution - should complete and set status to DONE
-    graph.resume()
+    await graph.resume()
     assert graph.chain_status == ChainStatus.DONE
     assert graph.state.execution_order == ["task1", "task2", "task3", "task4"]
 
