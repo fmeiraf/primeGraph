@@ -1,18 +1,20 @@
 import asyncio
 import copy
 import logging
-from typing import Union
+from typing import TYPE_CHECKING, Dict
 
 from primeGraph.constants import END, START
-from primeGraph.graph.executable import Graph
 from primeGraph.types import ChainStatus
+
+if TYPE_CHECKING:
+    from primeGraph.graph.executable import Graph
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
 class ExecutionFrame:
-    def __init__(self, node_id, state):
+    def __init__(self, node_id: str, state: Dict):
         """
         A frame represents a branch of execution.
 
@@ -26,8 +28,8 @@ class ExecutionFrame:
         self.target_convergence = None  # The convergence node this branch is heading towards
 
 
-class GraphExecutor:
-    def __init__(self, graph: Graph, timeout: int = 300, max_node_iterations: int = 100):
+class Engine:
+    def __init__(self, graph: "Graph", timeout: int = 300, max_node_iterations: int = 100):
         self.graph = graph
         self._resume_event = asyncio.Event()
         self._resume_event.clear()
@@ -89,6 +91,7 @@ class GraphExecutor:
         """
         logger.debug("Execution paused. Waiting for resume...")
         await self._resume_event.wait()
+        self._resume_event.clear()  # Clear the event immediately after it's triggered
         logger.debug("Execution resumed.")
 
     async def resume(self):
@@ -102,14 +105,13 @@ class GraphExecutor:
         logger.debug("Resuming execution...")
         self.graph._update_chain_status(ChainStatus.RUNNING)
 
-        # If we have an interrupted frame, process it first
         if self._interrupted_frame:
             frame_to_resume = self._interrupted_frame
             self._interrupted_frame = None
             self._is_interrupted = False
+            # The frame already has _has_resumed = True so it will bypass the interrupt check.
             await self._execute_frame(frame_to_resume)
 
-        # Continue with any remaining frames
         await self._execute_all()
 
     async def execute(self):
@@ -216,12 +218,15 @@ class GraphExecutor:
             node = self.graph.nodes[node_id]
 
             # --- INTERRUPT BEFORE NODE EXECUTION ---
-            if node.interrupt == "before":
-                logger.debug(f"[Interrupt-before] About to execute node '{node_id}'.")
-                self.graph._update_chain_status(ChainStatus.PAUSE)
-                self._interrupted_frame = frame
-                self._is_interrupted = True
-                return
+            if node.interrupt == "before" and node_id not in self._visited_nodes:
+                # Only interrupt if this frame has not been resumed already.
+                if not getattr(frame, "_has_resumed", False):
+                    logger.debug(f"[Interrupt-before] About to execute node '{node_id}'.")
+                    self.graph._update_chain_status(ChainStatus.PAUSE)
+                    frame._has_resumed = True  # Mark as resumed so that a resume call won't re-trigger the interrupt.
+                    self._interrupted_frame = frame
+                    self._is_interrupted = True
+                    return
 
             # --- NODE EXECUTION ---
             logger.debug(f"Executing node '{node_id}' with state: {frame.state}")
@@ -240,6 +245,25 @@ class GraphExecutor:
                             asyncio.to_thread(node.action, frame.state),
                             timeout=self._timeout,
                         )
+
+                    # check return values
+                    if not isinstance(result, (str, dict)):
+                        raise ValueError(
+                            f"Node '{node_id}' returned invalid result: {result}. Should return a string or a dict."
+                        )
+
+                    # update buffers, state and checkpoints
+                    if isinstance(result, dict):
+                        for state_field_name, state_field_value in result.items():
+                            self.graph.buffers[state_field_name].update(state_field_value, node_id)
+
+                        self.graph._update_state_from_buffers()
+
+                    # After successful execution, clear interrupt state if this was the interrupted node
+                    if self._is_interrupted and self._interrupted_frame and self._interrupted_frame.node_id == node_id:
+                        self._is_interrupted = False
+                        self._interrupted_frame = None
+
                 except asyncio.TimeoutError:
                     logger.error(f"Node '{node_id}' execution timed out after {self._timeout} seconds")
                     self.graph._update_chain_status(ChainStatus.FAILED)
@@ -248,19 +272,6 @@ class GraphExecutor:
                     logger.error(f"Error executing node '{node_id}': {str(e)}")
                     self.graph._update_chain_status(ChainStatus.FAILED)
                     return
-
-                # check return values
-                if not isinstance(result, Union[str, dict]):
-                    raise ValueError(
-                        f"Node '{node_id}' returned invalid result: {result}. Should return a string or a dict (router nodes)."
-                    )
-
-                # update buffers, state and checkpoints
-                if isinstance(result, dict):
-                    for state_field_name, state_field_value in result.items():
-                        self.graph.buffers[state_field_name].update(state_field_value, node_id)
-
-                    self.graph._update_state_from_buffers()
 
             self._visited_nodes.add(node_id)
 

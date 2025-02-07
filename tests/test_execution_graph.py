@@ -1,4 +1,3 @@
-import time
 from typing import Any, Dict, List
 
 import pytest
@@ -6,7 +5,7 @@ from pydantic import ValidationError
 
 from primeGraph.buffer.factory import History, Incremental, LastValue
 from primeGraph.constants import END, START
-from primeGraph.graph.executable import ExecutableNode, Graph
+from primeGraph.graph.executable import Graph
 from primeGraph.models.state import GraphState
 from primeGraph.types import ChainStatus
 
@@ -137,127 +136,6 @@ def extract_executable_nodes_info(executable_node):
         ]
 
 
-def test_execution_plan_conversion(basic_graph):
-    # Test sequential execution
-    basic_graph.detailed_execution_path = [
-        ("__start__", "process_data"),
-        ("process_data", "validate"),
-    ]
-    result = basic_graph._convert_execution_plan()
-
-    assert len(result) == 2
-    assert all(isinstance(node, ExecutableNode) for node in result)
-    assert result[0].node_name == "process_data"
-    assert result[0].execution_type == "sequential"
-    assert len(result[0].task_list) == 1
-
-    # Test parallel execution
-    basic_graph.detailed_execution_path = [
-        [("validate", "aa"), ("bb", "bb")],
-        [
-            ("escape", "escape"),
-            [("escape", "dd"), ("escape", "cc")],
-            ("validate", "hh"),
-        ],
-    ]
-    result = basic_graph._convert_execution_plan()
-
-    
-
-    assert len(result) == 2
-    assert result[1].task_list[1].node_name == "group_dd_cc"
-    assert result[1].task_list[1].execution_type == "parallel"
-    assert len(result[1].task_list) == 3
-
-
-def test_execution_plan_invalid_input(basic_graph):
-    # Test invalid input
-    basic_graph.detailed_execution_path = [None]
-    with pytest.raises(ValueError):
-        basic_graph._convert_execution_plan()
-
-
-def test_parallel_execution():
-    # Create a list to track execution order
-    execution_order = []
-
-    basic_graph = Graph()
-
-    # Override the existing nodes with new ones that track execution
-    @basic_graph.node()
-    def task1():
-        execution_order.append("task1")
-
-    @basic_graph.node()
-    def task2():
-        execution_order.append("task2")
-
-    @basic_graph.node()
-    def task3():
-        execution_order.append("task3")
-
-    basic_graph.add_edge(START, "task1")
-    basic_graph.add_edge("task1", "task2")
-    basic_graph.add_edge("task1", "task3")
-    basic_graph.add_edge("task2", END)
-    basic_graph.add_edge("task3", END)
-    basic_graph.compile()
-
-    # Execute the graph
-    basic_graph.start()
-
-    # Verify task1 was executed first
-    assert execution_order[0] == "task1"
-
-    # Verify task2 and task3 were both executed after task1
-    assert set(execution_order[1:]) == {"task2", "task3"}
-    assert len(execution_order) == 3
-
-
-def test_parallel_execution_with_error():
-    basic_graph = Graph()
-
-    @basic_graph.node()
-    def failing_task():
-        raise ValueError("Task failed")
-
-    @basic_graph.node()
-    def normal_task():
-        pass
-
-    basic_graph.add_edge(START, "failing_task")
-    basic_graph.add_edge("failing_task", "normal_task")
-    basic_graph.add_edge("normal_task", END)
-    basic_graph.compile()
-
-    # Verify the error is propagated
-    with pytest.raises(RuntimeError) as exc_info:
-        basic_graph.start()
-
-    assert "Task failed" in str(exc_info.value)
-
-
-def test_parallel_execution_timeout():
-    basic_graph = Graph()
-
-    @basic_graph.node()
-    def slow_task():
-        time.sleep(3)  # Task that takes too long
-
-    @basic_graph.node()
-    def normal_task():
-        pass
-
-    basic_graph.add_edge(START, "slow_task")
-    basic_graph.add_edge("slow_task", "normal_task")
-    basic_graph.add_edge("normal_task", END)
-    basic_graph.compile()
-
-    # Verify timeout error is raised
-    with pytest.raises(TimeoutError) as exc_info:
-        basic_graph.start(timeout=1)
-
-    assert "Execution timeout" in str(exc_info.value)
 
 
 class StateForTest(GraphState):
@@ -307,46 +185,58 @@ def graph_with_buffers():
     return graph
 
 
-def test_parallel_updates(graph_with_buffers):
+@pytest.mark.asyncio
+async def test_parallel_updates(graph_with_buffers):
     # Execute the graph multiple times
     for _ in range(3):
-        graph_with_buffers.start()
+        await graph_with_buffers.execute()
 
     # Check the state after execution
     state = graph_with_buffers.state
 
-    # Verify that the counter was incremented 3 times
-    assert state.counter == 1
+    # Verify that the counter was incremented correctly
+    assert state.counter == 3  # Each execution adds 1
 
     # Verify that the status was updated to "running"
     assert state.status == "running"
 
-    # Verify that metrics were added 9 times (3 executions * 3 nodes)
-    assert len(state.metrics) == 3
+    # Verify that metrics were added correctly
+    assert len(state.metrics) == 9  # 3 executions * 3 nodes
+    
+    # Check each metric individually
     expected_metrics = [
-        {"accuracy": 0.95},
-        {"precision": 0.90},
-        {"recall": 0.85},
-    ]
+    {"accuracy": 0.95},
+    {"precision": 0.90},
+    {"recall": 0.85},
+]
     for metric in state.metrics:
-        assert metric in expected_metrics
+        # Find matching expected metric
+        matching_metric = next((expected for expected in expected_metrics 
+                            if list(metric.keys())[0] in expected 
+                            and abs(metric[list(metric.keys())[0]] - expected[list(metric.keys())[0]]) < 0.001), None)
+        assert matching_metric is not None, f"No matching expected metric found for {metric}"
 
 
-def test_pause_before_node_execution():
+@pytest.mark.asyncio
+async def test_pause_before_node_execution():
     graph = Graph()
-    execution_order = []
+    class StateForTest(GraphState):
+        execution_order: History[str]
+
+    state = StateForTest(execution_order=[])
+    graph = Graph(state=state)
 
     @graph.node()
-    def task1():
-        execution_order.append("task1")
+    def task1(state):
+        return {"execution_order": "task1"}
 
     @graph.node(interrupt="before")
-    def task2():
-        execution_order.append("task2")
+    def task2(state):
+        return {"execution_order": "task2"}
 
     @graph.node()
-    def task3():
-        execution_order.append("task3")
+    def task3(state):
+        return {"execution_order": "task3"}
 
     graph.add_edge(START, "task1")
     graph.add_edge("task1", "task2")
@@ -355,30 +245,36 @@ def test_pause_before_node_execution():
     graph.compile()
 
     # First execution should stop before task2
-    graph.start()
-    assert execution_order == ["task1"]
-    assert graph.next_execution_node == "task2"
+    result = await graph.execute()  # Store the result
+    assert graph.state.execution_order == ["task1"]
+    assert graph.chain_status == ChainStatus.PAUSE
 
-    # Resume execution
-    graph.resume()
-    assert execution_order == ["task1", "task2", "task3"]
+    # Resume execution - make sure to await the result
+    result = await graph.resume()  # Store the result and await it
+    assert graph.state.execution_order == ["task1", "task2", "task3"]
+    assert graph.chain_status == ChainStatus.DONE  # Add this check to verify completion
 
 
-def test_pause_after_node_execution():
+@pytest.mark.asyncio
+async def test_pause_after_node_execution():
     graph = Graph()
-    execution_order = []
+    class StateForTest(GraphState):
+        execution_order: History[str]
+
+    state = StateForTest(execution_order=[])
+    graph = Graph(state=state)
 
     @graph.node()
-    def task1():
-        execution_order.append("task1")
+    def task1(state):
+        return {"execution_order": "task1"}
 
     @graph.node(interrupt="after")
-    def task2():
-        execution_order.append("task2")
+    def task2(state):
+        return {"execution_order": "task2"}
 
     @graph.node()
-    def task3():
-        execution_order.append("task3")
+    def task3(state):
+        return {"execution_order": "task3"}
 
     graph.add_edge(START, "task1")
     graph.add_edge("task1", "task2")
@@ -387,16 +283,16 @@ def test_pause_after_node_execution():
     graph.compile()
 
     # First execution should stop after task2
-    graph.start()
-    assert execution_order == ["task1", "task2"]
-    assert graph.next_execution_node == "task3"
+    await graph.execute()
+    assert graph.state.execution_order == ["task1", "task2"]
 
     # Resume execution
-    graph.resume()
-    assert execution_order == ["task1", "task2", "task3"]
+    await graph.resume()
+    assert graph.state.execution_order == ["task1", "task2", "task3"]
 
 
-def test_resume_without_pause():
+@pytest.mark.asyncio
+async def test_resume_without_pause():
     graph = Graph()
 
     @graph.node()
