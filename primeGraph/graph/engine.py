@@ -27,7 +27,7 @@ class ExecutionFrame:
 
 
 class GraphExecutor:
-    def __init__(self, graph: Graph, timeout: int = 300):
+    def __init__(self, graph: Graph, timeout: int = 300, max_node_iterations: int = 100):
         self.graph = graph
         self._resume_event = asyncio.Event()
         self._resume_event.clear()
@@ -35,6 +35,8 @@ class GraphExecutor:
         self.execution_frames = []
 
         self._visited_nodes = set()
+        self._node_execution_count = {}  # Track number of times each node is executed
+        self._max_node_iterations = max_node_iterations  # Maximum times a node can be executed
         # Track branches and convergence
         self._branch_counter = 0
         self._active_branches = {}  # {convergence_node: set(branch_ids)}
@@ -147,6 +149,17 @@ class GraphExecutor:
                 self.graph._update_chain_status(ChainStatus.RUNNING)
 
             node_id = frame.node_id
+
+            # Check for cycle limits
+            self._node_execution_count[node_id] = self._node_execution_count.get(node_id, 0) + 1
+            if self._node_execution_count[node_id] > self._max_node_iterations:
+                logger.error(
+                    f"Node '{node_id}' has been executed {self._node_execution_count[node_id]} times, "
+                    f"exceeding the maximum limit of {self._max_node_iterations}. "
+                    "Possible infinite loop detected."
+                )
+                self.graph._update_chain_status(ChainStatus.FAILED)
+                return
 
             # Add debug logging for branch tracking
             if frame.branch_id is not None:
@@ -274,6 +287,17 @@ class GraphExecutor:
                     raise ValueError(
                         f"Router node '{node_id}' returned invalid node_id: '{result}'. Must be a valid node in the graph."
                     )
+
+                target_count = self._node_execution_count.get(result, 0)
+                if target_count >= self._max_node_iterations:
+                    logger.error(
+                        f"Router target node '{result}' has been executed {target_count} times, "
+                        f"exceeding the maximum limit of {self._max_node_iterations}. "
+                        "Possible infinite loop detected."
+                    )
+                    self.graph._update_chain_status(ChainStatus.FAILED)
+                    return
+
                 logger.debug(f"Router node '{node_id}' routing to node: {result}")
 
                 # Remove all downstream nodes from visited_nodes
@@ -352,6 +376,7 @@ class GraphExecutor:
         state = {
             "execution_frames": self.execution_frames.copy(),
             "visited_nodes": self._visited_nodes.copy(),
+            "node_execution_count": self._node_execution_count.copy(),  # Add execution count to state
             "branch_counter": self._branch_counter,
             "active_branches": {k: v.copy() for k, v in self._active_branches.items()},
             "graph_state": self.graph.state,
@@ -413,6 +438,7 @@ class GraphExecutor:
 
         self._is_interrupted = saved_state.get("is_interrupted", False)
         self._interrupted_frame = saved_state.get("interrupted_frame", None)
+        self._node_execution_count = saved_state.get("node_execution_count", {})  # Restore execution count
 
     def _get_node_parents(self, node_id: str) -> set:
         """Get all parent nodes that have edges leading to the given node."""
