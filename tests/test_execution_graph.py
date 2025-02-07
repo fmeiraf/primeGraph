@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, Dict, List
 
 import pytest
@@ -963,4 +964,49 @@ async def test_chain_status_with_interrupts():
     assert graph.state.execution_order == ["task1", "task2", "task3", "task4"]
 
 
+@pytest.mark.asyncio
+async def test_async_parallel_execution_timeout():
+    basic_graph = Graph()
 
+    @basic_graph.node()
+    async def slow_task():
+        await asyncio.sleep(10)  # Task that takes too long
+
+    @basic_graph.node()
+    async def normal_task():
+        pass
+
+    basic_graph.add_edge(START, "slow_task")
+    basic_graph.add_edge("slow_task", "normal_task")
+    basic_graph.add_edge("normal_task", END)
+    basic_graph.compile()
+
+    # Verify timeout error is raised
+    with pytest.raises(TimeoutError) as exc_info:
+        await basic_graph.execute(timeout=2)
+
+    assert "Execution timeout" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_async_parallel_execution_with_error():
+    basic_graph = Graph()
+
+    @basic_graph.node()
+    async def failing_task():
+        raise ValueError("Task failed")
+
+    @basic_graph.node()
+    async def normal_task():
+        pass
+
+    basic_graph.add_edge(START, "failing_task")
+    basic_graph.add_edge("failing_task", "normal_task")
+    basic_graph.add_edge("normal_task", END)
+    basic_graph.compile()
+
+    # Verify the error is propagated
+    with pytest.raises(RuntimeError) as exc_info:
+        await basic_graph.execute()
+
+    assert "Task failed" in str(exc_info.value)

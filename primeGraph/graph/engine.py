@@ -263,12 +263,14 @@ class Engine:
                     # Wrap execution in asyncio.wait_for for timeout
                     if node.is_async:
                         result = await asyncio.wait_for(
-                            node.action(frame.state),
+                            node.action(frame.state) if self.graph.state else node.action(),
                             timeout=self._timeout,
                         )
                     else:
                         result = await asyncio.wait_for(
-                            asyncio.to_thread(node.action, frame.state),
+                            asyncio.to_thread(node.action, frame.state)
+                            if self.graph.state
+                            else asyncio.to_thread(node.action),
                             timeout=self._timeout,
                         )
 
@@ -289,14 +291,18 @@ class Engine:
                     if self._interrupted_frames.get(frame.branch_id or 0) == frame:
                         self._interrupted_frames.pop(frame.branch_id or 0)
 
-                except asyncio.TimeoutError:
-                    logger.error(f"Node '{node_id}' execution timed out after {self._timeout} seconds")
+                except asyncio.TimeoutError as e:
+                    logger.error(
+                        f"Execution timeout: Node '{node_id}' execution timed out after {self._timeout} seconds"
+                    )
                     self.graph._update_chain_status(ChainStatus.FAILED)
-                    return
+                    raise TimeoutError(
+                        f"Execution timeout: Node '{node_id}' execution timed out after {self._timeout} seconds"
+                    ) from e
                 except Exception as e:
                     logger.error(f"Error executing node '{node_id}': {str(e)}")
                     self.graph._update_chain_status(ChainStatus.FAILED)
-                    return
+                    raise RuntimeError(f"Task failed: Error executing node '{node_id}': {str(e)}") from e
 
             self._visited_nodes.add(node_id)
 
