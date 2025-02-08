@@ -255,8 +255,7 @@ class PostgreSQLStorage(StorageBackend):
             "state_version",
             "data",
             "timestamp",
-            "next_execution_node",
-            "executed_nodes",
+            "engine_state",
             "created_at",
         }
 

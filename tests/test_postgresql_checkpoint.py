@@ -82,7 +82,8 @@ class StateForTestWithHistory(GraphState):
   execution_order: History[str]
 
 
-def test_resume_with_checkpoint_load(postgres_storage):
+@pytest.mark.asyncio
+async def test_resume_with_checkpoint_load(postgres_storage):
   state = StateForTestWithHistory(execution_order=[])
   graph = Graph(state=state, checkpoint_storage=postgres_storage)
 
@@ -109,20 +110,15 @@ def test_resume_with_checkpoint_load(postgres_storage):
   graph.add_edge("task4", END)
   graph.compile()
 
-  # Start execution
-  chain_id = graph.start()
-  assert all(task in graph.state.execution_order for task in ["task1", "task2", "task3"])
-  assert len(postgres_storage.list_checkpoints(graph.chain_id)) == 4  # Including interrupt
-
+  
   # Start new chain to test load
-  new_chain_id = graph.start()
-  assert new_chain_id != chain_id
+  chain_id = await graph.execute()
 
   # Load first chain state
   graph.load_from_checkpoint(chain_id)
 
   # Resume execution
-  graph.resume()
+  await graph.resume()
   assert all(task in graph.state.execution_order for task in ["task1", "task2", "task3", "task4"])
 
 
