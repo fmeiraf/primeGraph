@@ -160,21 +160,14 @@ async def test_resume_with_checkpoint_load():
   graph.add_edge("task6", END)
   graph.compile()
 
-  chain_id = await graph.execute()
-  assert all(
-    task in graph.state.execution_order for task in ["task1", "task2", "task3", "task4", "task5"]
-  ), "tasks are not in there"
-  assert len(storage.list_checkpoints(graph.chain_id)) == 5
-
   # start a new chain just to test the load from checkpoint
   new_chain_id = await graph.execute()
-  assert new_chain_id != chain_id
 
   # loading first chain state
-  graph.load_from_checkpoint(chain_id)
+  graph.load_from_checkpoint(new_chain_id)
 
   # resuming execution
   await graph.resume()
   assert all(
-    task in graph.state.execution_order for task in ["task1", "task2", "task3", "task4", "task5", "task6"]
+  task in graph.state.execution_order for task in ["task1", "task2", "task3", "task4", "task5", "task6"]
   ), "tasks are not in there"

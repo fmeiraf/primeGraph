@@ -467,6 +467,9 @@ class Engine:
                 if active_branches:
                     frame.branch_id = next(iter(active_branches))  # Get first available branch ID
                     frame.target_convergence = conv_point
+            # Mark frame as resumed if it was previously interrupted
+            if next_node in self.graph.nodes and self.graph.nodes[next_node].interrupt == "before":
+                frame.resumed = True
             self.execution_frames.append(frame)
 
         # Restore graph state
