@@ -1010,3 +1010,65 @@ async def test_async_parallel_execution_with_error():
         await basic_graph.execute()
 
     assert "Task failed" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_parallel_execution_with_interrupt():
+    class StateForTestWithHistory(GraphState):
+        execution_order: History[str]
+        counter: Incremental[int]
+
+    state = StateForTestWithHistory(execution_order=[], counter=0)
+    graph = Graph(state=state)
+
+    @graph.node()
+    def task1(state):
+        return {"execution_order": "task1", "counter": 1}
+
+    @graph.node(interrupt="after")
+    def task2(state):
+        return {"execution_order": "task2"}
+
+    @graph.node()
+    def task3(state):
+        return {"execution_order": "task3"}
+
+    @graph.node()
+    def task4(state):
+        return {"execution_order": "task4"}
+    
+    @graph.node()
+    def task5(state):
+        return {"execution_order": "task5"}
+    
+    @graph.node()
+    def task6(state):
+        return {"execution_order": "task6"}
+
+    # Create parallel paths
+    graph.add_edge(START, "task1")
+    graph.add_edge("task1", "task2")
+    graph.add_edge("task1", "task3")
+    graph.add_edge("task2", "task4")
+    graph.add_edge("task3", "task5")
+    graph.add_edge("task4", "task6")
+    graph.add_edge("task5", "task6")
+    graph.add_edge("task6", END)
+    graph.compile()
+
+    # First execution - should execute task1, task2, task3, and task5
+    # but pause after task2 before executing task4
+    await graph.execute()
+    assert set(graph.state.execution_order) == {"task1", "task2", "task3", "task5"}
+    assert graph.chain_status == ChainStatus.PAUSE
+    assert graph.state.counter == 1
+
+    # Resume execution - should complete task4 and task6
+    await graph.resume()
+    assert set(graph.state.execution_order) == {"task1", "task2", "task3", "task4", "task5", "task6"}
+    assert graph.chain_status == ChainStatus.DONE
+    
+    # Verify execution order: task4 must come before task6
+    task4_index = graph.state.execution_order.index("task4")
+    task6_index = graph.state.execution_order.index("task6")
+    assert task4_index < task6_index, "task4 should be executed before task6"

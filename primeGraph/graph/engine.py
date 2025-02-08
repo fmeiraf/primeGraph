@@ -73,6 +73,8 @@ class Engine:
         self._interrupted_frames = {}  # {branch_id: ExecutionFrame}
         self._has_executed = False  # Flag to indicate if execute() has been called
 
+        self._interrupt_triggered = False  # new flag
+
     def _identify_convergence_points(self):
         """
         Identifies nodes that have multiple incoming edges (convergence points).
@@ -284,7 +286,6 @@ class Engine:
                     if isinstance(result, dict):
                         for state_field_name, state_field_value in result.items():
                             self.graph.buffers[state_field_name].update(state_field_value, node_id)
-
                         self.graph._update_state_from_buffers()
 
                     # After successful execution, clear interrupt state if this was the interrupted node
@@ -305,6 +306,11 @@ class Engine:
                     raise RuntimeError(f"Task failed: Error executing node '{node_id}': {str(e)}") from e
 
             self._visited_nodes.add(node_id)
+
+            # *** NEW CHECK: If any branch triggered an interrupt, pause before scheduling more nodes.
+            if self.graph.chain_status != ChainStatus.RUNNING:
+                self._interrupted_frames[frame.branch_id or 0] = frame
+                return
 
             # Get next node before saving checkpoint
             children = self.graph.edges_map.get(node_id, [])
