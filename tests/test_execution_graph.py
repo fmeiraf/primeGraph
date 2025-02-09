@@ -291,29 +291,6 @@ async def test_pause_after_node_execution():
     await graph.resume()
     assert graph.state.execution_order == ["task1", "task2", "task3"]
 
-
-@pytest.mark.asyncio
-async def test_resume_without_pause():
-    graph = Graph()
-
-    @graph.node()
-    def task1():
-        pass
-
-    @graph.node()
-    def task2():
-        pass
-
-    graph.add_edge(START, "task1")
-    graph.add_edge("task1", "task2")
-    graph.add_edge("task2", END)
-    graph.compile()
-
-    # Should raise error when trying to resume without a pause
-    with pytest.raises(RuntimeError):
-        await graph.resume()
-
-
 class StateForTestWithHistory(GraphState):
     execution_order: History[str]
 

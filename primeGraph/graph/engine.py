@@ -127,8 +127,7 @@ class Engine:
         Resume execution: here we requeue all the paused frames (from a prior interrupt)
         and then continue processing.
         """
-        if not self._has_executed:
-            raise RuntimeError("Cannot resume execution because execute() has not been run yet.")
+
         logger.debug("Resuming execution on all paused branches...")
         paused_frames = [frame for frame in self._interrupted_frames.values() if frame is not None]
         for frame in paused_frames:

@@ -11,6 +11,7 @@ from psycopg2.pool import ThreadedConnectionPool
 
 from primeGraph.checkpoint.base import CheckpointData, StorageBackend
 from primeGraph.checkpoint.serialization import serialize_model
+from primeGraph.graph.engine import ExecutionFrame
 from primeGraph.models.checkpoint import Checkpoint
 from primeGraph.models.state import GraphState
 from primeGraph.types import ChainStatus
@@ -70,6 +71,71 @@ class PostgreSQLStorage(StorageBackend):
 
         return conn
 
+    def _convert_sets_to_lists(self, obj):
+        """Helper method to convert sets to lists in nested structures."""
+        if isinstance(obj, dict):
+            return {key: self._convert_sets_to_lists(value) for key, value in obj.items()}
+        elif isinstance(obj, set):
+            return list(obj)
+        elif isinstance(obj, list):
+            return [self._convert_sets_to_lists(item) for item in obj]
+        elif isinstance(obj, GraphState):
+            # Convert GraphState to a serializable dictionary
+            return {"__class__": f"{obj.__class__.__module__}.{obj.__class__.__name__}", "data": serialize_model(obj)}
+        # Add handling for ExecutionFrame
+        elif isinstance(obj, ExecutionFrame):
+            return {
+                "__class__": "primeGraph.graph.engine.ExecutionFrame",
+                "data": {
+                    "node_id": obj.node_id,
+                    "state": self._convert_sets_to_lists(obj.state),
+                    "branch_id": obj.branch_id,
+                    "target_convergence": obj.target_convergence,
+                    "resumed": obj.resumed,
+                },
+            }
+        return obj
+
+    def _convert_lists_to_sets(self, obj):
+        """Helper method to convert lists back to sets in nested structures.
+        Only converts lists that were originally sets based on context."""
+        if isinstance(obj, dict):
+            # Check if this is a serialized GraphState or ExecutionFrame
+            if "__class__" in obj and "data" in obj:
+                class_path = obj["__class__"]
+                if class_path == "primeGraph.graph.engine.ExecutionFrame":
+                    # Reconstruct ExecutionFrame
+                    frame_data = self._convert_lists_to_sets(obj["data"])
+                    frame = ExecutionFrame(node_id=frame_data["node_id"], state=frame_data["state"])
+                    frame.branch_id = frame_data["branch_id"]
+                    frame.target_convergence = frame_data["target_convergence"]
+                    frame.resumed = frame_data["resumed"]
+                    return frame
+                else:
+                    # Handle GraphState as before
+                    module_name, class_name = class_path.rsplit(".", 1)
+                    module = __import__(module_name, fromlist=[class_name])
+                    state_class = getattr(module, class_name)
+                    if isinstance(obj["data"], str):
+                        import json
+
+                        data = json.loads(obj["data"])
+                    else:
+                        data = obj["data"]
+                    return state_class(**data)
+
+            # Special handling for known set fields
+            if "visited_nodes" in obj:
+                obj["visited_nodes"] = set(obj["visited_nodes"])
+            if "active_branches" in obj:
+                obj["active_branches"] = {
+                    k: set(v) if isinstance(v, list) else v for k, v in obj["active_branches"].items()
+                }
+            return {key: self._convert_lists_to_sets(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_lists_to_sets(item) for item in obj]
+        return obj
+
     def save_checkpoint(
         self,
         state_instance: GraphState,
@@ -103,6 +169,14 @@ class PostgreSQLStorage(StorageBackend):
                     # Add advisory lock to prevent concurrent updates
                     cur.execute("SELECT pg_advisory_xact_lock(%s)", (hash(checkpoint_id),))
 
+                    # Convert engine_state to JSON format, ensuring sets are converted to lists
+                    engine_state = (
+                        self._convert_sets_to_lists(checkpoint_data.engine_state)
+                        if checkpoint_data.engine_state
+                        else None
+                    )
+                    engine_state_json = Json(engine_state) if engine_state else None
+
                     cur.execute(
                         sql,
                         (
@@ -113,7 +187,7 @@ class PostgreSQLStorage(StorageBackend):
                             getattr(state_instance, "version", None),
                             Json(serialized_data),
                             datetime.now(),
-                            checkpoint_data.engine_state,
+                            engine_state_json,
                         ),
                     )
                     conn.commit()
@@ -145,6 +219,11 @@ class PostgreSQLStorage(StorageBackend):
                     if not result:
                         raise KeyError(f"Checkpoint '{checkpoint_id}' not found for chain '{chain_id}'")
 
+                    # Convert lists back to sets in engine_state if it exists
+                    engine_state = result["engine_state"]
+                    if engine_state:
+                        engine_state = self._convert_lists_to_sets(engine_state)
+
                     return Checkpoint(
                         checkpoint_id=result["checkpoint_id"],
                         chain_id=result["chain_id"],
@@ -153,7 +232,7 @@ class PostgreSQLStorage(StorageBackend):
                         state_version=result["state_version"],
                         data=result["data"],
                         timestamp=result["timestamp"],
-                        engine_state=result["engine_state"],
+                        engine_state=engine_state,
                     )
             finally:
                 self.pool.putconn(conn)

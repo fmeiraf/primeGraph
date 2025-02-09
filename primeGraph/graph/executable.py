@@ -262,12 +262,11 @@ class Graph(BaseGraph):
             checkpoint_data = CheckpointData(
                 chain_id=self.chain_id,
                 chain_status=self.chain_status,
-                next_execution_node=self.next_execution_node,
-                executed_nodes=self.executed_nodes,
             )
             self.checkpoint_storage.save_checkpoint(
                 state_instance=self.state,
                 checkpoint_data=checkpoint_data,
+                engine_state=self.execution_engine.get_full_state(),
             )
             if self.verbose:
                 self.logger.debug("Checkpoint saved after state update")
@@ -311,8 +310,7 @@ class Graph(BaseGraph):
             checkpoint_data = CheckpointData(
                 chain_id=self.chain_id,
                 chain_status=self.chain_status,
-                next_execution_node=self.next_execution_node,
-                executed_nodes=self.executed_nodes,
+                engine_state=self.execution_engine.get_full_state(),
             )
             self.checkpoint_storage.save_checkpoint(
                 state_instance=self.state,
