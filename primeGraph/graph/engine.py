@@ -9,7 +9,11 @@ from primeGraph.types import ChainStatus
 if TYPE_CHECKING:
     from primeGraph.graph.executable import Graph
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 logger = logging.getLogger(__name__)
 
 
@@ -21,6 +25,8 @@ class ExecutionFrame:
         :param node_id: The current node id to execute.
         :param state: The state (a dict) carried along this branch.
         """
+        # Generate a unique ID for this execution frame
+        self.frame_id = id(self)
         self.node_id = node_id
         self.state = state
         # Branch tracking for parallel execution
@@ -32,6 +38,9 @@ class ExecutionFrame:
         self.convergence_barrier: Optional[ConvergenceBarrier] = None
         # Flag to indicate the interrupt for this frame has been handled (after it was resumed)
         self.resumed = False
+
+    def __repr__(self):
+        return f"ExecutionFrame(frame_id={self.frame_id}, node_id={self.node_id}, branch_id={self.branch_id}, target_convergence={self.target_convergence}), resumed={self.resumed}"
 
 
 class ConvergenceBarrier:
@@ -134,7 +143,14 @@ class Engine:
             frame._pause_event = None  # Clear the pause event
             frame.resumed = True  # Mark this frame as resumed so that its interrupt won't fire again
         self._interrupted_frames.clear()
-        self.execution_frames.extend(paused_frames)
+        # Only extend execution frames with paused frames that aren't already there
+        new_frames = [frame for frame in paused_frames if frame not in self.execution_frames]
+        if new_frames:
+            self.execution_frames.extend(new_frames)
+            logger.debug(f"Extended execution frames: {self.execution_frames}")
+            logger.debug(f"Paused frames: {paused_frames}")
+            logger.debug(f"New frames: {new_frames}")
+
         self.graph._update_chain_status(ChainStatus.RUNNING)
         await self._execute_all()
 
@@ -159,8 +175,12 @@ class Engine:
         the loop stops and execute() returns.
         """
         while self.execution_frames and self.graph.chain_status == ChainStatus.RUNNING:
-            frame = self.execution_frames.pop(0)
-            await self._execute_frame(frame)
+            if len(self.execution_frames) > 1:
+                logger.debug(f"Execution frames: {self.execution_frames}")
+                await asyncio.gather(*(self._execute_frame(frame) for frame in self.execution_frames))
+            else:
+                frame = self.execution_frames.pop(0)
+                await self._execute_frame(frame)
 
     def _node_is_executable(self, node_id: str) -> bool:
         """
@@ -175,6 +195,7 @@ class Engine:
         we simply update the chain status to PAUSE and return.
         """
         while True:
+            logger.debug(f"Executing frame {frame.frame_id}")
             if self.graph.chain_status != ChainStatus.RUNNING:
                 self.graph._update_chain_status(ChainStatus.RUNNING)
 
@@ -251,9 +272,14 @@ class Engine:
                 if frame._pause_event is None:
                     frame._pause_event = asyncio.Event()
                     self._interrupted_frames[frame.branch_id or 0] = frame
-                logger.debug(f"[Interrupt-before] Branch {frame.branch_id} pausing before executing node '{node_id}'.")
+                logger.debug(
+                    f"[Interrupt-before] [[ {frame.node_id} ]] Branch {frame.branch_id} pausing before executing node '{node_id}'."
+                )
                 self.graph._update_chain_status(ChainStatus.PAUSE)
                 self.graph._save_checkpoint(node_id, self.get_full_state())
+                # Remove the frame from execution_frames to prevent reprocessing
+                if frame in self.execution_frames:
+                    self.execution_frames.remove(frame)
                 return
 
             # --- NODE EXECUTION ---
@@ -408,6 +434,7 @@ class Engine:
             if len(children) == 1:
                 continue
             else:
+                logger.debug(f"Laucing Parallel branches: {child_frames}")
                 await asyncio.gather(*(self._execute_frame(child_frame) for child_frame in child_frames))
                 return
 
