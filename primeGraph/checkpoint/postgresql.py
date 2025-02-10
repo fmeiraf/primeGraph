@@ -71,7 +71,7 @@ class PostgreSQLStorage(StorageBackend):
 
         return conn
 
-    def _convert_sets_to_lists(self, obj):
+    def _convert_sets_to_lists(self, obj: Any) -> Any:
         """Helper method to convert sets to lists in nested structures."""
         if isinstance(obj, dict):
             return {key: self._convert_sets_to_lists(value) for key, value in obj.items()}
@@ -96,7 +96,7 @@ class PostgreSQLStorage(StorageBackend):
             }
         return obj
 
-    def _convert_lists_to_sets(self, obj):
+    def _convert_lists_to_sets(self, obj: Any) -> Any:
         """Helper method to convert lists back to sets in nested structures.
         Only converts lists that were originally sets based on context."""
         if isinstance(obj, dict):
