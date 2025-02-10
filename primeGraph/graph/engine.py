@@ -1,9 +1,10 @@
 import asyncio
 import copy
 import logging
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
 
 from primeGraph.constants import END, START
+from primeGraph.models.state import GraphState
 from primeGraph.types import ChainStatus
 
 if TYPE_CHECKING:
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class ExecutionFrame:
-    def __init__(self, node_id: str, state: Dict):
+    def __init__(self, node_id: str, state: GraphState | None = None):
         """
         A frame represents a branch of execution.
 
@@ -39,7 +40,7 @@ class ExecutionFrame:
         # Flag to indicate the interrupt for this frame has been handled (after it was resumed)
         self.resumed = False
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"ExecutionFrame(frame_id={self.frame_id}, node_id={self.node_id}, branch_id={self.branch_id}, target_convergence={self.target_convergence}), resumed={self.resumed}"
 
 
@@ -55,7 +56,7 @@ class ConvergenceBarrier:
         self.arrived = 0
         self.event = asyncio.Event()
 
-    async def wait(self):
+    async def wait(self) -> None:
         self.arrived += 1
         if self.arrived >= self.count:
             self.event.set()
@@ -68,40 +69,40 @@ class Engine:
         self._resume_event = asyncio.Event()
         self._resume_event.clear()
         # For non-parallel (or "serialized") frames, we still keep a queue.
-        self.execution_frames = []  # Used when running serially, not for parallel tasks.
+        self.execution_frames: List[ExecutionFrame | None] = []  # Used when running serially, not for parallel tasks.
         # Track visited nodes and per-node count
-        self._visited_nodes = set()
-        self._node_execution_count = {}
+        self._visited_nodes: Set[str] = set()
+        self._node_execution_count: Dict[str, int] = {}
         self._max_node_iterations = max_node_iterations
         # Branch tracking variables:
         self._branch_counter = 0
-        self._active_branches = {}  # {convergence_node: set(branch_ids)}
+        self._active_branches: Dict[str, Set[int]] = {}  # {convergence_node: set(branch_ids)}
         self._convergence_points = self._identify_convergence_points()
         self._timeout = timeout
         # For true concurrency, we collect interrupted frames (by branch_id)
-        self._interrupted_frames = {}  # {branch_id: ExecutionFrame}
+        self._interrupted_frames: Dict[int, ExecutionFrame | None] = {}  # {branch_id: ExecutionFrame}
         self._has_executed = False  # Flag to indicate if execute() has been called
 
         self._interrupt_triggered = False  # new flag
 
-    def _identify_convergence_points(self):
+    def _identify_convergence_points(self) -> Dict[str, int]:
         """
         Identifies nodes that have multiple incoming edges (convergence points).
         Returns a dict of {node_id: number_of_incoming_edges}.
         """
-        incoming_edges = {}
+        incoming_edges: Dict[str, int] = {}
         for source, targets in self.graph.edges_map.items():
             for target in targets:
                 incoming_edges[target] = incoming_edges.get(target, 0) + 1
         return {node: count for node, count in incoming_edges.items() if count > 1}
 
-    def _find_next_convergence_point(self, start_node):
+    def _find_next_convergence_point(self, start_node: str) -> Optional[str]:
         """
         BFS to find the next convergence point this path leads to.
         Returns the convergence point node_id or None if path doesn't lead to one.
         """
-        visited = set()
-        queue = [(start_node, [])]
+        visited: Set[str] = set()
+        queue: List[Tuple[str, List[str]]] = [(start_node, [])]
 
         while queue:
             current, path = queue.pop(0)
@@ -122,7 +123,7 @@ class Engine:
 
         return None
 
-    async def _wait_for_resume(self):
+    async def _wait_for_resume(self) -> None:
         """
         When an interrupt occurs, wait until the user calls resume().
         """
@@ -131,7 +132,7 @@ class Engine:
         self._resume_event.clear()  # Clear the event immediately after it's triggered
         logger.debug("Execution resumed.")
 
-    async def resume(self):
+    async def resume(self) -> None:
         """
         Resume execution: here we requeue all the paused frames (from a prior interrupt)
         and then continue processing.
@@ -154,21 +155,21 @@ class Engine:
         self.graph._update_chain_status(ChainStatus.RUNNING)
         await self._execute_all()
 
-    async def execute(self):
+    async def execute(self) -> None:
         """
         Begin executing the graph from the START node.
         This method will return either when the graph fully completes or when an interrupt occurs.
         """
         self._has_executed = True  # Mark that execute() has been run
         initial_state = self.graph.state
-        if not initial_state:
-            initial_state = {}
+        # if not initial_state:
+        #     initial_state = {}
         initial_frame = ExecutionFrame(START, initial_state)
         self.execution_frames.append(initial_frame)
         self.graph._update_chain_status(ChainStatus.RUNNING)
         await self._execute_all()
 
-    async def _execute_all(self):
+    async def _execute_all(self) -> None:
         """
         Process all pending execution frames.
         Now we check for chain_status so that if an interrupt has set it to PAUSE,
@@ -177,10 +178,13 @@ class Engine:
         while self.execution_frames and self.graph.chain_status == ChainStatus.RUNNING:
             if len(self.execution_frames) > 1:
                 logger.debug(f"Execution frames: {self.execution_frames}")
-                await asyncio.gather(*(self._execute_frame(frame) for frame in self.execution_frames))
+                await asyncio.gather(
+                    *(self._execute_frame(frame) for frame in self.execution_frames if frame is not None)
+                )
             else:
                 frame = self.execution_frames.pop(0)
-                await self._execute_frame(frame)
+                if frame is not None:
+                    await self._execute_frame(frame)
 
     def _node_is_executable(self, node_id: str) -> bool:
         """
@@ -188,7 +192,7 @@ class Engine:
         """
         return node_id != START and node_id not in self._visited_nodes
 
-    async def _execute_frame(self, frame: ExecutionFrame):
+    async def _execute_frame(self, frame: ExecutionFrame) -> None:
         """
         Execute a single frame. For branches created concurrently this method may run in an independent task.
         The key change here is that upon hitting an interrupt we do not wait on a pause event;
@@ -291,12 +295,12 @@ class Engine:
                     # Wrap execution in asyncio.wait_for for timeout
                     if node.is_async:
                         result = await asyncio.wait_for(
-                            node.action(self.graph.state) if self.graph.state else node.action(),
+                            node.action(self.graph.state) if self.graph.state else node.action(),  # type: ignore[arg-type]
                             timeout=self._timeout,
                         )
                     else:
                         result = await asyncio.wait_for(
-                            asyncio.to_thread(node.action, self.graph.state)
+                            asyncio.to_thread(node.action, self.graph.state)  # type: ignore [func-returns-value]
                             if self.graph.state
                             else asyncio.to_thread(node.action),
                             timeout=self._timeout,
@@ -438,7 +442,7 @@ class Engine:
                 await asyncio.gather(*(self._execute_frame(child_frame) for child_frame in child_frames))
                 return
 
-    def get_full_state(self):
+    def get_full_state(self) -> Dict:
         """
         Returns a complete serializable snapshot of the executor's state.
         This includes all information needed to resume execution from a pause.
@@ -460,7 +464,7 @@ class Engine:
         }
         return state
 
-    def load_full_state(self, saved_state):
+    def load_full_state(self, saved_state: Dict) -> None:
         """
         Restore the complete executor state from a saved snapshot.
         This version uses the execution_frames saved in the checkpoint directly
@@ -490,30 +494,30 @@ class Engine:
         self._interrupted_frames = saved_state.get("interrupted_frames", {})
         self._node_execution_count = saved_state.get("node_execution_count", {})
 
-    def _get_node_parents(self, node_id: str) -> set:
+    def _get_node_parents(self, node_id: str) -> Set[str]:
         """Get all parent nodes that have edges leading to the given node."""
-        parents = set()
+        parents: Set[str] = set()
         for source, targets in self.graph.edges_map.items():
             if node_id in targets:
                 parents.add(source)
         return parents
 
-    def _get_branch_path_nodes(self, branch_id: int) -> set:
+    def _get_branch_path_nodes(self, branch_id: int) -> Set[str]:
         """Helper method to get all nodes in a branch's path."""
         # This is a simplified version - you might need to adjust based on your graph structure
-        path_nodes = set()
+        path_nodes: Set[str] = set()
         for node_id in self.graph.nodes:
             if node_id not in {START, END} and node_id not in self._visited_nodes:
                 path_nodes.add(node_id)
         return path_nodes
 
-    def _get_downstream_nodes(self, start_node: str) -> set:
+    def _get_downstream_nodes(self, start_node: str) -> Set[str]:
         """
         Get all downstream nodes from a starting node using BFS.
         This includes the start node itself.
         """
-        downstream_nodes = set([start_node])
-        queue = [start_node]
+        downstream_nodes: Set[str] = set([start_node])
+        queue: List[str] = [start_node]
         visited = set()
 
         while queue:
