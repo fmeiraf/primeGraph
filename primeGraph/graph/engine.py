@@ -253,6 +253,7 @@ class Engine:
                     self._interrupted_frames[frame.branch_id or 0] = frame
                 logger.debug(f"[Interrupt-before] Branch {frame.branch_id} pausing before executing node '{node_id}'.")
                 self.graph._update_chain_status(ChainStatus.PAUSE)
+                self.graph._save_checkpoint(node_id, self.get_full_state())
                 return
 
             # --- NODE EXECUTION ---
@@ -264,12 +265,12 @@ class Engine:
                     # Wrap execution in asyncio.wait_for for timeout
                     if node.is_async:
                         result = await asyncio.wait_for(
-                            node.action(frame.state) if self.graph.state else node.action(),
+                            node.action(self.graph.state) if self.graph.state else node.action(),
                             timeout=self._timeout,
                         )
                     else:
                         result = await asyncio.wait_for(
-                            asyncio.to_thread(node.action, frame.state)
+                            asyncio.to_thread(node.action, self.graph.state)
                             if self.graph.state
                             else asyncio.to_thread(node.action),
                             timeout=self._timeout,
@@ -296,12 +297,14 @@ class Engine:
                         f"Execution timeout: Node '{node_id}' execution timed out after {self._timeout} seconds"
                     )
                     self.graph._update_chain_status(ChainStatus.FAILED)
+                    self.graph._save_checkpoint(node_id, self.get_full_state())
                     raise TimeoutError(
                         f"Execution timeout: Node '{node_id}' execution timed out after {self._timeout} seconds"
                     ) from e
                 except Exception as e:
                     logger.error(f"Error executing node '{node_id}': {str(e)}")
                     self.graph._update_chain_status(ChainStatus.FAILED)
+                    self.graph._save_checkpoint(node_id, self.get_full_state())
                     raise RuntimeError(f"Task failed: Error executing node '{node_id}': {str(e)}") from e
 
             self._visited_nodes.add(node_id)
@@ -343,6 +346,7 @@ class Engine:
                         "Possible infinite loop detected."
                     )
                     self.graph._update_chain_status(ChainStatus.FAILED)
+                    self.graph._save_checkpoint(node_id, self.get_full_state())
                     return
 
                 logger.debug(f"Router node '{node_id}' routing to node: {result}")
@@ -398,6 +402,7 @@ class Engine:
                 logger.debug(f"[Interrupt-after] Executed node '{node_id}'.")
                 self.graph._update_chain_status(ChainStatus.PAUSE)
                 self._interrupted_frames[frame.branch_id or 0] = frame if len(children) == 1 else None
+                self.graph._save_checkpoint(node_id, self.get_full_state())
                 return
 
             if len(children) == 1:
@@ -431,8 +436,10 @@ class Engine:
     def load_full_state(self, saved_state):
         """
         Restore the complete executor state from a saved snapshot.
+        This version uses the execution_frames saved in the checkpoint directly
+        instead of recomputing them.
         """
-        # First restore visited nodes as it affects execution logic
+        # Restore visited nodes
         self._visited_nodes = set(saved_state["visited_nodes"])
 
         # Restore active branches exactly as they were
@@ -445,44 +452,16 @@ class Engine:
         # Set branch counter to the saved value
         self._branch_counter = saved_state["branch_counter"]
 
-        # Find the next nodes to execute based on visited nodes
-        next_nodes = set()
-        for node_id in self._visited_nodes:
-            children = self.graph.edges_map.get(node_id, [])
-            for child in children:
-                if child not in self._visited_nodes and child != END:
-                    # Check if this is a convergence point
-                    if child in self._convergence_points:
-                        # Only add convergence point if all its dependencies are visited
-                        parents = self._get_node_parents(child)
-                        if all(parent in self._visited_nodes for parent in parents):
-                            next_nodes.add(child)
-                    else:
-                        next_nodes.add(child)
+        # Directly restore the execution frames from the checkpoint
+        self.execution_frames = saved_state["execution_frames"].copy()
 
-        # Create execution frames for the next nodes
-        self.execution_frames = []
-        for next_node in next_nodes:
-            frame = ExecutionFrame(next_node, self.graph.state)
-            # Find the convergence point this node is heading towards
-            conv_point = self._find_next_convergence_point(next_node)
-            if conv_point and conv_point in self._active_branches:
-                # Only assign branch ID if the convergence point still has active branches
-                active_branches = self._active_branches[conv_point]
-                if active_branches:
-                    frame.branch_id = next(iter(active_branches))  # Get first available branch ID
-                    frame.target_convergence = conv_point
-            # Mark frame as resumed if it was previously interrupted
-            if next_node in self.graph.nodes and self.graph.nodes[next_node].interrupt == "before":
-                frame.resumed = True
-            self.execution_frames.append(frame)
-
-        # Restore graph state
+        # Restore the graph state and chain status
         self.graph.state = saved_state["graph_state"]
         self.graph._update_chain_status(ChainStatus(saved_state["chain_status"]))
 
-        self._interrupted_frames = saved_state.get("interrupted_frames", {})  # Restore interrupted frames
-        self._node_execution_count = saved_state.get("node_execution_count", {})  # Restore execution count
+        # Restore interrupted frames and execution counts
+        self._interrupted_frames = saved_state.get("interrupted_frames", {})
+        self._node_execution_count = saved_state.get("node_execution_count", {})
 
     def _get_node_parents(self, node_id: str) -> set:
         """Get all parent nodes that have edges leading to the given node."""

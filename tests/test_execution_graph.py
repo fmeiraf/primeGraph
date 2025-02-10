@@ -1,8 +1,10 @@
 import asyncio
+import random
+import time
 from typing import Any, Dict, List
 
 import pytest
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 from primeGraph.buffer.factory import History, Incremental, LastValue
 from primeGraph.constants import END, START
@@ -135,8 +137,6 @@ def extract_executable_nodes_info(executable_node):
         return [
             extract_executable_nodes_info(task) for task in executable_node.task_list
         ]
-
-
 
 
 class StateForTest(GraphState):
@@ -1050,3 +1050,106 @@ async def test_parallel_execution_with_interrupt():
     task4_index = graph.state.execution_order.index("task4")
     task6_index = graph.state.execution_order.index("task6")
     assert task4_index < task6_index, "task4 should be executed before task6"
+
+
+class SimpleTestState(GraphState):
+    # This state keeps track of the order of node execution and the random decision outcome.
+    execution_order: History[str] = Field(default_factory=list)
+    user_message: LastValue[str] = ""
+    is_followup: LastValue[bool] = False
+    is_summarize: LastValue[bool] = False
+    is_finalize: LastValue[bool] = False
+
+
+def create_simple_graph() -> Graph:
+    state = SimpleTestState()
+    graph = Graph(state=state)
+
+    @graph.node()
+    def start_conversation(state: SimpleTestState):
+        print("Executing start_conversation")
+        state.execution_order.append("start_conversation")
+        time.sleep(0.1)
+        # Simulate asking the user for input by setting a default message.
+        return {"user_message": "I want to plan something"}
+
+    @graph.node()
+    def process_user_message(state: SimpleTestState):
+        print("Executing process_user_message")
+        state.execution_order.append("process_user_message")
+        time.sleep(0.1)
+        # Random decision among three outcomes
+        outcome = random.choice(["followup", "summarize", "finalize"])
+        print(f"Random outcome selected: {outcome}")
+        if outcome == "followup":
+            return {"is_followup": True, "is_summarize": False, "is_finalize": False}
+        elif outcome == "summarize":
+            return {"is_followup": False, "is_summarize": True, "is_finalize": False}
+        else:
+            return {"is_followup": False, "is_summarize": False, "is_finalize": True}
+
+    @graph.node()
+    def response_router(state: SimpleTestState) -> str:
+        print("Executing response_router")
+        state.execution_order.append("response_router")
+        time.sleep(0.1)
+        # Route according to the flags set by process_user_message:
+        if state.is_finalize:
+            return "finalize"
+        elif state.is_summarize:
+            return "summarize"
+        elif state.is_followup:
+            return "followup"
+        return END
+
+    @graph.node()
+    def followup(state: SimpleTestState):
+        print("Executing followup branch")
+        state.execution_order.append("followup")
+        time.sleep(0.1)
+        return {}
+
+    @graph.node()
+    def summarize(state: SimpleTestState):
+        print("Executing summarize branch")
+        state.execution_order.append("summarize")
+        time.sleep(0.1)
+        return {}
+
+    @graph.node()
+    def finalize(state: SimpleTestState):
+        print("Executing finalize branch")
+        state.execution_order.append("finalize")
+        time.sleep(0.1)
+        return {}
+
+    # Build the graph:
+    graph.add_edge(START, "start_conversation")
+    graph.add_edge("start_conversation", "process_user_message")
+    graph.add_router_edge("process_user_message", "response_router")
+    graph.add_edge("response_router", "followup")
+    graph.add_edge("response_router", "summarize")
+    graph.add_edge("response_router", "finalize")
+    graph.add_edge("followup", END)
+    graph.add_edge("summarize", END)
+    graph.add_edge("finalize", END)
+
+    graph.compile()
+    return graph
+
+
+@pytest.mark.asyncio
+async def test_simple_random_graph():
+    graph = create_simple_graph()
+    await graph.execute()
+    # In case the graph paused (for example due to an interrupt), resume execution.
+    if graph.chain_status != "DONE":
+        await graph.resume()
+    print("Final execution order:", graph.state.execution_order)
+    # Expected order should be: start_conversation, process_user_message, response_router, then exactly one branch node.
+    assert "start_conversation" in graph.state.execution_order
+    assert "process_user_message" in graph.state.execution_order
+    assert "response_router" in graph.state.execution_order
+    branch_nodes = {"followup", "summarize", "finalize"}
+    executed_branches = set(graph.state.execution_order).intersection(branch_nodes)
+    assert len(executed_branches) == 1, "Exactly one branch should have been executed"
