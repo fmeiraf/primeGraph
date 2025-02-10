@@ -375,6 +375,47 @@ async def test_pause_resume_with_parallel_execution():
     assert "task4" in graph.state.execution_order
 
 
+@pytest.mark.asyncio
+async def test_pause_resume_with_parallel_execution_after_version():
+    state = StateForTestWithHistory(execution_order=[])
+    graph = Graph(state=state)
+
+    @graph.node()
+    def task1(state):
+        return {"execution_order": "task1"}
+
+    @graph.node(interrupt="after")
+    def task2(state):
+        return {"execution_order": "task2"}
+
+    @graph.node()
+    def task3(state):
+        return {"execution_order": "task3"}
+
+    @graph.node()
+    def task4(state):
+        return {"execution_order": "task4"}
+
+    # Create parallel paths
+    graph.add_edge(START, "task1")
+    graph.add_edge("task1", "task2")
+    graph.add_edge("task1", "task3")
+    graph.add_edge("task2", "task4")
+    graph.add_edge("task3", "task4")
+    graph.add_edge("task4", END)
+    graph.compile()
+
+    # First execution should execute task1 and task3, but pause before task2
+    await graph.execute()
+    assert "task1" in graph.state.execution_order
+    assert "task3" in graph.state.execution_order
+    assert "task2" in graph.state.execution_order
+    assert "task4" not in graph.state.execution_order
+
+    # Resume should complete the execution
+    await graph.resume()
+    assert "task4" in graph.state.execution_order
+
 
 class StateForTestWithInitialValues(GraphState):
     execution_order: History[str]
