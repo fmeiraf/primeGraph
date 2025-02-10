@@ -43,7 +43,7 @@ class BaseGraph:
         self.nodes[START] = Node(START, lambda: None, None, False, False, None)
         self.nodes[END] = Node(END, lambda: None, None, False, False, None)
         self.edges: Set[Edge] = set()
-        self.edges_map: Dict[str, str] = defaultdict(list)
+        self.edges_map: Dict[str, List[str]] = defaultdict(list)
         self.is_compiled: bool = False
         self.tasks: List[Callable[..., None]] = []
         self.event_handlers: List[Callable] = []
