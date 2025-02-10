@@ -31,7 +31,7 @@ class Graph(BaseGraph):
         state: Union[GraphState, None] = None,
         checkpoint_storage: Optional[StorageBackend] = None,
         chain_id: Optional[str] = None,
-        execution_timeout: Union[int, float] = 60 * 5,
+        execution_timeout: Union[int] = 60 * 5,
         max_node_iterations: int = 100,
         verbose: bool = False,
     ):
@@ -144,9 +144,9 @@ class Graph(BaseGraph):
 
     async def execute(
         self,
-        timeout: Union[int, float] = None,
+        timeout: Union[int, None] = None,
         chain_id: Optional[str] = None,
-    ) -> None:
+    ) -> str:
         """
         Start a new execution of the graph.
 
@@ -172,7 +172,7 @@ class Graph(BaseGraph):
 
     async def resume(
         self, timeout: Optional[Union[int, float]] = None, max_node_iterations: Optional[int] = None
-    ) -> None:
+    ) -> str:
         await self.execution_engine.resume()
         return self.chain_id
 
@@ -220,7 +220,10 @@ class Graph(BaseGraph):
             self.chain_id = checkpoint.chain_id
             self.chain_status = checkpoint.chain_status
 
-            self.execution_engine.load_full_state(checkpoint.engine_state)
+            if checkpoint.engine_state:
+                self.execution_engine.load_full_state(checkpoint.engine_state)
+            else:
+                self.logger.warning("No engine state found in checkpoint")
 
         self.logger.debug(f"Loaded checkpoint {checkpoint_id} for chain {self.chain_id}")
 
@@ -266,7 +269,6 @@ class Graph(BaseGraph):
             self.checkpoint_storage.save_checkpoint(
                 state_instance=self.state,
                 checkpoint_data=checkpoint_data,
-                engine_state=self.execution_engine.get_full_state(),
             )
             if self.verbose:
                 self.logger.debug("Checkpoint saved after state update")

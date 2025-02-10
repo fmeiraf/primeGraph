@@ -1,7 +1,7 @@
 import asyncio
 import copy
 import logging
-from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 from primeGraph.constants import END, START
 from primeGraph.models.state import GraphState
@@ -464,7 +464,7 @@ class Engine:
         }
         return state
 
-    def load_full_state(self, saved_state: Dict) -> None:
+    def load_full_state(self, saved_state: Dict[str, Any]) -> None:
         """
         Restore the complete executor state from a saved snapshot.
         This version uses the execution_frames saved in the checkpoint directly
