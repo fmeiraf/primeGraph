@@ -52,8 +52,7 @@ class StorageBackend(ABC):
                 f"Schema version mismatch: stored version is {stored_version}, "
                 f"but current model version is {current_version}."
             )
-        else:
-            return True
+        return True
 
     @abstractmethod
     def save_checkpoint(

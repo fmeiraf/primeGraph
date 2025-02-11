@@ -215,11 +215,12 @@ class BaseGraph:
 
         return decorator  # type: ignore
 
-    def add_edge(self, start_node: str, end_node: str, id: Optional[str] = None) -> Self:
+    def add_edge(self, start_node: str, end_node: str, edge_id: Optional[str] = None) -> Self:
         """Modified add_edge to handle subgraph connections"""
         if start_node not in self.nodes or end_node not in self.nodes:
             raise ValueError(
-                f"Either start_node '{start_node}' or end_node '{end_node}' must be added to the graph before adding an edge"
+                f"Either start_node '{start_node}' or end_node '{end_node}' "
+                f"must be added to the graph before adding an edge"
             )
 
         # Check if either node is a subgraph
@@ -239,13 +240,13 @@ class BaseGraph:
                 self._merge_subgraph(subgraph, end_node, connect_start=start_node)
         else:
             # Normal edge connection
-            if id is None:
+            if edge_id is None:
                 node_pair = (start_node, end_node)
                 self.edge_counter[node_pair] = self.edge_counter.get(node_pair, 0) + 1
                 self.edges_map[start_node].append(end_node)
-                id = f"{start_node}_to_{end_node}_{self.edge_counter[node_pair]}"
+                edge_id = f"{start_node}_to_{end_node}_{self.edge_counter[node_pair]}"
 
-            self.edges.add(Edge(id=id, start_node=start_node, end_node=end_node))
+            self.edges.add(Edge(id=edge_id, start_node=start_node, end_node=end_node))
 
         return self
 
@@ -319,10 +320,12 @@ class BaseGraph:
                     self.edges_map[new_edge.start_node].append(new_edge.end_node)
 
     def validate(self) -> bool:
-        """Validate that the graph starts with '__start__', ends with '__end__', and all nodes are on valid paths.
+        """Validate that the graph starts with '__start__', ends with '__end__',
+        and all nodes are on valid paths.
 
         Raises:
-            ValueError: If start/end nodes are missing, orphaned nodes are found, dead ends exist, or if there are cycles
+            ValueError: If start/end nodes are missing, orphaned nodes are found,
+            dead ends exist, or if there are cycles
         """
         # Check for required start and end nodes
         if START not in self.nodes:

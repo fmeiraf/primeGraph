@@ -18,23 +18,21 @@ Key principles:
 - **Zero Lock-in**: Deploy and run workflows however you want, with no vendor dependencies.
 - **Opinionated Yet Adaptable**: Structured foundations with room for customization.
 
-_Note from the author: This project came to life through my experience of creating AI applications. I want to acknowledge [langgraph](https://www.langchain.com/langgraph) as the main inspiration for this project. As an individual developer, I wanted to gain experience creating my own workflow engine to implement more of my own ideas and learnings. At the same time, I also wanted to create a framework that is flexible enough for others to deploy their apps however they want, as this is an open source project. So feel free to use it, modify it, and contribute to it._
+_Note from the author: This project came to life through my experience creating AI applications. I want to acknowledge [langgraph](https://www.langchain.com/langgraph) as the main inspiration for this project. As an individual developer, I wanted to gain experience creating my own workflow engine to implement more of my own ideas and learnings. At the same time, I also wanted to create a framework that is flexible enough for others to deploy their apps however they want, as this is an open source project. So feel free to use it, modify it, and contribute to it._
 
 #### Features
 
 - **Flexible Graph Construction**: Build multiple workflows with sequential and parallel execution paths.
-- **State Management**: Built-in state management with different buffer types to coordinate state management during workflow execution.
-- **Type Safety**: Built-in type safety for your nodes' shared state using Pydantic.
-- **Router Nodes**: Dynamic path selection based on node outputs.
-- **Repeatable Nodes**: Execute nodes multiple times in parallel or sequence.
-- **Subgraphs**: graphs can be composed of subgraphs to allow for more complex workflows.
-- **Persistence**: Save and resume workflow execution using stored states (currently supports memory and Postgres).
-- **Async Support**: Full async/await support for non-blocking execution.
-- **Acyclical and Cyclical Graphs**: Build acyclical and cyclical graphs with ease.
-- **Flow Control**: Support execution flow control for human-in-the-loop interactions.
-- **Visualization**: Generate visual representations of your workflows with 0 effort.
-- **Web Integration**: Built-in FastAPI integration with WebSocket support.
-- **(Coming Soon) Streaming**: Stream outputs from your nodes as they are generated.
+- **State Management**: Built-in state management with various buffer types to coordinate state updates during execution.
+- **Type Safety**: Uses Pydantic for enforcing shared state types across nodes.
+- **Router Nodes**: Dynamically choose execution paths based on node outputs.
+- **Repeatable Nodes**: Execute nodes multiple times either in parallel or sequence.
+- **Subgraphs**: Compose graphs of subgraphs to design complex workflows.
+- **Persistence**: Save and resume execution using checkpoint storage (supports memory and Postgres).
+- **Async Support**: Uses async/await for non-blocking execution with engine methods `execute()` and `resume()`.
+- **Flow Control**: Supports human-in-the-loop interactions by pausing and resuming workflows.
+- **Visualization**: Generate visual representations of your workflows with minimal effort.
+- **Web Integration**: Integrate with FastAPI and WebSockets for interactive workflows.
 
 ## Installation
 
@@ -44,25 +42,25 @@ pip install primeGraph
 
 #### [Optional] Install Graphviz for visualization
 
-To have the graph.visualize() method work, you need to install Graphviz binary on top of primeGraph package. Here is how to do it:
+To have the `graph.visualize()` method work, install the Graphviz binary:
 
-Link to install Graphviz: https://graphviz.org/download/
+https://graphviz.org/download/
 
 ## Core Features
 
 ### The Basics
 
 ```python
-from primeGraph import Graph
+import asyncio
+from primeGraph import Graph, START, END
 from primeGraph.models import GraphState
 from primeGraph.buffer import History, LastValue, Incremental
 
-
-# primeGraph uses the return values of the nodes to update the state (state is a pydantic model)
+# Define your state with appropriate buffer types
 class DocumentProcessingState(GraphState):
-    processed_files: History[str]  # History: stores all the values returned as a list
-    current_status: LastValue[str]  # LastValue: keeps the last value returned
-    number_of_executed_steps: Incremental[int]  # Incremental: increments the current value of the key by the returned value
+    processed_files: History[str]      # Stores all returned file names
+    current_status: LastValue[str]       # Keeps the last status value
+    number_of_executed_steps: Incremental[int]  # Increments with each step
 
 # Initialize state
 state = DocumentProcessingState(
@@ -71,13 +69,13 @@ state = DocumentProcessingState(
     number_of_executed_steps=0
 )
 
-# Create graph
+# Create a graph with the state
 graph = Graph(state=state)
 
-#adding nodes to the graph
+# Adding nodes to the graph
+'to simulate the workflow
 @graph.node()
 def load_documents(state):
-    # Simulate loading documents
     return {
         "processed_files": "document1.txt",
         "current_status": "loading",
@@ -86,7 +84,6 @@ def load_documents(state):
 
 @graph.node()
 def validate_documents(state):
-    # Validate loaded documents
     return {
         "current_status": "validating",
         "number_of_executed_steps": 1
@@ -94,7 +91,6 @@ def validate_documents(state):
 
 @graph.node()
 def process_documents(state):
-    # Process documents
     return {
         "current_status": "completed",
         "number_of_executed_steps": 1
@@ -106,19 +102,16 @@ graph.add_edge("load_documents", "validate_documents")
 graph.add_edge("validate_documents", "process_documents")
 graph.add_edge("process_documents", END)
 
-# Compile and execute
+# Compile the graph
 graph.compile()
-graph.start()
 
-# state after execution
-print(state)
+# Execute the graph asynchronously using the new engine methods
+async def run_graph():
+    await graph.execute()
+    print(state)
+    graph.visualize()
 
-# DocumentProcessingState(version='random_uuid',
-#   processed_files=['document1.txt'],
-#   current_status='completed',
-#   number_of_executed_steps=3)
-
-graph.visualize()
+asyncio.run(run_graph())
 ```
 
 <p align="center">
@@ -128,11 +121,13 @@ graph.visualize()
 ### Router Nodes
 
 ```python
-# previous Basic Usage ...example
+import asyncio
+from primeGraph import Graph, START, END
+
+graph = Graph()
 
 @graph.node()
 def load_documents(state):
-    # Simulate loading documents
     return {
         "processed_files": "document1.txt",
         "current_status": "loading",
@@ -141,7 +136,6 @@ def load_documents(state):
 
 @graph.node()
 def validate_documents(state):
-    # Validate loaded documents
     return {
         "current_status": "validating",
         "number_of_executed_steps": 1
@@ -149,7 +143,6 @@ def validate_documents(state):
 
 @graph.node()
 def process_documents(state):
-    # Process documents
     return {
         "current_status": "completed",
         "number_of_executed_steps": 1
@@ -157,7 +150,6 @@ def process_documents(state):
 
 @graph.node()
 def route_documents(state):
-    # Route based on document type
     if "invoice" in state.current_status:
         return "process_invoice"
     return "cancel_invoice"
@@ -170,30 +162,26 @@ def process_invoice(state):
 def cancel_invoice(state):
     return {"current_status": "invoice_cancelled"}
 
-# Connect nodes
+# Connect nodes and define router edges
 graph.add_edge(START, "load_documents")
 graph.add_edge("load_documents", "validate_documents")
 graph.add_edge("validate_documents", "process_documents")
 
-
-# Add router edges
+# Router node is connected as edge from process_documents
 graph.add_router_edge("process_documents", "route_documents")
 graph.add_edge("process_invoice", END)
 graph.add_edge("cancel_invoice", END)
 
 # Compile and execute
 graph.compile()
-graph.start()
 
-# state after execution
-print(state)
+async def run_router():
+    await graph.execute()
+    print(state)
+    graph.visualize()
 
-# DocumentProcessingState(version='random_uuid',
-#   processed_files=['document1.txt'],
-#   current_status='invoice_cancelled',
-#   number_of_executed_steps=4)
-
-graph.visualize()
+import asyncio
+asyncio.run(run_router())
 ```
 
 <p align="center">
@@ -203,7 +191,32 @@ graph.visualize()
 ### Repeatable Nodes
 
 ```python
-# previous Basic Usage ...example
+import asyncio
+from primeGraph import Graph, START, END
+
+graph = Graph()
+
+@graph.node()
+def load_documents(state):
+    return {
+        "processed_files": "document1.txt",
+        "current_status": "loading",
+        "number_of_executed_steps": 1
+    }
+
+@graph.node()
+def validate_documents(state):
+    return {
+        "current_status": "validating",
+        "number_of_executed_steps": 1
+    }
+
+@graph.node()
+def process_documents(state):
+    return {
+        "current_status": "processing",
+        "number_of_executed_steps": 1
+    }
 
 @graph.node()
 def repeating_process_batch(state):
@@ -224,7 +237,7 @@ graph.add_edge(START, "load_documents")
 graph.add_edge("load_documents", "validate_documents")
 graph.add_edge("validate_documents", "process_documents")
 
-# Add repeating edge to process multiple batches
+# Add repeating edge for processing multiple batches
 graph.add_repeating_edge(
     "process_documents",
     "repeating_process_batch",
@@ -232,22 +245,17 @@ graph.add_repeating_edge(
     repeat=3,
     parallel=True
 )
-
 graph.add_edge("conclude_documents", END)
 
-# Compile and execute
 graph.compile()
-graph.start()
 
-# state after execution
-print(state)
+async def run_repeatable():
+    await graph.execute()
+    print(state)
+    graph.visualize()
 
-# DocumentProcessingState(version='random_uuid',
-# processed_files=['document1.txt', 'batch_3', 'batch_3', 'batch_5'],
-# current_status='completed',
-# number_of_executed_steps=7)
-
-graph.visualize()
+import asyncio
+asyncio.run(run_repeatable())
 ```
 
 <p align="center">
@@ -257,22 +265,20 @@ graph.visualize()
 ### Subgraphs
 
 ```python
-# previous Basic Usage ...example
+import asyncio
+from primeGraph import Graph, START, END
 
-# Create graph
+state = ... # initialize your state appropriately
 main_graph = Graph(state=state)
 
 @main_graph.node()
 def load_documents(state):
-    # Simulate loading documents
     return {
         "processed_files": "document1.txt",
         "current_status": "loading",
         "number_of_executed_steps": 1
     }
 
-# a subgbraph decorator is execting the function (which is now a new node) to return a subgraph
-# you can either declare your subgraph in the function or reference from an existing subgraph
 @main_graph.subgraph()
 def validation_subgraph():
     subgraph = Graph(state=state)
@@ -293,12 +299,10 @@ def validation_subgraph():
 
 @main_graph.node()
 def pre_process_documents(state):
-    # Process documents
     return {
-        "current_status": "completed",
+        "current_status": "pre_processed",
         "number_of_executed_steps": 1
     }
-
 
 @main_graph.node()
 def conclude_documents(state):
@@ -307,29 +311,23 @@ def conclude_documents(state):
         "number_of_executed_steps": 1
     }
 
-
-
 # Connect nodes
 main_graph.add_edge(START, "load_documents")
-main_graph.add_edge("load_documents", "validation_subgraph") # subgreaph added as a normal node
+main_graph.add_edge("load_documents", "validation_subgraph")
 main_graph.add_edge("load_documents", "pre_process_documents")
 main_graph.add_edge("validation_subgraph", "conclude_documents")
 main_graph.add_edge("pre_process_documents", "conclude_documents")
 main_graph.add_edge("conclude_documents", END)
 
-# Compile and execute
 main_graph.compile()
-main_graph.start()
 
-# state after execution
-print(state)
+async def run_subgraph():
+    await main_graph.execute()
+    print(state)
+    main_graph.visualize()
 
-# DocumentProcessingState(version='random_uuid',
-# processed_files=['document1.txt'],
-# current_status='completed',
-# number_of_executed_steps=3)
-
-graph.visualize()
+import asyncio
+asyncio.run(run_subgraph())
 ```
 
 <p align="center">
@@ -339,25 +337,24 @@ graph.visualize()
 ### Flow Control
 
 ```python
-# previous Basic Usage ...example
+import asyncio
+from primeGraph import Graph, START, END
 
-# Create graph
+state = ...  # initialize state
+
 graph = Graph(state=state)
 
 @graph.node()
 def load_documents(state):
-    # Simulate loading documents
     return {
         "processed_files": "document1.txt",
         "current_status": "loading",
         "number_of_executed_steps": 1
     }
 
-# using interrupt="before" will interrupt the execution before this node is executed
-# using interrupt="after" will interrupt the execution after this node is executed
+# This node will interrupt execution before running
 @graph.node(interrupt="before")
 def review_documents(state):
-    # Validate loaded documents
     return {
         "current_status": "validating",
         "number_of_executed_steps": 1
@@ -365,7 +362,6 @@ def review_documents(state):
 
 @graph.node()
 def process_documents(state):
-    # Process documents
     return {
         "current_status": "completed",
         "number_of_executed_steps": 1
@@ -377,31 +373,20 @@ graph.add_edge("load_documents", "review_documents")
 graph.add_edge("review_documents", "process_documents")
 graph.add_edge("process_documents", END)
 
-# Compile and execute
 graph.compile()
-graph.start()
 
+async def run_flow():
+    # Start execution; this will pause before 'review_documents'
+    await graph.execute()
+    print("State after interruption:", state)
 
-# state until interrupted
-print(state)
+    # Once ready, resume the execution
+    await graph.resume()
+    print("State after resuming:", state)
+    graph.visualize()
 
-# DocumentProcessingState(version='random_uuid',
-#   processed_files=['document1.txt'],
-#   current_status='loading',
-#   number_of_executed_steps=1)
-
-
-graph.resume()
-
-# state after finishing
-print(state)
-
-# DocumentProcessingState(version='random_uuid',
-#   processed_files=['document1.txt'],
-#   current_status='completed',
-#   number_of_executed_steps=3)
-
-graph.visualize()
+import asyncio
+asyncio.run(run_flow())
 ```
 
 <p align="center">
@@ -428,17 +413,22 @@ graph = Graph(state=state, checkpoint_storage=storage)
 def validate_documents(state):
     return {"current_status": "needs_review"}
 
-# Start execution
-chain_id = graph.start()
+# Execute graph and save checkpoint
+async def run_with_checkpoint():
+    chain_id = await graph.execute()
+    # Later, load and resume from checkpoint
+    graph.load_from_checkpoint(chain_id)
+    await graph.resume()
 
-# Later, resume from checkpoint
-graph.load_from_checkpoint(chain_id)
-graph.resume()
+import asyncio
+asyncio.run(run_with_checkpoint())
 ```
 
 #### Async Support
 
 ```python
+import asyncio
+
 @graph.node()
 async def async_document_process(state):
     await asyncio.sleep(1)  # Simulate async processing
@@ -447,11 +437,13 @@ async def async_document_process(state):
         "current_status": "async_complete"
     }
 
-# Execute async graph
-await graph.start_async()
+# Execute the async graph
+async def run_async():
+    await graph.execute()
+    # Resume if execution was paused
+    await graph.resume()
 
-# Resume async graph
-await graph.resume_async()
+asyncio.run(run_async())
 ```
 
 #### Web Integration
@@ -466,117 +458,78 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from primeGraph.buffer import History
 from primeGraph.checkpoint import LocalStorage
-from primeGraph import Graph, END, START
+from primeGraph import Graph, START, END
 from primeGraph.models import GraphState
 from primeGraph.web import create_graph_service, wrap_graph_with_websocket
 
 logging.basicConfig(level=logging.DEBUG)
 
-# Create FastAPI app
-app = FastAPI()
+app = FastAPI(debug=True)
 
-
-# Explicitly set logging levels for key loggers
-logging.getLogger("uvicorn").setLevel(logging.DEBUG)
-logging.getLogger("fastapi").setLevel(logging.DEBUG)
-logging.getLogger("websockets").setLevel(logging.DEBUG)
-logging.getLogger("primeGraph").setLevel(logging.DEBUG)
-
-# Your existing imports...
-
-app = FastAPI(debug=True)  # Enable debug mode
-
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-
-# Your existing routes
 @app.get("/hello")
 async def hello():
     return {"message": "Hello World"}
 
-
-# Create multiple graphs if needed
 graphs: List[Graph] = []
 
-
-# Define state model
+# Define a simple state model
 class SimpleGraphState(GraphState):
     messages: History[str]
 
-
-# Create state instance
 state = SimpleGraphState(messages=[])
 
-# Update graph with state
 storage = LocalStorage()
 graph1 = Graph(state=state, checkpoint_storage=storage)
-
 
 @graph1.node()
 def add_hello(state: GraphState):
     logging.debug("add_hello")
     return {"messages": "Hello"}
 
-
 @graph1.node()
 def add_world(state: GraphState):
     logging.debug("add_world")
     return {"messages": "World"}
-
 
 @graph1.node()
 def add_exclamation(state: GraphState):
     logging.debug("add_exclamation")
     return {"messages": "!"}
 
-
-# Add edges
 graph1.add_edge(START, "add_hello")
 graph1.add_edge("add_hello", "add_world")
 graph1.add_edge("add_world", "add_exclamation")
 graph1.add_edge("add_exclamation", END)
 
-# Add nodes and edges...
 graph1.compile()
 
-
-# Create graph service
 service = create_graph_service(graph1, storage, path_prefix="/graphs/workflow1")
-
-
-# Include the router in your app
 app.include_router(service.router, tags=["workflow1"])
 
-
-
-# access your graph at http://localhost:8000/graphs/workflow1/
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
 ```
 
-## Basic Usage examples
+## Basic Usage Examples
 
-_Find examples in the [examples](examples) folder._
-
-### Chatbot (yep, one more chatbot example)
+### Chatbot Example
 
 ```python
-from primeGraph import Graph
+import asyncio
+from primeGraph import Graph, START, END
 from primeGraph.models import GraphState
-from primeGraph.buffer import History, LastValue, Incremental
+from primeGraph.buffer import History, LastValue
 from pydantic import BaseModel, Field
-from openai import OpenAI
-import instructor
+import logging
 
 class ChatbotState(GraphState):
     chat_history: History[dict[str, str]]
@@ -584,30 +537,22 @@ class ChatbotState(GraphState):
 
 class ChatbotResponse(BaseModel):
     chat_message: str
-    user_requested_to_quit: bool = Field(description="returns true if user is requesting to quit the chat")
-
+    user_requested_to_quit: bool = Field(description="True if user wants to quit")
 
 chatbot_state = ChatbotState(chat_history=[], user_wants_to_exit=False)
 chatbot_graph = Graph(state=chatbot_state, verbose=False)
 
 @chatbot_graph.node(interrupt="before")
 def chat_with_user(state):
-
-    # user input will be inserted directly into the chat_history on the state
-    # Extract structured data from natural language
+    # Simulate calling an AI service
     try:
-        res = client.chat.completions.create(
-            model="gpt-4o-mini",
-            response_model=ChatbotResponse,
-            messages=state.chat_history,
-        )
-        print(res.chat_message)
-        return {"chat_history": {"role": "assistant", "content": res.chat_message},
-                "user_wants_to_exit": res.user_requested_to_quit}
-
+        # Replace with actual call
+        response = ChatbotResponse(chat_message="Hello, how can I assist?", user_requested_to_quit=False)
+        print(response.chat_message)
+        return {"chat_history": {"role": "assistant", "content": response.chat_message},
+                "user_wants_to_exit": response.user_requested_to_quit}
     except Exception as e:
         raise e
-
 
 @chatbot_graph.node()
 def assess_next_step(state):
@@ -617,58 +562,40 @@ def assess_next_step(state):
 
 chatbot_graph.add_edge(START, "chat_with_user")
 chatbot_graph.add_router_edge("chat_with_user", "assess_next_step")
-
 chatbot_graph.compile()
 chatbot_graph.visualize()
+
+async def run_chatbot():
+    await chatbot_graph.execute()
+
+    def add_user_message(message: str):
+        chatbot_state.chat_history.append({"role": "user", "content": message})
+
+    while not chatbot_state.user_wants_to_exit:
+        user_input = input("Your message: ")
+        print(f"You: {user_input}")
+        add_user_message(user_input)
+        await chatbot_graph.resume()
+
+    print("Bye")
+
+import asyncio
+asyncio.run(run_chatbot())
 ```
 
-<p align="center">
-  <img src="docs/images/readme_chatbot.png" alt="Chatbot visualization" width="400"/>
-</p>
+### Async Workflow
 
 ```python
-# Running the chatbot on a loop
-chatbot_graph.start()
-
-def add_user_message(message: str):
-    chatbot_state.chat_history.append({"role": "user", "content": message})
-
-while not chatbot_state.user_wants_to_exit:
-
-    user_input = input("Your message: ")
-    print(f"You: {user_input}")
-    add_user_message(user_input)
-
-    chatbot_graph.resume()
-
-print("Bye")
-
-
-```
-
-### Async workflow
-
-```python
+import asyncio
 from primeGraph import Graph, START, END
 from primeGraph.models import GraphState
 from primeGraph.buffer import History, LastValue
 from pydantic import BaseModel
-from openai import AsyncOpenAI
-import instructor
-from IPython.display import Image
-from typing import Tuple
 
-from dotenv import load_dotenv
-
-# assumes you have a local .env file with OPENAI_API_KEY set
-load_dotenv()
-
-# loading openai client
-client = instructor.from_openai(AsyncOpenAI())
-
+# Define models for async workflow
 class Character(GraphState):
     character_name: LastValue[str]
-    character_items: History[Tuple[str,str]]
+    character_items: History[tuple[str,str]]
     character_summary: LastValue[str]
 
 class CharacterName(BaseModel):
@@ -681,110 +608,53 @@ class CharacterItem(BaseModel):
     item_name: str
     item_description: str
 
-
 character_state = Character(character_name="", character_items=[], character_summary="")
 character_graph = Graph(state=character_state, verbose=False)
 
 @character_graph.node()
 async def pick_character_name(state):
-    res = await client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": "Pick me a character from Lord of the Rings"}],
-        response_model=CharacterName,
-    )
-    return {"character_name": res.character_name}
-
+    # Simulate an async call
+    return {"character_name": "Frodo Baggins"}
 
 @character_graph.node()
 async def pick_character_profession(state):
-    res = await client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": "Pick me a profession for the character"}],
-        response_model=CharacterItem,
-    )
-    return {"character_items": (res.item_name, res.item_description)}
+    return {"character_items": ("Adventurer", "Embarks on quests")}
 
 @character_graph.node()
 async def pick_character_apparel(state):
-    res = await client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": "Pick me a clothing for the character"}],
-        response_model=CharacterItem,
-    )
-    return {"character_items": (res.item_name, res.item_description)}
+    return {"character_items": ("Mystic Robe", "Adorned with ancient runes")}
 
 @character_graph.node()
 async def pick_character_partner(state):
-    res = await client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": "Pick me a partner for the character"}],
-        response_model=CharacterItem,
-    )
-    return {"character_items": (res.item_name, res.item_description)}
+    return {"character_items": ("Samwise Gamgee", "Loyal companion")}
 
 @character_graph.node()
 async def create_charater_summary(state):
     ch_items = "\n".join([f"{item[0]}: {item[1]}" for item in state.character_items])
-    res = await client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": f"Name: {state.character_name} \
-        \nItems: {ch_items}"}],
-        response_model=CharacterSummary,
-    )
-    return {"character_summary": res.character_summary}
+    return {"character_summary": f"{state.character_name} is accompanied by:\n{ch_items}"}
 
 character_graph.add_edge(START, "pick_character_name")
-
-# setting tasks to run in parallel
 character_graph.add_edge("pick_character_name", "pick_character_profession")
 character_graph.add_edge("pick_character_name", "pick_character_apparel")
 character_graph.add_edge("pick_character_name", "pick_character_partner")
-
 character_graph.add_edge("pick_character_profession", "create_charater_summary")
 character_graph.add_edge("pick_character_apparel", "create_charater_summary")
 character_graph.add_edge("pick_character_partner", "create_charater_summary")
 character_graph.add_edge("create_charater_summary", END)
 
 character_graph.compile()
-Image(character_graph.visualize(transparent=False).pipe(format='png'))
 
+async def run_async_workflow():
+    await character_graph.execute()
+    print(character_graph.state)
+
+import asyncio
+asyncio.run(run_async_workflow())
 ```
 
-<p align="center">
-  <img src="docs/images/readme_async_workflow.png" alt="Async Workflow visualization" width="400"/>
-</p>
+---
 
-```python
-from rich import print as rprint
-
-await character_graph.start_async()
-rprint(character_graph.state)
-
-# Character(
-#     version='a35efff8c805417e13d4b950e6d7281c',
-#     character_name='Frodo Baggins',
-#     character_items=[
-#         (
-#             'Mysterious Stranger',
-#             "A hooded figure who appears at unexpected moments, offering cryptic advice and insight into the
-# character's quest."
-#         ),
-#         (
-#             'Mystic Robe',
-#             "A flowing robe made from shimmering fabric that glimmers with magical energy. It is adorned with
-# ancient runes and has a hood that conceals the wearer's face. Perfect for wizards and sorcerers."
-#         ),
-#         (
-#             'Adventurer',
-#             'A brave explorer who embarks on quests, seeks treasure, and faces challenges in the great unknown.'
-#         )
-#     ],
-#     character_summary='Frodo Baggins is a brave adventurer on a quest, known for exploring the unknown and seeking
-# treasure. He is accompanied by a Mysterious Stranger, a hooded figure who offers cryptic advice and insight during
-# his journey. Frodo wears a Mystic Robe, a magical garment adorned with ancient runes, which enhances his mystical
-# abilities and conceals his identity.'
-# )
-```
+Note: All examples now use the new asynchronous engine methods `execute()` and `resume()`. For scripts, wrap these calls with `asyncio.run(...)` or use an async context as needed.
 
 ## Roadmap
 

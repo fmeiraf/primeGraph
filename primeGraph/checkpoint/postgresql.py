@@ -149,12 +149,12 @@ class PostgreSQLStorage(StorageBackend):
 
         sql = """
         INSERT INTO checkpoints (
-            checkpoint_id, chain_id, chain_status, state_class, 
+            checkpoint_id, chain_id, chain_status, state_class,
             state_version, data, timestamp, engine_state
         ) VALUES (
             %s, %s, %s, %s, %s, %s, %s, %s
         )
-        ON CONFLICT (checkpoint_id) 
+        ON CONFLICT (checkpoint_id)
         DO UPDATE SET
             chain_status = EXCLUDED.chain_status,
             data = EXCLUDED.data,
@@ -206,7 +206,7 @@ class PostgreSQLStorage(StorageBackend):
         self._enforce_same_model_version(state_instance, chain_id)
 
         sql = """
-        SELECT * FROM checkpoints 
+        SELECT * FROM checkpoints
         WHERE chain_id = %s AND checkpoint_id = %s
         """
 
@@ -239,8 +239,8 @@ class PostgreSQLStorage(StorageBackend):
 
     def list_checkpoints(self, chain_id: str) -> List[Checkpoint]:
         sql = """
-        SELECT * FROM checkpoints 
-        WHERE chain_id = %s 
+        SELECT * FROM checkpoints
+        WHERE chain_id = %s
         ORDER BY timestamp ASC
         """
 
@@ -268,7 +268,7 @@ class PostgreSQLStorage(StorageBackend):
 
     def delete_checkpoint(self, chain_id: str, checkpoint_id: str) -> None:
         sql = """
-        DELETE FROM checkpoints 
+        DELETE FROM checkpoints
         WHERE chain_id = %s AND checkpoint_id = %s
         RETURNING checkpoint_id
         """
@@ -286,10 +286,10 @@ class PostgreSQLStorage(StorageBackend):
 
     def get_last_checkpoint_id(self, chain_id: str) -> Optional[str]:
         sql = """
-        SELECT checkpoint_id 
-        FROM checkpoints 
-        WHERE chain_id = %s 
-        ORDER BY timestamp DESC 
+        SELECT checkpoint_id
+        FROM checkpoints
+        WHERE chain_id = %s
+        ORDER BY timestamp DESC
         LIMIT 1
         """
 
@@ -315,14 +315,14 @@ class PostgreSQLStorage(StorageBackend):
         """
         check_table_sql = """
         SELECT EXISTS (
-            SELECT FROM information_schema.tables 
+            SELECT FROM information_schema.tables
             WHERE table_name = 'checkpoints'
         );
         """
 
         check_columns_sql = """
-        SELECT column_name 
-        FROM information_schema.columns 
+        SELECT column_name
+        FROM information_schema.columns
         WHERE table_name = 'checkpoints';
         """
 

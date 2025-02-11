@@ -41,7 +41,12 @@ class ExecutionFrame:
         self.resumed = False
 
     def __repr__(self) -> str:
-        return f"ExecutionFrame(frame_id={self.frame_id}, node_id={self.node_id}, branch_id={self.branch_id}, target_convergence={self.target_convergence}), resumed={self.resumed}"
+        return_value = f"ExecutionFrame(frame_id={self.frame_id}, node_id={self.node_id}, "
+        return_value += f"branch_id={self.branch_id}, target_convergence={self.target_convergence}), "
+        return_value += f"resumed={self.resumed}"
+        if self.convergence_barrier:
+            return_value += f", convergence_barrier={self.convergence_barrier}"
+        return return_value
 
 
 class ConvergenceBarrier:
@@ -277,7 +282,8 @@ class Engine:
                     frame._pause_event = asyncio.Event()
                     self._interrupted_frames[frame.branch_id or 0] = frame
                 logger.debug(
-                    f"[Interrupt-before] [[ {frame.node_id} ]] Branch {frame.branch_id} pausing before executing node '{node_id}'."
+                    f"[Interrupt-before] [[ {frame.node_id} ]] "
+                    f"Branch {frame.branch_id} pausing before executing node '{node_id}'."
                 )
                 self.graph._update_chain_status(ChainStatus.PAUSE)
                 self.graph._save_checkpoint(node_id, self.get_full_state())
@@ -365,7 +371,8 @@ class Engine:
                     )
                 if result not in self.graph.nodes:
                     raise ValueError(
-                        f"Router node '{node_id}' returned invalid node_id: '{result}'. Must be a valid node in the graph."
+                        f"Router node '{node_id}' returned invalid node_id: "
+                        f"'{result}'. Must be a valid node in the graph."
                     )
 
                 target_count = self._node_execution_count.get(result, 0)
@@ -437,10 +444,10 @@ class Engine:
 
             if len(children) == 1:
                 continue
-            else:
-                logger.debug(f"Laucing Parallel branches: {child_frames}")
-                await asyncio.gather(*(self._execute_frame(child_frame) for child_frame in child_frames))
-                return
+
+            logger.debug(f"Laucing Parallel branches: {child_frames}")
+            await asyncio.gather(*(self._execute_frame(child_frame) for child_frame in child_frames))
+            return
 
     def get_full_state(self) -> Dict:
         """
