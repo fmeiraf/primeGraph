@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.0.0] - 2025-03-01
+
+### Added
+
+- Introduction of new asynchronous engine methods `execute()` and `resume()` which replace the old synchronous methods such as `start()` and `resume_async()`.
+- New examples and documentation updates demonstrating how to run workflows using asyncio (e.g., using `asyncio.run(...)`).
+- Enhanced checkpoint persistence with improved saving and loading of engine state.
+
+### Changed
+
+- Refactored engine internals for better handling of parallel execution, flow control, and convergence points.
+- Updated ChainStatus to be a string (for enhanced debugging clarity).
+- Updated state management and buffer validation error messages.
+
+### Fixed
+
+- Addressed issues with buffer type validation and provided clearer error messages.
+- Fixed several issues in the engine related to node routing and cyclical workflows.
+
+---
+
 # [0.2.6] - 2025-02-02
 
 ### Added
