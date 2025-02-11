@@ -4,7 +4,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Package Version](https://img.shields.io/badge/package-0.2.6-blue.svg)](https://pypi.org/project/primegraph/)
+[![Package Version](https://img.shields.io/badge/package-1.0.0-blue.svg)](https://pypi.org/project/primegraph/)
 
 ---
 
@@ -569,7 +569,7 @@ async def run_chatbot():
     await chatbot_graph.execute()
 
     def add_user_message(message: str):
-        chatbot_state.chat_history.append({"role": "user", "content": message})
+        chatbot_graph.update_state_and_checkpoint({"chat_history": {"role": "user", "content": message}})
 
     while not chatbot_state.user_wants_to_exit:
         user_input = input("Your message: ")
