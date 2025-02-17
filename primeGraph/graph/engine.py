@@ -298,17 +298,27 @@ class Engine:
             result = None
             if self._node_is_executable(node_id):
                 try:
-                    # Wrap execution in asyncio.wait_for for timeout
+                    import inspect
+                    import types
+
+                    # Get the node action and inspect its signature
+                    node_action = node.action
+                    sig = inspect.signature(node_action)
+                    # If the action expects a parameter named "self", bind it to the node.
+                    if "self" in sig.parameters:
+                        node_action = types.MethodType(node_action, node)
+
+                    # Now call the (possibly bound) action with state if available.
                     if node.is_async:
                         result = await asyncio.wait_for(
-                            node.action(self.graph.state) if self.graph.state else node.action(),  # type: ignore[arg-type]
+                            node_action(self.graph.state) if self.graph.state else node_action(),  # type: ignore[arg-type]
                             timeout=self._timeout,
                         )
                     else:
                         result = await asyncio.wait_for(
-                            asyncio.to_thread(node.action, self.graph.state)  # type: ignore [func-returns-value]
+                            asyncio.to_thread(node_action, self.graph.state)  # type: ignore[func-returns-value]
                             if self.graph.state
-                            else asyncio.to_thread(node.action),
+                            else asyncio.to_thread(node_action),
                             timeout=self._timeout,
                         )
 

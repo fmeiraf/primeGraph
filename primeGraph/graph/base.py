@@ -1,9 +1,10 @@
 import ast
+import functools
 import inspect
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Coroutine, Dict, List, Literal, NamedTuple, Optional, Self, Set, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, NamedTuple, Optional, Self, Set, Tuple, Union
 
 from pydantic import BaseModel
 
@@ -914,6 +915,7 @@ class BaseGraph:
         end_node: str,
         repeat: int = 1,
         parallel: bool = False,
+        repeat_names: Optional[List[str]] = None,
     ) -> Self:
         """Add a repeating edge that creates multiple instances of the same node.
 
@@ -923,6 +925,10 @@ class BaseGraph:
             end_node: Ending node name
             repeat: Number of times to repeat the node
             parallel: Whether to run repetitions in parallel
+            repeat_names: Optional list of names to assign to the repeated nodes.
+                          If provided, its length must equal the repeat count.
+                          Note that the 'original_node' metadata will still refer to
+                          the selected base node used for repetition.
         """
         if repeat < 1:
             raise ValueError("Repeat count must be at least 1")
@@ -941,46 +947,54 @@ class BaseGraph:
         if node_obj.metadata and node_obj.metadata.get("is_repeat"):
             raise ValueError("Repeating nodes cannot have another repeating node as a start node.")
 
-        # Get the original node to be repeated
+        if repeat_names is not None and len(repeat_names) != repeat:
+            raise ValueError("Length of repeat_names list must be equal to the repeat count")
+
+        # Get the original node to be repeated before any modifications
         original_node = self.nodes[repeat_node]
 
         # Create a unique short ID using the edge count
         short_id = f"{len(self.edges):03x}"  # Using hex to keep it shorter
 
+        # Determine the name for the first repeated node.
+        # If custom names are provided and the first name differs from the original,
+        # we remove the original node from self.nodes and use the first custom name as the base.
+        first_node_name = repeat_names[0] if repeat_names is not None else repeat_node
+        pop_original = False
+        if repeat_names is not None and first_node_name != repeat_node:
+            self.nodes.pop(repeat_node, None)
+            pop_original = True
+
+        # The "base" origin for all repeated nodes should be the surviving node name.
+        base_origin = first_node_name if pop_original else repeat_node
+
         # Create a wrapper function that maintains node identity
-        def create_node_action(
-            node_name: str, original_action: Callable
-        ) -> Callable[..., Union[Any, Coroutine[Any, Any, Any]]]:
+        def create_node_action(node_name: str, original_action: Callable) -> Callable[..., Any]:
             if inspect.iscoroutinefunction(original_action):
 
+                @functools.wraps(original_action)
                 async def wrapped_action(*args: Any, **kwargs: Any) -> Any:
                     return await original_action(*args, **kwargs)
             else:
 
-                def wrapped_action(*args: Any, **kwargs: Any) -> Any:  # type: ignore
+                @functools.wraps(original_action)
+                def wrapped_action(*args: Any, **kwargs: Any) -> Any:
                     return original_action(*args, **kwargs)
 
-            # Set the name and node_name attributes
-            wrapped_action.__name__ = node_name
-            wrapped_action.__node_name__ = node_name  # type: ignore
-
-            # Copy all other attributes from the original action
-            for attr in dir(original_action):
-                if not attr.startswith("__"):
-                    setattr(wrapped_action, attr, getattr(original_action, attr))
-
+            setattr(wrapped_action, "__signature__", inspect.signature(original_action))
+            setattr(wrapped_action, "__node_name__", node_name)
             return wrapped_action
 
-        # Create a new version of the original node with updated metadata
-        self.nodes[repeat_node] = Node(
-            name=repeat_node,
-            action=create_node_action(repeat_node, original_node.action),  # type: ignore
+        # Create the first repeated node; update metadata so that "original_node" points to base_origin.
+        self.nodes[first_node_name] = Node(
+            name=first_node_name,
+            action=create_node_action(first_node_name, original_node.action),
             metadata={
                 **(original_node.metadata or {}),
                 "is_repeat": True,
                 "repeat_group": short_id,
                 "repeat_index": 1,
-                "original_node": repeat_node,
+                "original_node": base_origin,
                 "parallel": parallel,
             },
             is_async=original_node.is_async,
@@ -991,22 +1005,20 @@ class BaseGraph:
             is_subgraph=original_node.is_subgraph,
             subgraph=original_node.subgraph,
         )
+        repeated_nodes = [first_node_name]
 
-        repeated_nodes = [repeat_node]
-
-        # Create n-1 additional repeated nodes
+        # Create the additional repeated nodes
         for i in range(repeat - 1):
-            repeat_node_name = f"{repeat_node}_{i+2}_{short_id}"  # e.g., node_2_001, node_3_001
-
-            self.nodes[repeat_node_name] = Node(
-                name=repeat_node_name,
-                action=create_node_action(repeat_node_name, original_node.action),  # type: ignore
+            node_name = repeat_names[i + 1] if repeat_names is not None else f"{repeat_node}_{i+2}_{short_id}"
+            self.nodes[node_name] = Node(
+                name=node_name,
+                action=create_node_action(node_name, original_node.action),
                 metadata={
                     **(original_node.metadata or {}),
                     "is_repeat": True,
                     "repeat_group": short_id,
                     "repeat_index": i + 2,
-                    "original_node": repeat_node,
+                    "original_node": base_origin,
                     "parallel": parallel,
                 },
                 is_async=original_node.is_async,
@@ -1017,7 +1029,7 @@ class BaseGraph:
                 is_subgraph=original_node.is_subgraph,
                 subgraph=original_node.subgraph,
             )
-            repeated_nodes.append(repeat_node_name)
+            repeated_nodes.append(node_name)
 
         # Connect the nodes based on parallel/sequential execution
         if parallel:

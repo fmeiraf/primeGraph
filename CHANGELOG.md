@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.1.0] - 2025-02-17
+
+### Added
+
+- Now users can pass a list of node names to the `add_repeating_edge` method to assign custom names to the repeated nodes.
+- Added `is_repeat` metadata to nodes that are part of a repeating edge.
+- Added `original_node` metadata to nodes that are part of a repeating edge.
+- Allowed the user to retrieve Node information at execution on the node function body by using the `self.node` attribute.
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- N/A
+
+---
+
 # [1.0.0] - 2025-03-01
 
 ### Added

@@ -1,4 +1,5 @@
 import time
+from time import sleep
 from typing import List
 
 import pytest
@@ -182,3 +183,185 @@ async def test_error_handling_in_repeated_nodes():
   # Verify error propagation
   with pytest.raises(RuntimeError):
     await graph.execute()
+
+
+@pytest.mark.asyncio
+async def test_repeated_nodes_execution_count():
+    """
+    Test that a repeating edge executes the source node (Node A) and sink (Node C)
+    once, and the repeated node (Node B) the expected number of times (3),
+    while also verifying that custom node names were assigned.
+    """
+    # Define a custom state with an execution log.
+    class ExecutionState(GraphState):
+        execution_log: History[str]
+
+    state = ExecutionState(execution_log=[])
+    graph = Graph(state=state)
+
+    @graph.node()
+    def node_a(state: ExecutionState):
+        return {"execution_log": "node_a"}
+
+    @graph.node()
+    def node_b(state: ExecutionState):
+        return {"execution_log": "node_b"}
+
+    @graph.node()
+    def node_c(state: ExecutionState):
+        return {"execution_log": "node_c"}
+
+    # Create a repeating edge from node_a through node_b (3 times) to node_c,
+    # with custom names for the repeated nodes.
+    graph.add_edge(START, "node_a")
+    graph.add_repeating_edge(
+        "node_a",
+        "node_b",
+        "node_c",
+        repeat=3,
+        parallel=False,
+        repeat_names=["node_b_1", "node_b_2", "node_b_3"]
+    )
+    graph.add_edge("node_c", END)
+    graph.compile()
+
+    # Verify that the custom repeat node names were created in the graph
+    node_ids = graph.nodes.keys()
+    assert "node_b_1" in node_ids, "Expected custom node 'node_b_1' not found."
+    assert "node_b_2" in node_ids, "Expected custom node 'node_b_2' not found."
+    assert "node_b_3" in node_ids, "Expected custom node 'node_b_3' not found."
+
+    # Execute the graph.
+    await graph.execute()
+
+    # Check that Node A executes once, Node B executes three times, and Node C executes once.
+    expected_log = ["node_a", "node_b", "node_b", "node_b", "node_c"]
+    assert state.execution_log == expected_log, f"Unexpected execution order: {state.execution_log}"
+
+
+@pytest.mark.asyncio
+async def test_repeated_nodes_execution_count_parallel():
+    """
+    Test that a repeating edge executes the source node (Node A) and sink (Node C)
+    once, and the repeated node (Node B) the expected number of times (3) in parallel,
+    while also verifying that custom node names were assigned.
+    """
+    # Define a custom state with an execution log.
+    class ExecutionState(GraphState):
+        execution_log: History[str]
+
+    state = ExecutionState(execution_log=[])
+    graph = Graph(state=state)
+
+    @graph.node()
+    def node_a(state: ExecutionState):
+        return {"execution_log": "node_a"}
+
+    @graph.node()
+    def node_b(state: ExecutionState):
+        return {"execution_log": "node_b"}
+
+    @graph.node()
+    def node_c(state: ExecutionState):
+        return {"execution_log": "node_c"}
+
+    # Create a repeating edge from node_a through node_b (3 times) to node_c,
+    # with custom names for the repeated nodes and parallel execution.
+    graph.add_edge(START, "node_a")
+    graph.add_repeating_edge(
+        "node_a",
+        "node_b",
+        "node_c",
+        repeat=3,
+        parallel=True,
+        repeat_names=["node_b_1", "node_b_2", "node_b_3"]
+    )
+    graph.add_edge("node_c", END)
+    graph.compile()
+
+    # Verify that the custom repeat node names were created in the graph.
+    node_ids = graph.nodes.keys()
+    assert "node_b_1" in node_ids, "Expected custom node 'node_b_1' not found."
+    assert "node_b_2" in node_ids, "Expected custom node 'node_b_2' not found."
+    assert "node_b_3" in node_ids, "Expected custom node 'node_b_3' not found."
+
+    # Execute the graph.
+    await graph.execute()
+
+    # Check that Node A executes once, Node B executes three times, and Node C executes once.
+    # In parallel execution, although the order of Node B executions may not be strictly sequential,
+    # Node A should be the first and Node C should be the last in the execution log.
+    expected_length = 5  # 1 (node_a) + 3 (node_b) + 1 (node_c)
+    assert len(state.execution_log) == expected_length, f"Expected execution log length {expected_length}, got {len(state.execution_log)}"
+    assert state.execution_log[0] == "node_a", f"Expected the first log entry to be 'node_a', got {state.execution_log[0]}"
+    assert state.execution_log[-1] == "node_c", f"Expected the last log entry to be 'node_c', got {state.execution_log[-1]}"
+
+    # Check the three middle log entries are all 'node_b'
+    for log_entry in state.execution_log[1:-1]:
+        assert log_entry == "node_b", f"Expected 'node_b', got {log_entry}"
+
+
+@pytest.mark.asyncio
+async def test_repeated_nodes_execution_count_parallel_with_timestamps():
+    """
+    Test that a repeating edge executes the source node (Node A) and sink (Node C)
+    once, and the repeated node (Node B) three times in parallel by checking their timestamps.
+    """
+    # Define a custom state with an execution log and timestamps.
+    class ExecutionState(GraphState):
+        execution_log: History[str]
+        timestamps: History[float]
+
+    state = ExecutionState(execution_log=[], timestamps=[])
+    graph = Graph(state=state)
+
+    @graph.node()
+    def node_a(state: ExecutionState):
+        return {"execution_log": "node_a"}
+
+    @graph.node()
+    def node_b(state: ExecutionState):
+        # Simulate work with a sleep.
+        sleep(0.1)
+        current_time = time.time()
+        return {"execution_log": "node_b", "timestamps": current_time}
+
+    @graph.node()
+    def node_c(state: ExecutionState):
+        return {"execution_log": "node_c"}
+
+    # Create a repeating edge from node_a through node_b (3 times) to node_c with parallel execution.
+    graph.add_edge(START, "node_a")
+    graph.add_repeating_edge(
+        "node_a",
+        "node_b",
+        "node_c",
+        repeat=3,
+        parallel=True,
+        repeat_names=["node_b_1", "node_b_2", "node_b_3"]
+    )
+    graph.add_edge("node_c", END)
+    graph.compile()
+
+    start_time = time.time()
+    await graph.execute()
+    total_time = time.time() - start_time
+
+    # Verify the execution log contains node_a, three instances of node_b and node_c in order.
+    expected_length = 5  # 1 (node_a) + 3 (node_b) + 1 (node_c)
+    assert len(state.execution_log) == expected_length, \
+        f"Expected log length {expected_length}, got {len(state.execution_log)}"
+    assert state.execution_log[0] == "node_a", "First log entry should be 'node_a'"
+    assert state.execution_log[-1] == "node_c", "Last log entry should be 'node_c'"
+    for log_entry in state.execution_log[1:-1]:
+        assert log_entry == "node_b", f"Expected 'node_b', got {log_entry}"
+
+    # Check that the node_b executions happened concurrently.
+    # In parallel execution, the node_b tasks should have overlapping timestamps.
+    # The maximum difference between the earliest and latest timestamp should be significantly less than each node's sleep duration (0.1s).
+    max_timestamp_diff = max(state.timestamps) - min(state.timestamps)
+    assert max_timestamp_diff < 0.05, f"Tasks did not run concurrently, timestamp diff was {max_timestamp_diff:.3f}s"
+
+    # Additionally, the overall execution time should be close to the duration of a single node_b task,
+    # rather than triple the duration if the tasks were sequential.
+    assert total_time < 0.2, f"Total execution time {total_time:.3f}s indicates sequential execution"
