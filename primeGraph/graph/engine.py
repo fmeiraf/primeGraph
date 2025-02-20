@@ -475,7 +475,6 @@ class Engine:
             "node_execution_count": self._node_execution_count.copy(),  # Add execution count to state
             "branch_counter": self._branch_counter,
             "active_branches": active_branches,
-            "graph_state": self.graph.state,
             "chain_status": self.graph.chain_status.value,
             "interrupted_frames": self._interrupted_frames.copy(),
         }
@@ -504,7 +503,6 @@ class Engine:
         self.execution_frames = saved_state["execution_frames"].copy()
 
         # Restore the graph state and chain status
-        self.graph.state = saved_state["graph_state"]
         self.graph._update_chain_status(ChainStatus(saved_state["chain_status"]))
 
         # Restore interrupted frames and execution counts

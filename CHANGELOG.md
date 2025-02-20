@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.1.1] - 2025-02-20
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Engine graph state was being saved as a duplicate and loaded from there. Now it's not saved anymore and it's loaded from the graph.state latest checkpoint.
+
+---
+
 # [1.1.0] - 2025-02-17
 
 ### Added
