@@ -1,6 +1,7 @@
-from typing import Optional
+from typing import List, Optional
 
 import pytest
+from pydantic import BaseModel, Field
 
 from primeGraph.buffer.factory import History, LastValue
 from primeGraph.checkpoint.base import CheckpointData
@@ -136,3 +137,55 @@ def test_nonexistent_chain(postgres_storage):
 
   with pytest.raises(KeyError):
     graph.checkpoint_storage.load_checkpoint(state, "nonexistent", "some_checkpoint")
+
+
+def test_load_checkpoint_with_nested_basemodels(postgres_storage):
+    class BreakdownInstruction(BaseModel):
+      step_name: str = Field(description="The name of the step")
+      step_instructions: str = Field(description="The instructions for the step")
+
+    class StateWithInstructions(GraphState):
+        instructions: LastValue[List[BreakdownInstruction]] = Field(default_factory=list)
+
+    # Create initial state with BreakdownInstruction instances
+    instructions = [
+        BreakdownInstruction(
+            step_name="Research SpaceX Missions",
+            step_instructions="Start by researching SpaceX's upcoming missions..."
+        ),
+        BreakdownInstruction(
+            step_name="Budget Planning",
+            step_instructions="Calculate the estimated costs..."
+        )
+    ]
+    
+    # First graph instance - create and save state
+    initial_state = StateWithInstructions(instructions=instructions)
+    first_graph = Graph(state=initial_state, checkpoint_storage=postgres_storage)
+    
+    # Save initial state with checkpoint
+    checkpoint_data = CheckpointData(
+        chain_id=first_graph.chain_id,
+        chain_status=first_graph.chain_status
+    )
+    first_graph.checkpoint_storage.save_checkpoint(first_graph.state, checkpoint_data)
+    chain_id = first_graph.chain_id
+
+    # Create a fresh graph instance with empty state
+    fresh_state = StateWithInstructions(instructions=[])
+    fresh_graph = Graph(state=fresh_state, checkpoint_storage=postgres_storage)
+    
+    # Load the checkpoint into the fresh graph
+    fresh_graph.load_from_checkpoint(chain_id)
+
+    # Verify the loaded state matches the original
+    assert len(fresh_graph.state.instructions) == len(instructions)
+    
+    for original_instruction, loaded_instruction in zip(instructions, fresh_graph.state.instructions):
+        assert isinstance(loaded_instruction, BreakdownInstruction)
+        assert loaded_instruction.step_name == original_instruction.step_name
+        assert loaded_instruction.step_instructions == original_instruction.step_instructions
+
+    # Verify chain status and ID were properly restored
+    assert fresh_graph.chain_id == chain_id
+    assert fresh_graph.chain_status == first_graph.chain_status

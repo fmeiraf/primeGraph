@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.1.2] - 2025-02-20
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Fixed issue with state serialization with nested BaseModels on loading state from database.
+
+---
+
 # [1.1.1] - 2025-02-20
 
 ### Added
