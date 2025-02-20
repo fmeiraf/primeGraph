@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.1.3] - 2025-02-20
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Fixed missing checkpoint when the END node is reached.
+
+---
+
 # [1.1.2] - 2025-02-20
 
 ### Added

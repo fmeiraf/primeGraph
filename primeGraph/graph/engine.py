@@ -236,6 +236,7 @@ class Engine:
                 self.graph._update_chain_status(ChainStatus.DONE)
                 # Clear any remaining execution frames to stop further processing
                 self.execution_frames.clear()
+                self.graph._save_checkpoint(node_id, self.get_full_state())
                 return
 
             # Check if this is a convergence point
