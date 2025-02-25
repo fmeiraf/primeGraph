@@ -1194,3 +1194,83 @@ async def test_simple_random_graph():
     branch_nodes = {"followup", "summarize", "finalize"}
     executed_branches = set(graph.state.execution_order).intersection(branch_nodes)
     assert len(executed_branches) == 1, "Exactly one branch should have been executed"
+
+
+@pytest.mark.asyncio
+async def test_any_type_in_state():
+    """Test that using typing.Any in state type annotations works correctly."""
+    from typing import Any, Dict, List
+    
+    class StateWithAnyType(GraphState):
+        any_value: LastValue[Any]  # Using Any directly
+        any_dict: LastValue[Dict[str, Any]]  # Any in dict values
+        any_history: History[Any]  # Any in History
+        any_list_history: History[List[Any]]  # List of Any in History
+
+    # Initialize with various types
+    state = StateWithAnyType(
+        any_value="string value",
+        any_dict={"key1": 123, "key2": "value", "key3": {"nested": True}},
+        any_history=["item1", 2, {"key": "value"}],
+        any_list_history=[[1, 2, 3], ["a", "b", "c"]]
+    )
+    
+    graph = Graph(state=state)
+
+    @graph.node()
+    def update_any_values(state):
+        return {
+            "any_value": 12345,  # Change type from string to int
+            "any_dict": {"new_key": [1, 2, 3]},  # Change value types
+            "any_history": {"completely": "different", "type": True},  # Add dict to history
+            "any_list_history": [{"mixed": "types", "in": 1, "list": True}]  # Add mixed types
+        }
+
+    @graph.node()
+    def update_again(state):
+        return {
+            "any_value": {"now": "a dict"},  # Change type again
+            "any_dict": {"key": None},  # Add None value
+            "any_history": None,  # Add None to history
+            "any_list_history": [None]  # Add None to list history
+        }
+
+    @graph.node()
+    def complex_review_and_edit(state):
+        """This tests the node name that was causing an error in your real code."""
+        # Return an object with complex nested structure
+        return {
+            "any_dict": {
+                "deeply": {
+                    "nested": [1, "mixed", {"types": True}]
+                }
+            }
+        }
+
+    graph.add_edge(START, "update_any_values")
+    graph.add_edge("update_any_values", "update_again")
+    graph.add_edge("update_again", "complex_review_and_edit")
+    graph.add_edge("complex_review_and_edit", END)
+    graph.compile()
+
+    # Execute the graph
+    await graph.execute()
+
+    # Verify values were updated correctly with different types
+    assert isinstance(graph.state.any_value, dict)
+    assert graph.state.any_value == {"now": "a dict"}
+    
+    assert isinstance(graph.state.any_dict, dict)
+    assert graph.state.any_dict == {"deeply": {"nested": [1, "mixed", {"types": True}]}}
+    
+    # For History buffer, we should see all values in the history
+    assert len(graph.state.any_history) == 5
+    assert graph.state.any_history[0] == "item1"
+    assert graph.state.any_history[3] == {"completely": "different", "type": True}
+    assert graph.state.any_history[4] is None
+    
+    assert len(graph.state.any_list_history) == 4
+    assert graph.state.any_list_history[0] == [1, 2, 3]
+    assert graph.state.any_list_history[1] == ["a", "b", "c"]
+    assert graph.state.any_list_history[2] == [{"mixed": "types", "in": 1, "list": True}]
+    assert graph.state.any_list_history[3] == [None]

@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.1.5] - 2025-02-20
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Fixed Any typing on all the buffers.
+
+---
+
 # [1.1.4] - 2025-02-20
 
 ### Added

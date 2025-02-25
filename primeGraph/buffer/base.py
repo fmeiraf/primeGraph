@@ -52,17 +52,30 @@ class BaseBuffer(ABC):
         if self.field_type is None or new_value is None:
             return
 
+        # Skip validation if field_type is typing.Any
+        if self.field_type is Any:
+            return
+
         def validate_dict_contents(value: dict, key_type: type, value_type: type) -> None:
             for k, v in value.items():
-                if not isinstance(k, key_type):
+                # Skip validation if key_type is Any
+                if key_type is not Any and not isinstance(k, key_type):
                     raise TypeError(f"Dict key must be {key_type}, got {type(k)}")
-                validate_value(v, value_type)
+                # Only validate value if value_type is not Any
+                if value_type is not Any:
+                    validate_value(v, value_type)
 
         def validate_list_contents(value: list, item_type: type) -> None:
-            for item in value:
-                validate_value(item, item_type)
+            # Only validate items if item_type is not Any
+            if item_type is not Any:
+                for item in value:
+                    validate_value(item, item_type)
 
         def validate_value(value: Any, expected_type: type) -> None:
+            # Skip validation if expected_type is Any
+            if expected_type is Any:
+                return
+
             origin = get_origin(expected_type)
             if origin is None:
                 if not isinstance(value, expected_type):
