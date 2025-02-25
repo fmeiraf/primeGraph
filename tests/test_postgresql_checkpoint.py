@@ -189,3 +189,271 @@ def test_load_checkpoint_with_nested_basemodels(postgres_storage):
     # Verify chain status and ID were properly restored
     assert fresh_graph.chain_id == chain_id
     assert fresh_graph.chain_status == first_graph.chain_status
+
+
+def test_page_insertion_serialization(postgres_storage):
+    import json
+    from enum import Enum
+    from typing import Any, List, Optional
+
+    from pydantic import BaseModel
+
+    class ColorWithBackground(Enum):
+        DEFAULT = "default"
+
+    class RichTextAnnotation(BaseModel):
+        bold: bool
+        italic: bool
+        strikethrough: bool
+        underline: bool
+        code: bool
+        color: ColorWithBackground
+
+    class TextContent(BaseModel):
+        content: str
+        link: Optional[str] = None
+
+    class RichText(BaseModel):
+        type: str
+        annotations: RichTextAnnotation
+        plain_text: str
+        href: Optional[str] = None
+        text: TextContent
+        equation: Optional[Any] = None
+        mention: Optional[Any] = None
+
+    class ParagraphBlockData(BaseModel):
+        rich_text: List[RichText]
+        color: Optional[Any] = None
+        children: Optional[Any] = None
+
+    class Block(BaseModel):
+        object: str
+        type: str
+        paragraph: Optional[ParagraphBlockData] = None
+        divider: Optional[dict] = None
+
+    class DatabaseParent(BaseModel):
+        type: str
+        database_id: str
+
+    class Option(BaseModel):
+        name: str
+        color: Optional[Any] = None
+        description: Optional[Any] = None
+
+    class StatusProperty(BaseModel):
+        description: Optional[Any] = None
+        type: Optional[Any] = None
+        status: Option
+
+    class SelectProperty(BaseModel):
+        description: Optional[Any] = None
+        type: Optional[Any] = None
+        select: Option
+
+    class MultiSelectProperty(BaseModel):
+        description: Optional[Any] = None
+        type: Optional[Any] = None
+        multi_select: List[Option]
+
+    class TitleProperty(BaseModel):
+        description: Optional[Any] = None
+        type: Optional[Any] = None
+        title: List[RichText]
+
+    class DatabaseProperties(BaseModel):
+        Number_test: Optional[Any] = None
+        Date_test: Optional[Any] = None
+        Formula_test: Optional[Any] = None
+        Email_test: Optional[Any] = None
+        Text_test: Optional[Any] = None
+        Person_test: Optional[Any] = None
+        Phone_test: Optional[Any] = None
+        Status_test: Optional[StatusProperty] = None
+        Select_test: Optional[SelectProperty] = None
+        Url_test: Optional[Any] = None
+        Files_test: Optional[Any] = None
+        Checkbox_test: Optional[Any] = None
+        Multi_select_test: Optional[MultiSelectProperty] = None
+        Name: Optional[TitleProperty] = None
+
+    class PageInsertion(BaseModel):
+        object: str
+        icon: Optional[Any] = None
+        parent: DatabaseParent
+        children: List[Block]
+        archived: Optional[Any] = None
+        in_trash: Optional[Any] = None
+        url: Optional[Any] = None
+        public_url: Optional[Any] = None
+        properties: DatabaseProperties
+
+    # Construct the example object as provided
+    page_insertion = PageInsertion(
+        object="page",
+        icon=None,
+        parent=DatabaseParent(type="database_id", database_id="your_database_id"),
+        children=[
+            Block(
+                object="block",
+                type="paragraph",
+                paragraph=ParagraphBlockData(
+                    rich_text=[
+                        RichText(
+                            type="text",
+                            annotations=RichTextAnnotation(
+                                bold=False,
+                                italic=False,
+                                strikethrough=False,
+                                underline=False,
+                                code=False,
+                                color=ColorWithBackground.DEFAULT
+                            ),
+                            plain_text="**Research Opportunities:** Investigate potential pathways to participate in moon missions, either through established government space agencies like NASA or private enterprises such as SpaceX.",
+                            href=None,
+                            text=TextContent(
+                                content="**Research Opportunities:** Investigate potential pathways to participate in moon missions, either through established government space agencies like NASA or private enterprises such as SpaceX.",
+                                link=None
+                            ),
+                            equation=None,
+                            mention=None
+                        )
+                    ],
+                    color=None,
+                    children=None
+                )
+            ),
+            Block(
+                object="block",
+                type="divider",
+                divider={}
+            ),
+            Block(
+                object="block",
+                type="paragraph",
+                paragraph=ParagraphBlockData(
+                    rich_text=[
+                        RichText(
+                            type="text",
+                            annotations=RichTextAnnotation(
+                                bold=False,
+                                italic=False,
+                                strikethrough=False,
+                                underline=False,
+                                code=False,
+                                color=ColorWithBackground.DEFAULT
+                            ),
+                            plain_text="**Application Preparation:** Develop a strong application that emphasizes your educational qualifications, physical fitness, and your drive to be part of a moon mission.",
+                            href=None,
+                            text=TextContent(
+                                content="**Application Preparation:** Develop a strong application that emphasizes your educational qualifications, physical fitness, and your drive to be part of a moon mission.",
+                                link=None
+                            ),
+                            equation=None,
+                            mention=None
+                        )
+                    ],
+                    color=None,
+                    children=None
+                )
+            ),
+            Block(
+                object="block",
+                type="divider",
+                divider={}
+            ),
+            Block(
+                object="block",
+                type="paragraph",
+                paragraph=ParagraphBlockData(
+                    rich_text=[
+                        RichText(
+                            type="text",
+                            annotations=RichTextAnnotation(
+                                bold=False,
+                                italic=False,
+                                strikethrough=False,
+                                underline=False,
+                                code=False,
+                                color=ColorWithBackground.DEFAULT
+                            ),
+                            plain_text="**Networking:** Connect with professionals in the space field to gather advice and enhance your selection prospects.",
+                            href=None,
+                            text=TextContent(
+                                content="**Networking:** Connect with professionals in the space field to gather advice and enhance your selection prospects.",
+                                link=None
+                            ),
+                            equation=None,
+                            mention=None
+                        )
+                    ],
+                    color=None,
+                    children=None
+                )
+            )
+        ],
+        archived=None,
+        in_trash=None,
+        url=None,
+        public_url=None,
+        properties=DatabaseProperties(
+            Number_test=None,
+            Date_test=None,
+            Formula_test=None,
+            Email_test=None,
+            Text_test=None,
+            Person_test=None,
+            Phone_test=None,
+            Status_test=StatusProperty(
+                description=None,
+                type=None,
+                status=Option(name="Not started", color=None, description=None)
+            ),
+            Select_test=SelectProperty(
+                description=None,
+                type=None,
+                select=Option(name="Engineering", color=None, description=None)
+            ),
+            Url_test=None,
+            Files_test=None,
+            Checkbox_test=None,
+            Multi_select_test=MultiSelectProperty(
+                description=None,
+                type=None,
+                multi_select=[Option(name="one", color=None, description=None), Option(name="two", color=None, description=None)]
+            ),
+            Name=TitleProperty(
+                description=None,
+                type=None,
+                title=[
+                    RichText(
+                        type="text",
+                        annotations=RichTextAnnotation(
+                            bold=False,
+                            italic=False,
+                            strikethrough=False,
+                            underline=False,
+                            code=False,
+                            color=ColorWithBackground.DEFAULT
+                        ),
+                        plain_text="Moon Mission Participation Plan",
+                        href=None,
+                        text=TextContent(
+                            content="Moon Mission Participation Plan",
+                            link=None
+                        ),
+                        equation=None,
+                        mention=None
+                    )
+                ]
+            )
+        )
+    )
+
+    # Convert the object using the storage conversion method and attempt JSON serialization
+    converted = postgres_storage._convert_sets_to_lists(page_insertion)
+    serialized_json = json.dumps(converted)
+
+    # Assert that the enum value has been converted to its value 'default'
+    assert "default" in serialized_json

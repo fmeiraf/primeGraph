@@ -1,3 +1,4 @@
+import enum
 import logging
 import time
 from dataclasses import dataclass
@@ -8,6 +9,7 @@ import psycopg2
 from psycopg2 import DatabaseError, OperationalError
 from psycopg2.extras import DictCursor, Json
 from psycopg2.pool import ThreadedConnectionPool
+from pydantic import BaseModel
 
 from primeGraph.checkpoint.base import CheckpointData, StorageBackend
 from primeGraph.checkpoint.serialization import serialize_model
@@ -73,16 +75,9 @@ class PostgreSQLStorage(StorageBackend):
 
     def _convert_sets_to_lists(self, obj: Any) -> Any:
         """Helper method to convert sets to lists in nested structures."""
-        if isinstance(obj, dict):
-            return {key: self._convert_sets_to_lists(value) for key, value in obj.items()}
-        elif isinstance(obj, set):
-            return list(obj)
-        elif isinstance(obj, list):
-            return [self._convert_sets_to_lists(item) for item in obj]
-        elif isinstance(obj, GraphState):
-            # Convert GraphState to a serializable dictionary
+        # Specialized handling for GraphState and ExecutionFrame must come first
+        if isinstance(obj, GraphState):
             return {"__class__": f"{obj.__class__.__module__}.{obj.__class__.__name__}", "data": serialize_model(obj)}
-        # Add handling for ExecutionFrame
         elif isinstance(obj, ExecutionFrame):
             return {
                 "__class__": "primeGraph.graph.engine.ExecutionFrame",
@@ -94,7 +89,32 @@ class PostgreSQLStorage(StorageBackend):
                     "resumed": obj.resumed,
                 },
             }
-        return obj
+
+        if isinstance(obj, BaseModel):
+            return self._convert_sets_to_lists(obj.model_dump())
+
+        if isinstance(obj, enum.Enum):
+            return obj.value
+
+        # Use model_dump if available (pydantic v2), else try dict() (pydantic v1)
+        if hasattr(obj, "model_dump") and callable(obj.model_dump):
+            return self._convert_sets_to_lists(obj.model_dump())
+        elif hasattr(obj, "dict") and callable(obj.dict):
+            return self._convert_sets_to_lists(obj.dict())
+        elif hasattr(obj, "__dict__") and not isinstance(obj, dict):
+            return self._convert_sets_to_lists(vars(obj))
+
+        if isinstance(obj, dict):
+            return {key: self._convert_sets_to_lists(value) for key, value in obj.items()}
+        elif isinstance(obj, set):
+            return list(obj)
+        elif isinstance(obj, list):
+            return [self._convert_sets_to_lists(item) for item in obj]
+
+        # Fallback: if the object isn't one of the basic serializable types, convert it to string
+        if isinstance(obj, (str, int, float, bool)) or obj is None:
+            return obj
+        return str(obj)
 
     def _convert_lists_to_sets(self, obj: Any) -> Any:
         """Helper method to convert lists back to sets in nested structures.
@@ -104,13 +124,19 @@ class PostgreSQLStorage(StorageBackend):
             if "__class__" in obj and "data" in obj:
                 class_path = obj["__class__"]
                 if class_path == "primeGraph.graph.engine.ExecutionFrame":
-                    # Reconstruct ExecutionFrame
-                    frame_data = self._convert_lists_to_sets(obj["data"])
-                    frame = ExecutionFrame(node_id=frame_data["node_id"], state=frame_data["state"])
-                    frame.branch_id = frame_data["branch_id"]
-                    frame.target_convergence = frame_data["target_convergence"]
-                    frame.resumed = frame_data["resumed"]
-                    return frame
+                    # Reconstruct ExecutionFrame from serialized dict
+                    data_field = obj["data"]
+                    frame_data = self._convert_lists_to_sets(data_field)
+                    if isinstance(frame_data, dict):
+                        frame = ExecutionFrame(node_id=frame_data["node_id"], state=frame_data["state"])
+                        frame.branch_id = frame_data["branch_id"]
+                        frame.target_convergence = frame_data["target_convergence"]
+                        frame.resumed = frame_data["resumed"]
+                        return frame
+                    elif isinstance(frame_data, ExecutionFrame):
+                        return frame_data
+                    else:
+                        return frame_data
                 else:
                     # Handle GraphState as before
                     module_name, class_name = class_path.rsplit(".", 1)
@@ -123,6 +149,15 @@ class PostgreSQLStorage(StorageBackend):
                     else:
                         data = obj["data"]
                     return state_class(**data)
+
+            # Additional check: if the dict looks like an ExecutionFrame without the __class__ marker
+            required_keys = ["node_id", "state", "branch_id", "target_convergence", "resumed"]
+            if all(key in obj for key in required_keys):
+                frame = ExecutionFrame(node_id=obj["node_id"], state=obj["state"])
+                frame.branch_id = obj["branch_id"]
+                frame.target_convergence = obj["target_convergence"]
+                frame.resumed = obj["resumed"]
+                return frame
 
             # Special handling for known set fields
             if "visited_nodes" in obj:
