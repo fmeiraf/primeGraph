@@ -30,6 +30,8 @@ class ExecutionFrame:
         self.frame_id = id(self)
         self.node_id = node_id
         self.state = state
+        # Reference to the current node object (set in _execute_frame)
+        self.current_node = None
         # Branch tracking for parallel execution
         self.branch_id: Optional[int] = None  # Will be set when branch is created
         self.target_convergence: Optional[str] = None  # The convergence node this branch is heading towards
@@ -209,6 +211,9 @@ class Engine:
                 self.graph._update_chain_status(ChainStatus.RUNNING)
 
             node_id = frame.node_id
+            
+            # Set current_node on the frame
+            frame.current_node = self.graph.nodes[node_id] if node_id in self.graph.nodes else None
 
             # Check for cycle limits
             self._node_execution_count[node_id] = self._node_execution_count.get(node_id, 0) + 1
@@ -225,6 +230,9 @@ class Engine:
             if frame.branch_id is not None:
                 logger.debug(f"Processing frame with branch_id {frame.branch_id} at node {node_id}")
                 logger.debug(f"Current active branches: {self._active_branches}")
+                
+            # Debug logging for all executions
+            logger.debug(f"Executing node '{node_id}' with node object: {frame.current_node}")
 
             if node_id == END:
                 # Clean up branch tracking if this branch was being tracked
@@ -364,6 +372,9 @@ class Engine:
             # Get next node before saving checkpoint
             children = self.graph.edges_map.get(node_id, [])
             next_node = children[0] if len(children) == 1 else None
+            
+            # Log the children for debugging
+            logger.debug(f"Node '{node_id}' has children: {children}")
 
             # If next node is a convergence point, handle branch cleanup before checkpoint
             if next_node and next_node in self._convergence_points:
