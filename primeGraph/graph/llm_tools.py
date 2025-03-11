@@ -55,8 +55,9 @@ class ToolDefinition(BaseModel):
     required_params: List[str] = []
     func: Optional[Callable] = None
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = {
+        "arbitrary_types_allowed": True
+    }
 
 
 class ToolUseRecord(BaseModel):
@@ -89,8 +90,9 @@ class LLMMessage(BaseModel):
     tool_calls: Optional[List[Dict[str, Any]]] = None
     tool_call_id: Optional[str] = None
     
-    class Config:
-        extra = "allow"  # Allow additional fields not specified in the model
+    model_config = {
+        "extra": "allow"  # Allow additional fields not specified in the model
+    }
 
 
 class ToolLoopOptions(BaseModel):
