@@ -8,8 +8,8 @@ from primeGraph.models.state import GraphState
 from primeGraph.types import ChainStatus
 
 if TYPE_CHECKING:
+    from primeGraph.graph.base import Node
     from primeGraph.graph.executable import Graph
-
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s",
@@ -31,7 +31,7 @@ class ExecutionFrame:
         self.node_id = node_id
         self.state = state
         # Reference to the current node object (set in _execute_frame)
-        self.current_node = None
+        self.current_node: Optional[Node] = None
         # Branch tracking for parallel execution
         self.branch_id: Optional[int] = None  # Will be set when branch is created
         self.target_convergence: Optional[str] = None  # The convergence node this branch is heading towards

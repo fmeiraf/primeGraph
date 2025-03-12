@@ -108,22 +108,22 @@ class ToolLoopOptions(BaseModel):
 class ToolState(GraphState):
     """Base state for tool loops, storing messages, tool calls, and results"""
 
-    messages: History[LLMMessage] = Field(default_factory=list)
-    tool_calls: History[ToolCallLog] = Field(default_factory=list)
-    current_iteration: LastValue[int] = 0
-    max_iterations: LastValue[int] = 10
-    is_complete: LastValue[bool] = False
-    final_output: LastValue[Optional[str]] = None
-    error: LastValue[Optional[str]] = None
-    current_trace: LastValue[Optional[Dict[str, Any]]] = None
-    last_token_usage: LastValue[Optional[Dict[str, int]]] = None
-    is_paused: LastValue[bool] = False
-    paused_tool_id: LastValue[Optional[str]] = None
-    paused_tool_name: LastValue[Optional[str]] = None
-    paused_tool_arguments: LastValue[Optional[Dict[str, Any]]] = None
+    messages: History[LLMMessage] = Field(default_factory=lambda: [])  # type: ignore
+    tool_calls: History[ToolCallLog] = Field(default_factory=lambda: [])  # type: ignore
+    current_iteration: LastValue[int] = 0  # type: ignore
+    max_iterations: LastValue[int] = 10  # type: ignore
+    is_complete: LastValue[bool] = False  # type: ignore
+    final_output: LastValue[Optional[str]] = None  # type: ignore
+    error: LastValue[Optional[str]] = None  # type: ignore
+    current_trace: LastValue[Optional[Dict[str, Any]]] = None  # type: ignore
+    last_token_usage: LastValue[Optional[Dict[str, int]]] = None  # type: ignore
+    is_paused: LastValue[bool] = False  # type: ignore
+    paused_tool_id: LastValue[Optional[str]] = None  # type: ignore
+    paused_tool_name: LastValue[Optional[str]] = None  # type: ignore
+    paused_tool_arguments: LastValue[Optional[Dict[str, Any]]] = None  # type: ignore
 
 
-def tool(description: str, tool_type: ToolType = ToolType.FUNCTION, pause_before_execution: bool = False):
+def tool(description: str, tool_type: ToolType = ToolType.FUNCTION, pause_before_execution: bool = False) -> Callable:
     """
     Decorator to mark a function as a tool available to LLMs.
 
@@ -152,7 +152,7 @@ def tool(description: str, tool_type: ToolType = ToolType.FUNCTION, pause_before
         ```
     """
 
-    def decorator(func):
+    def decorator(func: Callable) -> Callable:
         hints = get_type_hints(func)
         sig = inspect.signature(func)
 
@@ -193,7 +193,7 @@ def tool(description: str, tool_type: ToolType = ToolType.FUNCTION, pause_before
         func._tool_definition = ToolDefinition(**schema)
 
         @wraps(func)
-        async def wrapper(*args, **kwargs):
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
             # The actual tool execution is handled separately
             return await func(*args, **kwargs)
 

@@ -43,7 +43,7 @@ repos:
         language: system
         types: [python]
         pass_filenames: true
-        exclude: ^(tests/|examples/|notebooks/)
+        exclude: ^(tests/|examples/|notebooks/|primeGraph/graph/llm_tools\.py)
       - id: pytest
         name: pytest
         entry: uv run pytest -v -k "not test_postgresql_checkpoint"

@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.2.0] - 2025-02-20
+
+### Added
+
+- Added support for ToolGraphs: let you create graphs (with 1 or more nodes) that accecpt tools and run tool loops automatically.
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- N/A
+
+---
+
 # [1.1.5] - 2025-02-20
 
 ### Added

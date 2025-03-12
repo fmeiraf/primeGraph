@@ -4,7 +4,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Package Version](https://img.shields.io/badge/package-1.1.5-blue.svg)](https://pypi.org/project/primegraph/)
+[![Package Version](https://img.shields.io/badge/package-1.2.0-blue.svg)](https://pypi.org/project/primegraph/)
 
 ---
 
@@ -665,7 +665,7 @@ import asyncio
 from typing import Dict, List, Any
 from primeGraph import START, END
 from primeGraph.graph.llm_tools import (
-    tool, ToolNode, ToolGraph, ToolEngine, ToolState, 
+    tool, ToolNode, ToolGraph, ToolEngine, ToolState,
     ToolLoopOptions, LLMMessage
 )
 from primeGraph.graph.llm_clients import OpenAIClient, AnthropicClient
@@ -715,22 +715,22 @@ graph.add_edge(node.name, END)
 async def run_research():
     # Initialize the engine
     engine = ToolEngine(graph)
-    
+
     # Create initial state with user query
     initial_state = ResearchState()
     initial_state.messages = [
         LLMMessage(role="system", content="You are a helpful research assistant."),
         LLMMessage(role="user", content="Research quantum computing advancements in 2023")
     ]
-    
+
     # Execute the graph
     result = await engine.execute(initial_state=initial_state)
-    
+
     # Access final state
     final_state = result.state
     print(f"Tool calls: {len(final_state.tool_calls)}")
     print(f"Final output: {final_state.final_output}")
-    
+
 asyncio.run(run_research())
 ```
 
@@ -763,10 +763,10 @@ paused_state = result.state
 if paused_state.is_paused and paused_state.paused_tool_name == "process_payment":
     # User can review the payment details
     print(f"Review payment: {paused_state.paused_tool_arguments}")
-    
+
     # If approved, resume execution with the tool
     resumed_result = await engine.resume_from_pause(paused_state, execute_tool=True)
-    
+
     # Or skip the payment if not approved
     # resumed_result = await engine.resume_from_pause(paused_state, execute_tool=False)
 ```

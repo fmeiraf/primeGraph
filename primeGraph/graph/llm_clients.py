@@ -11,6 +11,8 @@ import os
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import openai
+
 
 class Provider(str, Enum):
     """Supported LLM providers"""
@@ -41,7 +43,7 @@ class LLMClientBase:
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Union[str, bool, Dict[str, Any]]] = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> Tuple[Any, Any]:
         """
         Generate a response using the LLM, possibly using tools.
@@ -89,9 +91,8 @@ class OpenAIClient(LLMClientBase):
         """Initialize the OpenAI client."""
         super().__init__(api_key)
         # Lazy import to avoid dependency issues if not using OpenAI
+        self.client: Optional[openai.OpenAI] = None
         try:
-            import openai
-
             self.client = openai.OpenAI(api_key=api_key or os.environ.get("OPENAI_API_KEY"))
         except ImportError:
             self.client = None
@@ -101,7 +102,7 @@ class OpenAIClient(LLMClientBase):
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Union[str, bool, Dict[str, Any]]] = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> Tuple[Any, Any]:
         """Generate a response using OpenAI's API."""
         if self.client is None:
@@ -131,7 +132,7 @@ class OpenAIClient(LLMClientBase):
             api_kwargs["model"] = "gpt-4-turbo"
 
         # Call the API in a non-blocking way
-        response = await asyncio.to_thread(self.client.chat.completions.create, messages=messages, **api_kwargs)
+        response = await asyncio.to_thread(self.client.chat.completions.create, messages=messages, **api_kwargs)  # type: ignore
 
         # Extract the content from the response
         content = response.choices[0].message.content or ""
@@ -169,7 +170,7 @@ class AnthropicClient(LLMClientBase):
         super().__init__(api_key)
         # Lazy import to avoid dependency issues if not using Anthropic
         try:
-            import anthropic
+            import anthropic  # type: ignore
 
             self.client = anthropic.Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
         except ImportError:
@@ -180,7 +181,7 @@ class AnthropicClient(LLMClientBase):
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Union[str, bool, Dict[str, Any]]] = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> Tuple[Any, Any]:
         """Generate a response using Anthropic's API."""
         if self.client is None:
@@ -205,12 +206,12 @@ class AnthropicClient(LLMClientBase):
                 anthropic_tool_choice = tool_choice
             elif isinstance(tool_choice, bool):
                 # True enables tool use, False/None lets model decide
-                anthropic_tool_choice = tool_choice if tool_choice else None
+                anthropic_tool_choice = tool_choice if tool_choice else None  # type: ignore
             elif isinstance(tool_choice, dict):
                 if tool_choice.get("type") == "function":
                     anthropic_tool_choice = tool_choice["function"]["name"]
                 elif tool_choice.get("type") == "any":
-                    anthropic_tool_choice = True
+                    anthropic_tool_choice = True  # type: ignore
                 else:
                     anthropic_tool_choice = None
 
