@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.2.3] - 2025-03-12
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Fixed LLM calls token usage reporting.
+
 # [1.2.2] - 2025-03-12
 
 ### Added

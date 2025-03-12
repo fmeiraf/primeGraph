@@ -12,9 +12,11 @@ import os
 from typing import Any, Dict
 
 from dotenv import load_dotenv
+from rich import print as rprint
 
-from primeGraph.graph import (END, START, LLMClientFactory, Provider,
-                              ToolGraph, ToolLoopOptions, ToolState, tool)
+from primeGraph import END, START
+from primeGraph.graph import (LLMClientFactory, Provider, ToolGraph,
+                              ToolLoopOptions, ToolState, tool)
 
 # Load environment variables for API keys
 load_dotenv()
@@ -133,6 +135,8 @@ async def main():
     print("Final state:")
     print(f"- Tool calls: {len(graph.state.tool_calls)}")
     print(f"- Final output: {graph.state.final_output}")
+    rprint(graph.state)
+
 
 
 if __name__ == "__main__":

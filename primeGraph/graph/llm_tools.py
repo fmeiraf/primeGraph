@@ -89,6 +89,7 @@ class LLMMessage(BaseModel):
     content: str
     tool_calls: Optional[List[Dict[str, Any]]] = None
     tool_call_id: Optional[str] = None
+    token_usage: Optional[Dict[str, int]] = None  # Track token usage for this message
 
     model_config = {
         "extra": "allow"  # Allow additional fields not specified in the model
@@ -118,6 +119,7 @@ class ToolState(GraphState):
     final_output: LastValue[Optional[str]] = None  # type: ignore
     error: LastValue[Optional[str]] = None  # type: ignore
     current_trace: LastValue[Optional[Dict[str, Any]]] = None  # type: ignore
+    token_usage_history: History[Dict[str, int]] = Field(default_factory=lambda: [])  # type: ignore
     last_token_usage: LastValue[Optional[Dict[str, int]]] = None  # type: ignore
     is_paused: LastValue[bool] = False  # type: ignore
     paused_tool_id: LastValue[Optional[str]] = None  # type: ignore
@@ -595,7 +597,9 @@ class ToolEngine(Engine):
                     if not hasattr(state, "tool_calls"):
                         state.tool_calls = []
                     elif not isinstance(state.tool_calls, list) and hasattr(state.tool_calls, "get"):
-                        state.tool_calls = state.tool_calls.get()
+                        state.tool_calls = state.tool_calls.get(None)
+                        if state.tool_calls is None:
+                            state.tool_calls = []
 
                     # Add the result to state
                     if isinstance(state.tool_calls, list):
@@ -609,7 +613,9 @@ class ToolEngine(Engine):
                     if not hasattr(state, "messages"):
                         state.messages = []
                     elif not isinstance(state.messages, list) and hasattr(state.messages, "get"):
-                        state.messages = state.messages.get()
+                        state.messages = state.messages.get(None)
+                        if state.messages is None:
+                            state.messages = []
 
                     # Find the existing assistant message with tool calls or create a new one
                     found_assistant_msg = False
@@ -849,7 +855,9 @@ class ToolEngine(Engine):
         try:
             messages_list = getattr(state, "messages", [])
             if hasattr(messages_list, "get") and callable(messages_list.get):
-                messages_list = messages_list.get()
+                messages_list = messages_list.get(None)
+                if messages_list is None:
+                    messages_list = []
             messages = [msg.model_dump() for msg in messages_list]
             print(f"Found {len(messages)} messages in state")
         except Exception as e:
@@ -924,6 +932,37 @@ class ToolEngine(Engine):
                     messages=messages, tools=tool_schemas, **api_kwargs
                 )
 
+                # Extract token usage if available in the response
+                token_usage = None
+                if hasattr(node.llm_client, "extract_token_usage"):
+                    token_usage = node.llm_client.extract_token_usage(raw_response)
+                elif hasattr(raw_response, "usage") and raw_response.usage:
+                    token_usage = {
+                        "prompt_tokens": getattr(raw_response.usage, "prompt_tokens", 0),
+                        "completion_tokens": getattr(raw_response.usage, "completion_tokens", 0),
+                        "total_tokens": getattr(raw_response.usage, "total_tokens", 0),
+                    }
+                elif isinstance(raw_response, dict) and "usage" in raw_response:
+                    token_usage = raw_response["usage"]
+
+                # Log token usage if available
+                if token_usage:
+                    print(f"Token usage: {token_usage}")
+
+                    # Store in state
+                    buffer_updates["last_token_usage"] = token_usage
+
+                    # Add to token usage history
+                    if "token_usage_history" not in buffer_updates:
+                        usage_history = getattr(state, "token_usage_history", [])
+                        if hasattr(usage_history, "get") and callable(usage_history.get):
+                            usage_history = usage_history.get(None)
+                            if usage_history is None:
+                                usage_history = []
+                        buffer_updates["token_usage_history"] = list(usage_history)
+
+                    buffer_updates["token_usage_history"].append(token_usage)
+
                 # Check if response requires tool use
                 if node.llm_client.is_tool_use_response(raw_response):
                     print("Response contains tool calls")
@@ -945,12 +984,14 @@ class ToolEngine(Engine):
                                 }
                                 for call in tool_calls
                             ],
+                            "token_usage": token_usage,  # Include token usage in the message
                         }
                     else:
                         # For other providers
                         assistant_message = {
                             "role": "assistant",
                             "content": content or "",
+                            "token_usage": token_usage,  # Include token usage in the message
                         }
 
                     # Append to messages list for next iteration
@@ -1071,7 +1112,11 @@ class ToolEngine(Engine):
                     print("Response does not contain tool calls, finishing")
 
                     # Create assistant message for final response
-                    assistant_message = {"role": "assistant", "content": content}
+                    assistant_message = {
+                        "role": "assistant",
+                        "content": content,
+                        "token_usage": token_usage,  # Include token usage in the message
+                    }
 
                     # Add to messages
                     messages.append(assistant_message)
@@ -1125,6 +1170,7 @@ class ToolEngine(Engine):
         print(f"- Tool calls: {len(tool_call_entries)}")
         print(f"- Final messages: {len(messages)}")
         print(f"- Is complete: {is_complete}")
+
         if error:
             print(f"- Error: {error}")
 
