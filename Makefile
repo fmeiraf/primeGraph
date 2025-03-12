@@ -1,4 +1,4 @@
-.PHONY: clean build test publish lint type-check format check-all lock check changelog-check
+.PHONY: clean build test publish lint type-check format check-all lock check changelog-check lint-fix
 
 clean:
 	rm -rf dist/
@@ -20,6 +20,9 @@ lint:
 
 format:
 	uv run ruff format .
+
+lint-fix:
+	uv run ruff check --fix .
 
 type-check:
 	uv run mypy .
