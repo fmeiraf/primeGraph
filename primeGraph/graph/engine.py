@@ -211,7 +211,7 @@ class Engine:
                 self.graph._update_chain_status(ChainStatus.RUNNING)
 
             node_id = frame.node_id
-            
+
             # Set current_node on the frame
             frame.current_node = self.graph.nodes[node_id] if node_id in self.graph.nodes else None
 
@@ -230,7 +230,7 @@ class Engine:
             if frame.branch_id is not None:
                 logger.debug(f"Processing frame with branch_id {frame.branch_id} at node {node_id}")
                 logger.debug(f"Current active branches: {self._active_branches}")
-                
+
             # Debug logging for all executions
             logger.debug(f"Executing node '{node_id}' with node object: {frame.current_node}")
 
@@ -372,7 +372,7 @@ class Engine:
             # Get next node before saving checkpoint
             children = self.graph.edges_map.get(node_id, [])
             next_node = children[0] if len(children) == 1 else None
-            
+
             # Log the children for debugging
             logger.debug(f"Node '{node_id}' has children: {children}")
 
