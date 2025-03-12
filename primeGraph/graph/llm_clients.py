@@ -174,7 +174,7 @@ class AnthropicClient(LLMClientBase):
 
             self.client = anthropic.Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
         except ImportError:
-            self.client = None
+            self.client = None  # type: ignore
 
     async def generate(
         self,
@@ -191,12 +191,27 @@ class AnthropicClient(LLMClientBase):
         anthropic_messages = []
         system_content = None
 
-        # Extract system message
+        # Extract system message and clean up all messages for Anthropic format
         for msg in messages:
-            if msg.get("role") == "system":
-                system_content = msg.get("content", "")
-            else:
-                anthropic_messages.append(msg)
+            # Get the essential fields
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+
+            # Handle system messages separately
+            if role == "system":
+                system_content = content
+                continue
+
+            # Convert 'tool' role to 'user' for Anthropic since it only supports user/assistant
+            if role == "tool":
+                role = "user"
+
+            # Create a clean message with only the fields Anthropic accepts
+            clean_msg = {"role": role, "content": content}
+
+            # Only include messages with supported roles
+            if role in ["user", "assistant"]:
+                anthropic_messages.append(clean_msg)
 
         # Process tool_choice for Anthropic format
         anthropic_tool_choice = None
@@ -228,7 +243,7 @@ class AnthropicClient(LLMClientBase):
             api_kwargs["model"] = "claude-3-opus-20240229"
 
         # Call the API in a non-blocking way
-        response = await asyncio.to_thread(self.client.messages.create, messages=anthropic_messages, **api_kwargs)
+        response = await asyncio.to_thread(self.client.messages.create, messages=anthropic_messages, **api_kwargs)  # type: ignore
 
         # Extract and join text from response content blocks
         content = ""

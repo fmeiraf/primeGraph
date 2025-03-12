@@ -287,10 +287,8 @@ class ToolNode(Node):
 
             # Format for provider
             if provider and provider.lower() == "anthropic":
-                schema = {
-                    "type": "custom",
-                    "custom": {"name": tool_def.name, "description": tool_def.description, "input_schema": json_schema},
-                }
+                # Anthropic format directly matches their API requirements
+                schema = {"name": tool_def.name, "description": tool_def.description, "input_schema": json_schema}
             elif provider and provider.lower() == "google":
                 schema = {"name": tool_def.name, "description": tool_def.description, "parameters": json_schema}
             else:

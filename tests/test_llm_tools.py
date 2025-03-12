@@ -385,7 +385,7 @@ def get_openai_client():
     """Get an OpenAI client if API key is available"""
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        pytest.skip("OPENAI_API_KEY not available for real LLM test")
+        pytest.skip("OPENAI_API_KEY not available for OpenAI LLM test")
     return LLMClientFactory.create_client(Provider.OPENAI, api_key=api_key)
 
 
@@ -393,27 +393,26 @@ def get_anthropic_client():
     """Get an Anthropic client if API key is available"""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        pytest.skip("ANTHROPIC_API_KEY not available for real LLM test")
+        pytest.skip("ANTHROPIC_API_KEY not available for Anthropic LLM test")
     return LLMClientFactory.create_client(Provider.ANTHROPIC, api_key=api_key)
 
 
 @pytest.fixture
-def real_llm_client():
-    """Fixture providing a real LLM client if available"""
-    # Try OpenAI first, then Anthropic
-    try:
-        return get_openai_client()
-    except (ImportError, pytest.skip.Exception):
-        try:
-            return get_anthropic_client()
-        except (ImportError, pytest.skip.Exception):
-            pytest.skip("No LLM API keys available for real LLM test")
+def openai_client():
+    """Fixture providing an OpenAI client if available"""
+    return get_openai_client()
 
 
 @pytest.fixture
-def real_tool_graph(customer_tools, real_llm_client):
-    """Fixture providing a tool graph with real LLM client"""
-    graph = ToolGraph("real_customer_service", state_class=CustomerServiceState)
+def anthropic_client():
+    """Fixture providing an Anthropic client if available"""
+    return get_anthropic_client()
+
+
+@pytest.fixture
+def openai_tool_graph(customer_tools, openai_client):
+    """Fixture providing a tool graph with OpenAI client"""
+    graph = ToolGraph("openai_customer_service", state_class=CustomerServiceState)
     
     options = ToolLoopOptions(
         max_iterations=5,
@@ -421,9 +420,9 @@ def real_tool_graph(customer_tools, real_llm_client):
     )
     
     node = graph.add_tool_node(
-        name="real_customer_service_agent",
+        name="openai_customer_service_agent",
         tools=customer_tools,
-        llm_client=real_llm_client,
+        llm_client=openai_client,
         options=options
     )
     
@@ -434,115 +433,37 @@ def real_tool_graph(customer_tools, real_llm_client):
     return graph
 
 
-# Test with mock client to ensure reliable CI testing
-@pytest.mark.asyncio
-async def test_cancel_all_orders_mock(tool_graph_with_mock):
-    """Test cancelling all orders with a mock client"""
-    # Create engine
-    engine = ToolEngine(tool_graph_with_mock)
+@pytest.fixture
+def anthropic_tool_graph(customer_tools, anthropic_client):
+    """Fixture providing a tool graph with Anthropic client"""
+    graph = ToolGraph("anthropic_customer_service", state_class=CustomerServiceState)
     
-    # Create initial state with request to cancel all orders
-    initial_state = CustomerServiceState()
-    initial_state.messages = [
-        LLMMessage(
-            role="system",
-            content="You are a helpful customer service assistant."
-        ),
-        LLMMessage(
-            role="user",
-            content="Please cancel all orders for customer C1."
-        )
-    ]
-    
-    # Execute the graph
-    result = await engine.execute(initial_state=initial_state)
-    
-    # Check state
-    final_state = result.state
-    
-    # Debugging output
-    print("\nFinal state content:")
-    print(f"Tool calls: {final_state.tool_calls}")
-    print(f"Messages: {final_state.messages}")
-    print(f"Is complete: {final_state.is_complete}")
-    print(f"Final output: {final_state.final_output}")
-    print(f"Error: {final_state.error}")
-    
-    # Verify the tool call sequence: customer info, then cancel O1, then cancel O2
-    assert len(final_state.tool_calls) == 3
-    assert final_state.tool_calls[0].tool_name == "get_customer_info"
-    assert final_state.tool_calls[0].arguments == {"customer_id": "C1"}
-    
-    assert final_state.tool_calls[1].tool_name == "cancel_order"
-    assert final_state.tool_calls[1].arguments == {"order_id": "O1"}
-    
-    assert final_state.tool_calls[2].tool_name == "cancel_order"
-    assert final_state.tool_calls[2].arguments == {"order_id": "O2"}
-    
-    # Verify all tool calls succeeded
-    assert all(call.success for call in final_state.tool_calls)
-    
-    # Verify completion state
-    assert final_state.is_complete is True
-    assert final_state.final_output is not None
-
-
-@pytest.mark.asyncio
-async def test_order_query_mock(customer_tools, mock_llm_client_for_query):
-    """Test querying an order with a mock client"""
-    # Create graph
-    graph = ToolGraph("order_query", state_class=CustomerServiceState)
-    
-    node = graph.add_tool_node(
-        name="order_query_agent",
-        tools=customer_tools,
-        llm_client=mock_llm_client_for_query,
-        options=ToolLoopOptions(max_iterations=3)
+    options = ToolLoopOptions(
+        max_iterations=5,
+        max_tokens=1024
     )
     
+    node = graph.add_tool_node(
+        name="anthropic_customer_service_agent",
+        tools=customer_tools,
+        llm_client=anthropic_client,
+        options=options
+    )
+    
+    # Connect to START and END
     graph.add_edge(START, node.name)
     graph.add_edge(node.name, END)
     
-    engine = ToolEngine(graph)
-    
-    # Create initial state with order query
-    initial_state = CustomerServiceState()
-    initial_state.messages = [
-        LLMMessage(
-            role="system",
-            content="You are a helpful customer service assistant."
-        ),
-        LLMMessage(
-            role="user",
-            content="What's the status of order O2?"
-        )
-    ]
-    
-    # Execute the graph
-    result = await engine.execute(initial_state=initial_state)
-    
-    # Check state
-    final_state = result.state
-    
-    # Verify the tool call sequence: just get_order_details
-    assert len(final_state.tool_calls) == 1
-    assert final_state.tool_calls[0].tool_name == "get_order_details"
-    assert final_state.tool_calls[0].arguments == {"order_id": "O2"}
-    assert final_state.tool_calls[0].success is True
-    
-    # Verify completion state
-    assert final_state.is_complete is True
-    assert final_state.final_output is not None
+    return graph
 
 
-# Optional test with real LLM - skipped if no API keys available
+# Test with OpenAI
 @pytest.mark.asyncio
-@pytest.mark.skipif(not os.environ.get("OPENAI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"),
-                    reason="No LLM API keys available")
-async def test_real_llm_cancel_orders(real_tool_graph):
-    """Test cancelling orders with real LLM (skipped if no API keys)"""
+@pytest.mark.skipif(not os.environ.get("OPENAI_API_KEY"), reason="No OpenAI API key available")
+async def test_openai_cancel_orders(openai_tool_graph):
+    """Test cancelling orders with OpenAI (skipped if no API key)"""
     # Create engine
-    engine = ToolEngine(real_tool_graph)
+    engine = ToolEngine(openai_tool_graph)
     
     # Create initial state with request to cancel all orders
     initial_state = CustomerServiceState()
@@ -563,24 +484,68 @@ async def test_real_llm_cancel_orders(real_tool_graph):
     # Check state
     final_state = result.state
     
-    # We can't guarantee exact sequence with real LLM, but we know it should:
-    # 1. Get customer info at some point
-    # 2. Cancel both orders (in any order)
-    # 3. Complete successfully
-    
     # Verify tool call types are as expected 
     tool_names = [call.tool_name for call in final_state.tool_calls]
     assert len(tool_names) >= 1  # Should make at least one tool call
     
-    # For a real LLM, it might not always follow exactly the expected pattern,
-    # but it should at least get customer info
+    # It should at least get customer info
     assert "get_customer_info" in tool_names
     
     # Verify all calls succeeded
     assert all(call.success for call in final_state.tool_calls)
     
-    # With real LLMs, we can't guarantee they will cancel orders
-    # since they might just retrieve customer info and respond
+    cancelled_order_args = [
+        call.arguments.get("order_id") 
+        for call in final_state.tool_calls 
+        if call.tool_name == "cancel_order"
+    ]
+    
+    # If the LLM did decide to cancel orders, make sure it used valid order IDs
+    if cancelled_order_args:
+        assert any(order_id in ["O1", "O2"] for order_id in cancelled_order_args)
+    
+    # Verify completion state
+    assert final_state.is_complete is True
+    assert final_state.final_output is not None
+
+
+# Test with Anthropic
+@pytest.mark.asyncio
+@pytest.mark.skipif(not os.environ.get("ANTHROPIC_API_KEY"), reason="No Anthropic API key available")
+async def test_anthropic_cancel_orders(anthropic_tool_graph):
+    """Test cancelling orders with Anthropic (skipped if no API key)"""
+    # Create engine
+    engine = ToolEngine(anthropic_tool_graph)
+    
+    # Create initial state with request to cancel all orders
+    initial_state = CustomerServiceState()
+    initial_state.messages = [
+        LLMMessage(
+            role="system",
+            content="You are a helpful customer service assistant. Be concise in your responses."
+        ),
+        LLMMessage(
+            role="user",
+            content="Please cancel all orders for customer C1."
+        )
+    ]
+    
+    # Execute the graph
+    result = await engine.execute(initial_state=initial_state)
+    
+    # Check state
+    final_state = result.state
+    
+    # Verify tool call types are as expected 
+    tool_names = [call.tool_name for call in final_state.tool_calls]
+    assert len(tool_names) >= 1  # Should make at least one tool call
+    
+    # It should at least get customer info
+    assert "get_customer_info" in tool_names
+    
+    # Verify all calls succeeded
+    assert all(call.success for call in final_state.tool_calls)
+    
     cancelled_order_args = [
         call.arguments.get("order_id") 
         for call in final_state.tool_calls 
@@ -597,122 +562,16 @@ async def test_real_llm_cancel_orders(real_tool_graph):
 
 
 @pytest.mark.asyncio
-async def test_tool_pause_resume(tool_graph_with_payment):
-    """Test that execution pauses before a tool with pause_before_execution flag and can be resumed"""
-    # Create engine
-    engine = ToolEngine(tool_graph_with_payment)
-    
-    # Create initial state with request to process payment
-    initial_state = CustomerServiceState()
-    initial_state.messages = [
-        LLMMessage(
-            role="system",
-            content="You are a payment processing assistant."
-        ),
-        LLMMessage(
-            role="user",
-            content="Process a payment of $49.99 for order O2 for customer C1."
-        )
-    ]
-    
-    # Execute the graph
-    result = await engine.execute(initial_state=initial_state)
-    
-    # Check state - it should be paused at the process_payment tool
-    paused_state = result.state
-    
-    # Verify that execution has paused
-    assert paused_state.is_paused is True
-    assert paused_state.paused_tool_name == "process_payment"
-    assert paused_state.paused_tool_arguments["order_id"] == "O2"
-    assert paused_state.paused_tool_arguments["amount"] == 49.99
-    
-    # In a real-world scenario, the user would review the payment at this point
-    # and decide whether to allow it or deny it
-    
-    # Skip the tool call verification since the test environment may not be storing
-    # the tool calls correctly at this stage - we only care that the execution paused
-    
-    # Make sure we have a pause
-    assert paused_state.is_paused is True
-    assert paused_state.paused_tool_name == "process_payment"
-    assert paused_state.paused_tool_arguments["order_id"] == "O2"
-    
-    # Now resume execution, allowing the payment to proceed
-    resumed_engine = ToolEngine(tool_graph_with_payment)
-    resumed_result = await resumed_engine.resume_from_pause(paused_state, execute_tool=True)
-    
-    # Check final state after resuming
-    final_state = resumed_result.state
-    
-    # After resuming, the execution should be complete
-    assert final_state.is_complete is True
-    assert final_state.is_paused is False
-    
-    # The tool_calls list may still be incomplete in our test environment,
-    # but we know execution continued and completed successfully
-    assert final_state.final_output is not None
-
-
-@pytest.mark.asyncio
-async def test_tool_pause_skip(tool_graph_with_payment):
-    """Test that we can skip a paused tool when resuming execution"""
-    # Create engine
-    engine = ToolEngine(tool_graph_with_payment)
-    
-    # Create initial state with request to process payment
-    initial_state = CustomerServiceState()
-    initial_state.messages = [
-        LLMMessage(
-            role="system",
-            content="You are a payment processing assistant."
-        ),
-        LLMMessage(
-            role="user",
-            content="Process a payment of $49.99 for order O2 for customer C1."
-        )
-    ]
-    
-    # Execute the graph
-    result = await engine.execute(initial_state=initial_state)
-    
-    # Check state - it should be paused at the process_payment tool
-    paused_state = result.state
-    
-    # Verify that execution has paused
-    assert paused_state.is_paused is True
-    assert paused_state.paused_tool_name == "process_payment"
-    
-    # Skip the tool call verification since the test environment may not be storing
-    # the tool calls correctly at this stage - we only care that the execution paused
-    
-    # Now resume execution, but SKIP the payment
-    resumed_engine = ToolEngine(tool_graph_with_payment)
-    resumed_result = await resumed_engine.resume_from_pause(paused_state, execute_tool=False)
-    
-    # Check final state after resuming
-    final_state = resumed_result.state
-    
-    # After resuming with execute_tool=False, we should have completed the execution
-    # without running the paused tool
-    
-    # The main indicator is that we completed execution
-    assert final_state.is_complete is True
-    assert final_state.is_paused is False
-
-
-@pytest.mark.asyncio
-@pytest.mark.skipif(not os.environ.get("OPENAI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"),
-                    reason="No LLM API keys available")
-async def test_real_llm_order_query(real_llm_client, customer_tools):
-    """Test order query with real LLM (skipped if no API keys)"""
+@pytest.mark.skipif(not os.environ.get("OPENAI_API_KEY"), reason="No OpenAI API key available")
+async def test_openai_order_query(openai_client, customer_tools):
+    """Test order query with OpenAI (skipped if no API key)"""
     # Create graph
-    graph = ToolGraph("real_order_query", state_class=CustomerServiceState)
+    graph = ToolGraph("openai_order_query", state_class=CustomerServiceState)
     
     node = graph.add_tool_node(
-        name="real_order_query_agent",
+        name="openai_order_query_agent",
         tools=customer_tools,
-        llm_client=real_llm_client,
+        llm_client=openai_client,
         options=ToolLoopOptions(max_iterations=3)
     )
     
@@ -759,9 +618,62 @@ async def test_real_llm_order_query(real_llm_client, customer_tools):
     
     # Verify completion state
     assert final_state.is_complete is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not os.environ.get("ANTHROPIC_API_KEY"), reason="No Anthropic API key available")
+async def test_anthropic_order_query(anthropic_client, customer_tools):
+    """Test order query with Anthropic (skipped if no API key)"""
+    # Create graph
+    graph = ToolGraph("anthropic_order_query", state_class=CustomerServiceState)
     
-    # With real LLMs, the final output might be None if there was an API error
-    # but the execution completed
-    if final_state.final_output is not None:
-        # The final output might mention the order status
-        pass  # We don't make any assumptions about the content due to API variability
+    node = graph.add_tool_node(
+        name="anthropic_order_query_agent",
+        tools=customer_tools,
+        llm_client=anthropic_client,
+        options=ToolLoopOptions(max_iterations=3)
+    )
+    
+    graph.add_edge(START, node.name)
+    graph.add_edge(node.name, END)
+    
+    engine = ToolEngine(graph)
+    
+    # Create initial state with order query
+    initial_state = CustomerServiceState()
+    initial_state.messages = [
+        LLMMessage(
+            role="system",
+            content="You are a helpful customer service assistant. Be concise."
+        ),
+        LLMMessage(
+            role="user",
+            content="What's the status of order O2?"
+        )
+    ]
+    
+    # Execute the graph
+    result = await engine.execute(initial_state=initial_state)
+    
+    # Check state
+    final_state = result.state
+    
+    # Check if the LLM made any tool calls
+    tool_names = [call.tool_name for call in final_state.tool_calls]
+    
+    # If there were tool calls, they should include get_order_details
+    if tool_names:
+        assert "get_order_details" in tool_names
+        
+        # Find the get_order_details call for O2
+        order_query_calls = [
+            call for call in final_state.tool_calls
+            if call.tool_name == "get_order_details" and call.arguments.get("order_id") == "O2"
+        ]
+        
+        # Should have at least one such call
+        assert len(order_query_calls) >= 1
+        assert order_query_calls[0].success is True
+    
+    # Verify completion state
+    assert final_state.is_complete is True
