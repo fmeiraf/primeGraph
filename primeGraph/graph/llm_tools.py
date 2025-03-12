@@ -89,7 +89,6 @@ class LLMMessage(BaseModel):
     content: str
     tool_calls: Optional[List[Dict[str, Any]]] = None
     tool_call_id: Optional[str] = None
-    token_usage: Optional[Dict[str, int]] = None  # Track token usage for this message
 
     model_config = {
         "extra": "allow"  # Allow additional fields not specified in the model
@@ -119,8 +118,7 @@ class ToolState(GraphState):
     final_output: LastValue[Optional[str]] = None  # type: ignore
     error: LastValue[Optional[str]] = None  # type: ignore
     current_trace: LastValue[Optional[Dict[str, Any]]] = None  # type: ignore
-    token_usage_history: History[Dict[str, int]] = Field(default_factory=lambda: [])  # type: ignore
-    last_token_usage: LastValue[Optional[Dict[str, int]]] = None  # type: ignore
+    raw_response_history: History[Any] = Field(default_factory=lambda: [])  # type: ignore
     is_paused: LastValue[bool] = False  # type: ignore
     paused_tool_id: LastValue[Optional[str]] = None  # type: ignore
     paused_tool_name: LastValue[Optional[str]] = None  # type: ignore
@@ -932,36 +930,17 @@ class ToolEngine(Engine):
                     messages=messages, tools=tool_schemas, **api_kwargs
                 )
 
-                # Extract token usage if available in the response
-                token_usage = None
-                if hasattr(node.llm_client, "extract_token_usage"):
-                    token_usage = node.llm_client.extract_token_usage(raw_response)
-                elif hasattr(raw_response, "usage") and raw_response.usage:
-                    token_usage = {
-                        "prompt_tokens": getattr(raw_response.usage, "prompt_tokens", 0),
-                        "completion_tokens": getattr(raw_response.usage, "completion_tokens", 0),
-                        "total_tokens": getattr(raw_response.usage, "total_tokens", 0),
-                    }
-                elif isinstance(raw_response, dict) and "usage" in raw_response:
-                    token_usage = raw_response["usage"]
+                # Store raw response in history
+                # Add to raw response history
+                if "raw_response_history" not in buffer_updates:
+                    response_history = getattr(state, "raw_response_history", [])
+                    if hasattr(response_history, "get") and callable(response_history.get):
+                        response_history = response_history.get(None)
+                        if response_history is None:
+                            response_history = []
+                    buffer_updates["raw_response_history"] = list(response_history)
 
-                # Log token usage if available
-                if token_usage:
-                    print(f"Token usage: {token_usage}")
-
-                    # Store in state
-                    buffer_updates["last_token_usage"] = token_usage
-
-                    # Add to token usage history
-                    if "token_usage_history" not in buffer_updates:
-                        usage_history = getattr(state, "token_usage_history", [])
-                        if hasattr(usage_history, "get") and callable(usage_history.get):
-                            usage_history = usage_history.get(None)
-                            if usage_history is None:
-                                usage_history = []
-                        buffer_updates["token_usage_history"] = list(usage_history)
-
-                    buffer_updates["token_usage_history"].append(token_usage)
+                buffer_updates["raw_response_history"].append(raw_response)
 
                 # Check if response requires tool use
                 if node.llm_client.is_tool_use_response(raw_response):
@@ -983,15 +962,13 @@ class ToolEngine(Engine):
                                     "function": {"name": call["name"], "arguments": json.dumps(call["arguments"])},
                                 }
                                 for call in tool_calls
-                            ],
-                            "token_usage": token_usage,  # Include token usage in the message
+                            ]
                         }
                     else:
                         # For other providers
                         assistant_message = {
                             "role": "assistant",
                             "content": content or "",
-                            "token_usage": token_usage,  # Include token usage in the message
                         }
 
                     # Append to messages list for next iteration
@@ -1115,7 +1092,6 @@ class ToolEngine(Engine):
                     assistant_message = {
                         "role": "assistant",
                         "content": content,
-                        "token_usage": token_usage,  # Include token usage in the message
                     }
 
                     # Add to messages
