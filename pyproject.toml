@@ -34,6 +34,7 @@ dev = [
     "types-psycopg2<3.0.0.0,>=2.9.21.20241019",
     "instructor>=1.7.2",
     "ipykernel>=6.29.5",
+    "python-dotenv>=1.0.1",
 ]
 
 [build-system]
