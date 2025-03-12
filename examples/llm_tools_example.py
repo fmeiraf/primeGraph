@@ -6,17 +6,16 @@ that interact with LLMs and execute tool functions.
 """
 
 import asyncio
-import os
 import json
+import os
 import time
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from primeGraph.graph.llm_clients import LLMClientFactory, Provider
-from primeGraph.graph.llm_tools import (
-    tool, ToolGraph, ToolEngine, ToolLoopOptions, ToolState, LLMMessage
-)
+from primeGraph.graph.llm_tools import (LLMMessage, ToolEngine, ToolGraph,
+                                        ToolLoopOptions, ToolState, tool)
 
 
 # Example state model with custom fields

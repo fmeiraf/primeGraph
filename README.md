@@ -28,6 +28,8 @@ _Note from the author: This project came to life through my experience creating 
 - **Router Nodes**: Dynamically choose execution paths based on node outputs.
 - **Repeatable Nodes**: Execute nodes multiple times either in parallel or sequence.
 - **Subgraphs**: Compose graphs of subgraphs to design complex workflows.
+- **LLM Tool Integration**: Specialized nodes for LLM interaction with tool/function calling capabilities.
+- **Tool Pause/Resume**: Ability to pause execution before specific tool calls for human review and approval.
 - **Persistence**: Save and resume execution using checkpoint storage (supports memory and Postgres).
 - **Async Support**: Uses async/await for non-blocking execution with engine methods `execute()` and `resume()`.
 - **Flow Control**: Supports human-in-the-loop interactions by pausing and resuming workflows.
@@ -656,14 +658,123 @@ asyncio.run(run_async_workflow())
 
 Note: All examples now use the new asynchronous engine methods `execute()` and `resume()`. For scripts, wrap these calls with `asyncio.run(...)` or use an async context as needed.
 
+### LLM Tool Nodes
+
+```python
+import asyncio
+from typing import Dict, List, Any
+from primeGraph import START, END
+from primeGraph.graph.llm_tools import (
+    tool, ToolNode, ToolGraph, ToolEngine, ToolState, 
+    ToolLoopOptions, LLMMessage
+)
+from primeGraph.graph.llm_clients import OpenAIClient, AnthropicClient
+
+# Define state for your tool-based workflow
+class ResearchState(ToolState):
+    search_results: List[Dict[str, Any]] = []
+    final_summary: str = None
+
+# Define tools with the @tool decorator
+@tool("Search the web for information")
+async def search_web(query: str, num_results: int = 5) -> Dict[str, Any]:
+    """Search the web for information on a topic"""
+    # Implementation would call a real search API
+    return {
+        "results": [
+            {"title": "Example result 1", "content": "Example content..."},
+            {"title": "Example result 2", "content": "More example content..."}
+        ]
+    }
+
+@tool("Summarize information")
+async def summarize(text: str) -> Dict[str, Any]:
+    """Summarize text into a concise summary"""
+    # Implementation would use an LLM or summarization service
+    return {"summary": f"Summarized version of: {text[:30]}..."}
+
+# Create a graph for tool-based workflow
+graph = ToolGraph("research_workflow", state_class=ResearchState)
+
+# Initialize an LLM client (OpenAI or Anthropic)
+llm_client = OpenAIClient(api_key="your-api-key-here")
+
+# Add a tool node to the graph
+node = graph.add_tool_node(
+    name="researcher",
+    tools=[search_web, summarize],
+    llm_client=llm_client,
+    options=ToolLoopOptions(max_iterations=5)
+)
+
+# Connect nodes
+graph.add_edge(START, node.name)
+graph.add_edge(node.name, END)
+
+# Execute the graph
+async def run_research():
+    # Initialize the engine
+    engine = ToolEngine(graph)
+    
+    # Create initial state with user query
+    initial_state = ResearchState()
+    initial_state.messages = [
+        LLMMessage(role="system", content="You are a helpful research assistant."),
+        LLMMessage(role="user", content="Research quantum computing advancements in 2023")
+    ]
+    
+    # Execute the graph
+    result = await engine.execute(initial_state=initial_state)
+    
+    # Access final state
+    final_state = result.state
+    print(f"Tool calls: {len(final_state.tool_calls)}")
+    print(f"Final output: {final_state.final_output}")
+    
+asyncio.run(run_research())
+```
+
+### Tool Pause and Resume
+
+```python
+# Define a tool that will pause for human review
+@tool("Process payment", pause_before_execution=True)
+async def process_payment(order_id: str, amount: float) -> Dict[str, Any]:
+    """Process a payment for an order, pausing for verification"""
+    return {
+        "order_id": order_id,
+        "amount": amount,
+        "status": "processed",
+        "transaction_id": f"TX-{order_id}-{int(time.time())}"
+    }
+
+# Add to graph
+payment_node = graph.add_tool_node(
+    name="payment_processor",
+    tools=[process_payment, get_order_details],
+    llm_client=llm_client
+)
+
+# Execute the graph - will pause at process_payment
+result = await engine.execute(initial_state)
+paused_state = result.state
+
+# Verify the execution paused at the payment tool
+if paused_state.is_paused and paused_state.paused_tool_name == "process_payment":
+    # User can review the payment details
+    print(f"Review payment: {paused_state.paused_tool_arguments}")
+    
+    # If approved, resume execution with the tool
+    resumed_result = await engine.resume_from_pause(paused_state, execute_tool=True)
+    
+    # Or skip the payment if not approved
+    # resumed_result = await engine.resume_from_pause(paused_state, execute_tool=False)
+```
+
 ## Roadmap
 
 - [ ] Add streaming support
 - [ ] Create documentation
-- [ ] Add tools for agentic workflows
-- [ ] Add inter node epheral state for short term interactions
+- [x] Add tools for agentic workflows
+- [ ] Add inter node ephemeral state for short term interactions
 - [ ] Add persistence support for other databases
-
-```
-
-```

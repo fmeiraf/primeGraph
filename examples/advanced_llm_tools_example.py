@@ -10,18 +10,15 @@ This example demonstrates a more complex setup with:
 
 import asyncio
 import os
-import json
 import time
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
-from primeGraph.graph.llm_clients import LLMClientFactory, Provider
-from primeGraph.graph.llm_tools import (
-    tool, ToolGraph, ToolEngine, ToolLoopOptions, ToolState, LLMMessage
-)
 from primeGraph.buffer.history import History
-from primeGraph.buffer.last_value import LastValue
+from primeGraph.graph.llm_clients import LLMClientFactory, Provider
+from primeGraph.graph.llm_tools import (LLMMessage, ToolEngine, ToolGraph,
+                                        ToolLoopOptions, ToolState, tool)
 
 
 # Custom state model with different sections for different phases
@@ -146,8 +143,7 @@ async def retrieve_document(url: str) -> Dict:
     """
     await asyncio.sleep(0.8)  # Simulate document retrieval
     
-    # Extract the document type from the URL
-    doc_type = url.split('-')[0].split('/')[-1]
+    
     
     # Generate mock content based on the URL
     content_parts = url.split('-')[1:]
