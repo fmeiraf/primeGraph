@@ -103,6 +103,8 @@ class ToolLoopOptions(BaseModel):
     max_tokens: int = 4096
     stop_on_first_error: bool = False
     trace_enabled: bool = False
+    model: Optional[str] = None
+    api_kwargs: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolState(GraphState):
@@ -903,27 +905,31 @@ class ToolEngine(Engine):
                 self.graph._save_checkpoint(frame.node_id, self.get_full_state())
 
             try:
-                # Extract model options from node.options
-                model_kwargs = {}
+                # Set up kwargs for API call
+                api_kwargs = {}
+
+                # Extract model and other options if available
                 if hasattr(node.options, "model_dump"):
-                    try:
-                        # Only include parameters that are valid for LLM API calls
-                        model_kwargs = {"max_tokens": node.options.max_tokens}
-                    except Exception as e:
-                        print(f"Error extracting model options: {e}")
+                    options_dict = node.options.model_dump()
+                    if "model" in options_dict and options_dict["model"] is not None:
+                        api_kwargs["model"] = options_dict["model"]
+                    if "max_tokens" in options_dict:
+                        api_kwargs["max_tokens"] = options_dict["max_tokens"]
+                    if "api_kwargs" in options_dict and options_dict["api_kwargs"]:
+                        api_kwargs.update(options_dict["api_kwargs"])
 
                 # Generate response from LLM
                 print(f"Calling LLM generate with {len(messages)} messages and {len(tool_schemas)} tools")
-                content, response = await node.llm_client.generate(
-                    messages=messages, tools=tool_schemas, **model_kwargs
+                content, raw_response = await node.llm_client.generate(
+                    messages=messages, tools=tool_schemas, **api_kwargs
                 )
 
                 # Check if response requires tool use
-                if node.llm_client.is_tool_use_response(response):
+                if node.llm_client.is_tool_use_response(raw_response):
                     print("Response contains tool calls")
 
                     # Get tool calls
-                    tool_calls = node.llm_client.extract_tool_calls(response)
+                    tool_calls = node.llm_client.extract_tool_calls(raw_response)
 
                     # Prepare assistant message with tool calls
                     if provider == "openai":
@@ -1085,7 +1091,7 @@ class ToolEngine(Engine):
                     is_complete = True
 
                     # Save the raw response for the user to access
-                    buffer_updates["current_trace"] = {"raw_response": response}
+                    buffer_updates["current_trace"] = {"raw_response": raw_response}
 
             except Exception as e:
                 # Record error

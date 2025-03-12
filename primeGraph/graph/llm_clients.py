@@ -240,7 +240,7 @@ class AnthropicClient(LLMClientBase):
 
         # Ensure a model is specified - use Claude 3 by default for tool calling
         if "model" not in api_kwargs:
-            api_kwargs["model"] = "claude-3-opus-20240229"
+            api_kwargs["model"] = "claude-3-7-sonnet-latest"
 
         # Call the API in a non-blocking way
         response = await asyncio.to_thread(self.client.messages.create, messages=anthropic_messages, **api_kwargs)  # type: ignore

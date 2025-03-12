@@ -2,7 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
-# [1.2.1] - 2025-02-20
+# [1.2.2] - 2025-03-12
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Fixed LLM client model setting and other api kwargs.
+
+# [1.2.1] - 2025-03-12
 
 ### Added
 
@@ -16,7 +30,7 @@ All notable changes to this project will be documented in this file.
 
 - Fixed Anthropic tool schema format errors.
 
-# [1.2.0] - 2025-02-20
+# [1.2.0] - 2025-03-11
 
 ### Added
 
