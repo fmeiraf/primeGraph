@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.2.4] - 2025-03-12
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Moved away from token usage calculations and started logging all the raw responses from LLM calls.
+
 # [1.2.3] - 2025-03-12
 
 ### Added
