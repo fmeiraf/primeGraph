@@ -236,6 +236,7 @@ class ToolNode(Node):
         options: Optional[ToolLoopOptions] = None,
         state_class: Type[GraphState] = ToolState,
         on_tool_use: Optional[Callable[[Dict[str, Any]], None]] = None,
+        on_message: Optional[Callable[[Dict[str, Any]], None]] = None,
     ):
         """Create a new ToolNode instance with the appropriate NamedTuple structure."""
 
@@ -272,6 +273,7 @@ class ToolNode(Node):
         instance.options = options or ToolLoopOptions()
         instance.state_class = state_class
         instance.on_tool_use = on_tool_use
+        instance.on_message = on_message
         instance.is_tool_node = True
 
         # Validate tools
@@ -442,6 +444,7 @@ class ToolGraph(Graph):
         llm_client: Any,
         options: Optional[ToolLoopOptions] = None,
         on_tool_use: Optional[Callable[[Dict[str, Any]], None]] = None,
+        on_message: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> ToolNode:
         """
         Add a tool node to the graph.
@@ -452,6 +455,7 @@ class ToolGraph(Graph):
             llm_client: LLM client instance for provider API calls
             options: Tool loop options
             on_tool_use: Optional callback for tool use
+            on_message: Optional callback for non-tool LLM messages
 
         Returns:
             The created ToolNode
@@ -466,6 +470,7 @@ class ToolGraph(Graph):
             options=options,
             state_class=self.state_class,
             on_tool_use=on_tool_use,
+            on_message=on_message,
         )
 
         # Add the node directly to the nodes dictionary
@@ -1096,6 +1101,21 @@ class ToolEngine(Engine):
                         buffer_updates["messages"] = list(messages_list)
                     buffer_updates["messages"].append(LLMMessage(**assistant_message))
 
+                    # Call the on_message callback if provided and there's content
+                    if hasattr(node, "on_message") and node.on_message and content:
+                        node.on_message(
+                            {
+                                "message_type": "assistant",
+                                "content": content,
+                                "raw_response": raw_response,
+                                "has_tool_calls": True,
+                                "tool_calls": tool_calls,
+                                "is_final": False,
+                                "iteration": current_iteration,
+                                "timestamp": time.time(),
+                            }
+                        )
+
                     # Process each tool call
                     for tool_call in tool_calls:
                         tool_id = tool_call["id"]
@@ -1250,6 +1270,20 @@ class ToolEngine(Engine):
                     # Update tool_calls if any were made
                     if tool_call_entries:
                         buffer_updates["tool_calls"] = tool_call_entries
+
+                    # Call the on_message callback if provided
+                    if hasattr(node, "on_message") and node.on_message:
+                        node.on_message(
+                            {
+                                "message_type": "assistant",
+                                "content": content,
+                                "raw_response": raw_response,
+                                "has_tool_calls": False,
+                                "is_final": True,
+                                "iteration": current_iteration,
+                                "timestamp": time.time(),
+                            }
+                        )
 
                     # Mark as complete with final output
                     buffer_updates["final_output"] = content
