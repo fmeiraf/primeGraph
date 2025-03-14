@@ -768,6 +768,101 @@ class ToolEngine(Engine):
         # Return result
         return type("ExecutionResult", (), {"state": state, "chain_id": self.graph.chain_id})
 
+    def load_full_state(self, saved_state: Dict[str, Any]) -> None:
+        """
+        Restore the complete executor state from a saved snapshot.
+        Extends the parent Engine method to properly handle ToolState pause attributes.
+        """
+        # Call parent method to load the basic engine state
+        super().load_full_state(saved_state)
+
+        # Additionally, restore the ToolState-specific attributes if they exist in the state
+        if hasattr(self.graph, "state") and isinstance(self.graph.state, ToolState):
+            # Check for pause-related attributes directly in the saved state
+            # This handles existing checkpoints that store this info at the top level
+            if hasattr(self.graph.state, "is_paused") and "is_paused" in saved_state:
+                self.graph.state.is_paused = saved_state["is_paused"]
+            if hasattr(self.graph.state, "paused_tool_id") and "paused_tool_id" in saved_state:
+                self.graph.state.paused_tool_id = saved_state["paused_tool_id"]
+            if hasattr(self.graph.state, "paused_tool_name") and "paused_tool_name" in saved_state:
+                self.graph.state.paused_tool_name = saved_state["paused_tool_name"]
+            if hasattr(self.graph.state, "paused_tool_arguments") and "paused_tool_arguments" in saved_state:
+                self.graph.state.paused_tool_arguments = saved_state["paused_tool_arguments"]
+            if hasattr(self.graph.state, "paused_after_execution") and "paused_after_execution" in saved_state:
+                self.graph.state.paused_after_execution = saved_state["paused_after_execution"]
+            if hasattr(self.graph.state, "paused_tool_result") and "paused_tool_result" in saved_state:
+                self.graph.state.paused_tool_result = saved_state["paused_tool_result"]
+
+            # Check for pause-related attributes in graph_pause_state structure
+            # This handles the new format introduced with this update
+            if "graph_pause_state" in saved_state:
+                pause_state = saved_state["graph_pause_state"]
+
+                # Set the pause attributes on the graph's state
+                if hasattr(self.graph.state, "is_paused") and "is_paused" in pause_state:
+                    self.graph.state.is_paused = pause_state["is_paused"]
+                if hasattr(self.graph.state, "paused_tool_id") and "paused_tool_id" in pause_state:
+                    self.graph.state.paused_tool_id = pause_state["paused_tool_id"]
+                if hasattr(self.graph.state, "paused_tool_name") and "paused_tool_name" in pause_state:
+                    self.graph.state.paused_tool_name = pause_state["paused_tool_name"]
+                if hasattr(self.graph.state, "paused_tool_arguments") and "paused_tool_arguments" in pause_state:
+                    self.graph.state.paused_tool_arguments = pause_state["paused_tool_arguments"]
+                if hasattr(self.graph.state, "paused_after_execution") and "paused_after_execution" in pause_state:
+                    self.graph.state.paused_after_execution = pause_state["paused_after_execution"]
+                if hasattr(self.graph.state, "paused_tool_result") and "paused_tool_result" in pause_state:
+                    self.graph.state.paused_tool_result = pause_state["paused_tool_result"]
+
+            # Check for tool_calls and messages history
+            if hasattr(self.graph.state, "tool_calls") and "tool_state_tool_calls" in saved_state:
+                self.graph.state.tool_calls = saved_state["tool_state_tool_calls"]
+            if hasattr(self.graph.state, "messages") and "tool_state_messages" in saved_state:
+                self.graph.state.messages = saved_state["tool_state_messages"]
+
+            if self.graph.state.is_paused:
+                print(
+                    f"[ToolEngine.load_full_state] Restored pause state: paused={self.graph.state.is_paused}, "
+                    f"tool={self.graph.state.paused_tool_name}"
+                )
+            else:
+                print("[ToolEngine.load_full_state] Restored tool state (not paused)")
+
+    def get_full_state(self) -> Dict[str, Any]:
+        """
+        Get the complete executor state for checkpointing/resumption.
+        Extends the parent method to include ToolState attributes.
+        """
+        # Get the base engine state from parent method
+        state = super().get_full_state()
+
+        # Add ToolState-specific attributes if available
+        if hasattr(self.graph, "state") and isinstance(self.graph.state, ToolState):
+            # Add pause state attributes
+            state["is_paused"] = self.graph.state.is_paused
+            state["paused_tool_id"] = self.graph.state.paused_tool_id
+            state["paused_tool_name"] = self.graph.state.paused_tool_name
+            state["paused_tool_arguments"] = self.graph.state.paused_tool_arguments
+            state["paused_after_execution"] = self.graph.state.paused_after_execution
+            state["paused_tool_result"] = self.graph.state.paused_tool_result
+
+            # Also store them in a structured format for clarity in future checkpoint format
+            pause_state = {
+                "is_paused": self.graph.state.is_paused,
+                "paused_tool_id": self.graph.state.paused_tool_id,
+                "paused_tool_name": self.graph.state.paused_tool_name,
+                "paused_tool_arguments": self.graph.state.paused_tool_arguments,
+                "paused_after_execution": self.graph.state.paused_after_execution,
+                "paused_tool_result": self.graph.state.paused_tool_result,
+            }
+            state["graph_pause_state"] = pause_state
+
+            # Store message and tool call history
+            if hasattr(self.graph.state, "messages"):
+                state["tool_state_messages"] = self.graph.state.messages
+            if hasattr(self.graph.state, "tool_calls"):
+                state["tool_state_tool_calls"] = self.graph.state.tool_calls
+
+        return state
+
     async def execute(self, initial_state: Optional[GraphState] = None) -> Any:
         """
         Begin executing the graph from the START node with optional initial state.
