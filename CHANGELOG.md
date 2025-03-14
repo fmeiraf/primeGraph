@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.3.0] - 2025-03-13
+
+### Added
+
+- Added `pause_after_execution` feature for LLM tools, complementing the existing `pause_before_execution` feature
+- Enhanced ToolState with new fields to support post-execution pauses
+- Updated the `tool` decorator to accept the new `pause_after_execution` parameter
+- Extended `resume_from_pause` method to handle both pre-execution and post-execution pauses
+- Added comprehensive tests for the new feature
+
+### Changed
+
+- The `resume_from_pause` method now differentiates between pre-execution and post-execution pauses
+
+### Fixed
+
+- N/A
+
 # [1.2.4] - 2025-03-12
 
 ### Added

@@ -4,7 +4,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Package Version](https://img.shields.io/badge/package-1.2.4-blue.svg)](https://pypi.org/project/primegraph/)
+[![Package Version](https://img.shields.io/badge/package-1.3.0-blue.svg)](https://pypi.org/project/primegraph/)
 
 ---
 
@@ -29,7 +29,7 @@ _Note from the author: This project came to life through my experience creating 
 - **Repeatable Nodes**: Execute nodes multiple times either in parallel or sequence.
 - **Subgraphs**: Compose graphs of subgraphs to design complex workflows.
 - **LLM Tool Integration**: Specialized nodes for LLM interaction with tool/function calling capabilities.
-- **Tool Pause/Resume**: Ability to pause execution before specific tool calls for human review and approval.
+- **Tool Pause/Resume**: Ability to pause execution before or after specific tool calls for human review and approval.
 - **Persistence**: Save and resume execution using checkpoint storage (supports memory and Postgres).
 - **Async Support**: Uses async/await for non-blocking execution with engine methods `execute()` and `resume()`.
 - **Flow Control**: Supports human-in-the-loop interactions by pausing and resuming workflows.
@@ -737,10 +737,10 @@ asyncio.run(run_research())
 ### Tool Pause and Resume
 
 ```python
-# Define a tool that will pause for human review
+# Define tools that pause before or after execution
 @tool("Process payment", pause_before_execution=True)
 async def process_payment(order_id: str, amount: float) -> Dict[str, Any]:
-    """Process a payment for an order, pausing for verification"""
+    """Process a payment for an order, pausing before execution for input verification"""
     return {
         "order_id": order_id,
         "amount": amount,
@@ -748,27 +748,45 @@ async def process_payment(order_id: str, amount: float) -> Dict[str, Any]:
         "transaction_id": f"TX-{order_id}-{int(time.time())}"
     }
 
+@tool("Update account", pause_after_execution=True)
+async def update_account(user_id: str, new_email: str) -> Dict[str, Any]:
+    """Update a user account, pausing after execution for result verification"""
+    return {
+        "user_id": user_id,
+        "email": new_email,
+        "status": "updated",
+        "timestamp": int(time.time())
+    }
+
 # Add to graph
-payment_node = graph.add_tool_node(
-    name="payment_processor",
-    tools=[process_payment, get_order_details],
+tool_node = graph.add_tool_node(
+    name="account_processor",
+    tools=[process_payment, update_account, get_user_details],
     llm_client=llm_client
 )
 
-# Execute the graph - will pause at process_payment
+# Execute the graph - will pause before/after tool execution depending on configuration
 result = await engine.execute(initial_state)
 paused_state = result.state
 
-# Verify the execution paused at the payment tool
-if paused_state.is_paused and paused_state.paused_tool_name == "process_payment":
-    # User can review the payment details
-    print(f"Review payment: {paused_state.paused_tool_arguments}")
+# Check if paused before execution
+if paused_state.is_paused and not paused_state.paused_after_execution:
+    print("Paused before execution")
+    print(f"Tool: {paused_state.paused_tool_name}")
+    print(f"Arguments: {paused_state.paused_tool_arguments}")
+    
+    # Resume with execution (approve) or skip (reject)
+    resumed_result = await engine.resume_from_pause(paused_state, execute_tool=True)  # approve
+    # resumed_result = await engine.resume_from_pause(paused_state, execute_tool=False)  # reject
 
-    # If approved, resume execution with the tool
+# Check if paused after execution
+elif paused_state.is_paused and paused_state.paused_after_execution:
+    print("Paused after execution")
+    print(f"Tool: {paused_state.paused_tool_name}")
+    print(f"Result: {paused_state.paused_tool_result.result}")
+    
+    # Resume execution with the existing result
     resumed_result = await engine.resume_from_pause(paused_state, execute_tool=True)
-
-    # Or skip the payment if not approved
-    # resumed_result = await engine.resume_from_pause(paused_state, execute_tool=False)
 ```
 
 ## Roadmap
