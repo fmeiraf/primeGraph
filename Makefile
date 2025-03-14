@@ -7,7 +7,7 @@ clean:
 	find . -type d -name .ruff_cache -exec rm -rf {} +
 
 test:
-	uv run pytest -v -k "not test_postgresql_checkpoint"
+	uv run pytest -v -k "not test_postgresql_checkpoint and not test_postgresql_tool_checkpoint"
 
 test-all:
 	uv run pytest -v

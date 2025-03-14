@@ -9,7 +9,7 @@ These tests verify that:
 """
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import pytest
 from pydantic import Field
@@ -17,10 +17,9 @@ from pydantic import Field
 from primeGraph.buffer.factory import History, LastValue
 from primeGraph.checkpoint.postgresql import PostgreSQLStorage
 from primeGraph.constants import END, START
-from primeGraph.graph.llm_clients import LLMClientBase, Provider
+from primeGraph.graph.llm_clients import LLMClientBase
 from primeGraph.graph.llm_tools import (LLMMessage, ToolEngine, ToolGraph,
-                                      ToolLoopOptions, ToolState, tool)
-from primeGraph.models.state import GraphState
+                                        ToolLoopOptions, ToolState, tool)
 
 
 # Define MockLLMClient for testing
