@@ -53,6 +53,7 @@ class ToolDefinition(BaseModel):
     required_params: List[str] = []
     func: Optional[Callable] = None
     pause_before_execution: bool = False  # Flag to pause execution before this tool runs
+    pause_after_execution: bool = False  # Flag to pause execution after this tool runs
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -123,9 +124,16 @@ class ToolState(GraphState):
     paused_tool_id: LastValue[Optional[str]] = None  # type: ignore
     paused_tool_name: LastValue[Optional[str]] = None  # type: ignore
     paused_tool_arguments: LastValue[Optional[Dict[str, Any]]] = None  # type: ignore
+    paused_after_execution: LastValue[bool] = False  # type: ignore
+    paused_tool_result: LastValue[Optional[ToolCallLog]] = None  # type: ignore
 
 
-def tool(description: str, tool_type: ToolType = ToolType.FUNCTION, pause_before_execution: bool = False) -> Callable:
+def tool(
+    description: str,
+    tool_type: ToolType = ToolType.FUNCTION,
+    pause_before_execution: bool = False,
+    pause_after_execution: bool = False,
+) -> Callable:
     """
     Decorator to mark a function as a tool available to LLMs.
 
@@ -139,6 +147,8 @@ def tool(description: str, tool_type: ToolType = ToolType.FUNCTION, pause_before
         tool_type: Type of tool (function, action, retrieval)
         pause_before_execution: If True, execution will pause before this tool runs,
                                 allowing for user intervention
+        pause_after_execution: If True, execution will pause after this tool runs,
+                               allowing for user verification of results
 
     Examples:
         ```python
@@ -151,6 +161,11 @@ def tool(description: str, tool_type: ToolType = ToolType.FUNCTION, pause_before
         async def submit_order(order_id: str, amount: float) -> Dict:
             # This will pause before execution, allowing user verification
             return {"status": "submitted", "confirmation": "ABC123"}
+
+        @tool("Process payment", pause_after_execution=True)
+        async def process_payment(payment_id: str, amount: float) -> Dict:
+            # This will pause after execution, allowing result verification
+            return {"status": "processed", "transaction_id": "TX123"}
         ```
     """
 
@@ -189,6 +204,7 @@ def tool(description: str, tool_type: ToolType = ToolType.FUNCTION, pause_before
             "required_params": required,
             "func": func,
             "pause_before_execution": pause_before_execution,
+            "pause_after_execution": pause_after_execution,
         }
 
         # Store schema on the function
@@ -533,6 +549,8 @@ class ToolEngine(Engine):
         Args:
             state: The state with pause information
             execute_tool: Whether to execute the paused tool (True) or skip it (False)
+                          For pause_before_execution, this controls tool execution
+                          For pause_after_execution, this controls whether to continue or not
 
         Returns:
             Result of execution
@@ -546,8 +564,15 @@ class ToolEngine(Engine):
         print("\n[ToolEngine.resume_from_pause] Resuming from paused state")
         print(f"[ToolEngine.resume_from_pause] Paused tool: {state.paused_tool_name}")
 
+        # Check if this is a post-execution pause
+        is_post_execution_pause = hasattr(state, "paused_after_execution") and state.paused_after_execution
+        if is_post_execution_pause:
+            print("[ToolEngine.resume_from_pause] This is a post-execution pause")
+
         # Reset the pause flags
         state.is_paused = False
+        if is_post_execution_pause:
+            state.paused_after_execution = False
 
         # Determine the current node based on the state
         if not hasattr(state, "current_trace") or not state.current_trace:
@@ -568,8 +593,100 @@ class ToolEngine(Engine):
         # Start execution from this frame
         self.execution_frames = [frame]
 
-        # If we're executing the tool, do so now
-        if execute_tool and state.paused_tool_name and state.paused_tool_id and state.paused_tool_arguments:
+        # Handle tool execution or continuation based on pause type
+        if is_post_execution_pause:
+            # For post-execution pause, we already have the result
+            if execute_tool and hasattr(state, "paused_tool_result") and state.paused_tool_result:
+                tool_id = state.paused_tool_id
+                tool_name = state.paused_tool_name
+                tool_result = state.paused_tool_result
+
+                print(f"[ToolEngine.resume_from_pause] Continuing with result of tool: {tool_name}")
+
+                # Ensure the tool_calls attribute is a list
+                if not hasattr(state, "tool_calls"):
+                    state.tool_calls = []
+                elif not isinstance(state.tool_calls, list) and hasattr(state.tool_calls, "get"):
+                    state.tool_calls = state.tool_calls.get(None)
+                    if state.tool_calls is None:
+                        state.tool_calls = []
+
+                # Check if the tool result is already in tool_calls
+                result_already_added = False
+                if isinstance(state.tool_calls, list):
+                    result_already_added = any(call.id == tool_id for call in state.tool_calls)
+
+                # Add the result to state if not already added
+                if not result_already_added:
+                    if isinstance(state.tool_calls, list):
+                        state.tool_calls.append(tool_result)
+                    elif hasattr(state.tool_calls, "append"):
+                        state.tool_calls.append(tool_result)
+                    else:
+                        state.tool_calls = [tool_result]
+
+                # Ensure the messages attribute is a list
+                if not hasattr(state, "messages"):
+                    state.messages = []
+                elif not isinstance(state.messages, list) and hasattr(state.messages, "get"):
+                    state.messages = state.messages.get(None)
+                    if state.messages is None:
+                        state.messages = []
+
+                # Add tool message for the tool result if not already done
+                # Check if we already have a tool message with this ID
+                tool_message_already_added = False
+                for msg in state.messages:
+                    if (
+                        getattr(msg, "role", None) == "tool"
+                        or (getattr(msg, "role", None) == "user" and "Tool result" in getattr(msg, "content", ""))
+                    ) and getattr(msg, "tool_call_id", None) == tool_id:
+                        tool_message_already_added = True
+                        break
+
+                if not tool_message_already_added and hasattr(state, "messages"):
+                    # Find the node for this tool to determine provider
+                    provider = "openai"  # Default
+                    node = frame.current_node
+                    if not isinstance(node, ToolNode):
+                        node = None
+                        for n in self.graph.nodes.values():
+                            if isinstance(n, ToolNode) and any(t._tool_definition.name == tool_name for t in n.tools):
+                                node = n
+                                break
+
+                    if node and hasattr(node, "llm_client") and hasattr(node.llm_client, "client"):
+                        client_module = node.llm_client.client.__class__.__module__
+                        if "anthropic" in client_module:
+                            provider = "anthropic"
+
+                    # Format depends on provider
+                    if provider == "anthropic":
+                        tool_message = {
+                            "role": "user",
+                            "content": f"Tool result for {tool_name}: {str(tool_result.result)}",
+                        }
+                    else:
+                        tool_message = {
+                            "role": "tool",
+                            "content": str(tool_result.result),
+                            "tool_call_id": tool_id,
+                        }
+
+                    if isinstance(state.messages, list):
+                        state.messages.append(LLMMessage(**tool_message))
+                    elif hasattr(state.messages, "append"):
+                        state.messages.append(LLMMessage(**tool_message))
+                    else:
+                        state.messages = [LLMMessage(**tool_message)]
+
+            # For post-execution pause, if execute_tool is False, we don't continue
+            if not execute_tool:
+                print("[ToolEngine.resume_from_pause] Not continuing execution as requested")
+                return type("ExecutionResult", (), {"state": state, "chain_id": self.graph.chain_id})
+
+        # For pre-execution pause, handle tool execution
+        elif execute_tool and state.paused_tool_name and state.paused_tool_id and state.paused_tool_arguments:
             # Find the tool function
             tool_name = state.paused_tool_name
             tool_id = state.paused_tool_id
@@ -962,7 +1079,7 @@ class ToolEngine(Engine):
                                     "function": {"name": call["name"], "arguments": json.dumps(call["arguments"])},
                                 }
                                 for call in tool_calls
-                            ]
+                            ],
                         }
                     else:
                         # For other providers
@@ -1022,6 +1139,34 @@ class ToolEngine(Engine):
 
                             # Add to tool call entries
                             tool_call_entries.append(tool_result)
+
+                            # Check if we should pause after execution
+                            tool_def = tool_func._tool_definition
+                            if tool_def.pause_after_execution:
+                                print(f"Pausing execution after tool: {tool_name}")
+
+                                # Update state with pause information
+                                buffer_updates["is_paused"] = True
+                                buffer_updates["paused_tool_id"] = tool_id
+                                buffer_updates["paused_tool_name"] = tool_name
+                                buffer_updates["paused_tool_arguments"] = tool_args
+                                buffer_updates["paused_after_execution"] = True
+                                buffer_updates["paused_tool_result"] = tool_result
+
+                                # Update state directly
+                                state.is_paused = True
+                                state.paused_tool_id = tool_id
+                                state.paused_tool_name = tool_name
+                                state.paused_tool_arguments = tool_args
+                                state.paused_after_execution = True
+                                state.paused_tool_result = tool_result
+
+                                # Save checkpoint
+                                if hasattr(self.graph, "_save_checkpoint"):
+                                    self.graph._save_checkpoint(frame.node_id, self.get_full_state())
+
+                                # Return early without continuing the execution
+                                return buffer_updates
 
                             # Add tool response to messages - format depends on provider
                             if provider == "anthropic":

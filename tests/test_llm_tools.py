@@ -59,6 +59,18 @@ async def get_customer_info(customer_id: str) -> Dict[str, Any]:
     
     return customers[customer_id]
 
+# Add a tool with pause_after_execution flag set to True
+@tool("Update customer account", pause_after_execution=True)
+async def update_customer_account(customer_id: str, email: str) -> Dict[str, Any]:
+    """Update a customer's account information, pausing after execution for verification"""
+    # Simulate updating customer account
+    return {
+        "customer_id": customer_id,
+        "new_email": email,
+        "status": "updated",
+        "timestamp": int(time.time())
+    }
+
 
 # Add a tool with pause_before_execution flag set to True
 @tool("Process payment", pause_before_execution=True)
@@ -273,7 +285,7 @@ def create_tool_flow_for_order_query():
     ]
 
 def create_tool_flow_for_payment():
-    """Create a conversation flow that uses the payment tool which pauses"""
+    """Create a conversation flow that uses the payment tool which pauses before execution"""
     return [
         # First get customer info
         {
@@ -304,6 +316,38 @@ def create_tool_flow_for_payment():
     ]
 
 
+def create_tool_flow_for_account_update():
+    """Create a conversation flow that uses the account update tool which pauses after execution"""
+    return [
+        # First get customer info
+        {
+            "content": "I'll help you update the email for customer C1. Let me look up their information first.",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "name": "get_customer_info",
+                    "arguments": {"customer_id": "C1"}
+                }
+            ]
+        },
+        # Then update account (this will pause after execution)
+        {
+            "content": "I found the customer. Let me update their email now.",
+            "tool_calls": [
+                {
+                    "id": "call_2",
+                    "name": "update_customer_account",
+                    "arguments": {"customer_id": "C1", "email": "john.doe.new@example.com"}
+                }
+            ]
+        },
+        # Final response (only reached after resume)
+        {
+            "content": "The email for customer C1 has been successfully updated to john.doe.new@example.com."
+        }
+    ]
+
+
 @pytest.fixture
 def customer_tools():
     """Fixture providing customer service tools"""
@@ -311,8 +355,13 @@ def customer_tools():
 
 @pytest.fixture
 def customer_tools_with_payment():
-    """Fixture providing customer service tools including the payment tool that pauses"""
+    """Fixture providing customer service tools including the payment tool that pauses before execution"""
     return [get_customer_info, get_order_details, cancel_order, process_payment]
+
+@pytest.fixture
+def customer_tools_with_account_update():
+    """Fixture providing customer service tools including the account update tool that pauses after execution"""
+    return [get_customer_info, get_order_details, cancel_order, update_customer_account]
 
 
 @pytest.fixture
@@ -329,8 +378,13 @@ def mock_llm_client_for_query():
 
 @pytest.fixture
 def mock_llm_client_for_payment():
-    """Fixture providing a mock client for payment scenario with pausing"""
+    """Fixture providing a mock client for payment scenario with pausing before execution"""
     return MockLLMClient(conversation_flow=create_tool_flow_for_payment())
+
+@pytest.fixture
+def mock_llm_client_for_account_update():
+    """Fixture providing a mock client for account update scenario with pausing after execution"""
+    return MockLLMClient(conversation_flow=create_tool_flow_for_account_update())
 
 
 @pytest.fixture
@@ -359,7 +413,7 @@ def tool_graph_with_mock(customer_tools, mock_llm_client_for_cancel):
 
 @pytest.fixture
 def tool_graph_with_payment(customer_tools_with_payment, mock_llm_client_for_payment):
-    """Fixture providing a tool graph with payment processing and pause functionality"""
+    """Fixture providing a tool graph with payment processing that pauses before execution"""
     graph = ToolGraph("payment_processing", state_class=CustomerServiceState)
     
     options = ToolLoopOptions(
@@ -371,6 +425,29 @@ def tool_graph_with_payment(customer_tools_with_payment, mock_llm_client_for_pay
         name="payment_agent",
         tools=customer_tools_with_payment,
         llm_client=mock_llm_client_for_payment,
+        options=options
+    )
+    
+    # Connect to START and END
+    graph.add_edge(START, node.name)
+    graph.add_edge(node.name, END)
+    
+    return graph
+
+@pytest.fixture
+def tool_graph_with_account_update(customer_tools_with_account_update, mock_llm_client_for_account_update):
+    """Fixture providing a tool graph with account update that pauses after execution"""
+    graph = ToolGraph("account_update", state_class=CustomerServiceState)
+    
+    options = ToolLoopOptions(
+        max_iterations=5,
+        max_tokens=1024
+    )
+    
+    node = graph.add_tool_node(
+        name="account_update_agent",
+        tools=customer_tools_with_account_update,
+        llm_client=mock_llm_client_for_account_update,
         options=options
     )
     
@@ -677,3 +754,55 @@ async def test_anthropic_order_query(anthropic_client, customer_tools):
     
     # Verify completion state
     assert final_state.is_complete is True
+
+
+@pytest.mark.asyncio
+async def test_pause_after_execution(tool_graph_with_account_update):
+    """Test the pause after execution functionality with the account update tool"""
+    # Create engine
+    engine = ToolEngine(tool_graph_with_account_update)
+    
+    # Create initial state with request to update customer email
+    initial_state = CustomerServiceState()
+    initial_state.messages = [
+        LLMMessage(
+            role="system",
+            content="You are a helpful customer service assistant. Be concise."
+        ),
+        LLMMessage(
+            role="user",
+            content="Please update the email for customer C1 to john.doe.new@example.com."
+        )
+    ]
+    
+    # Execute the graph
+    result = await engine.execute(initial_state=initial_state)
+    
+    # Check state
+    state = result.state
+    
+    # The execution should be paused after executing the update_customer_account tool
+    assert state.is_paused is True
+    assert state.paused_after_execution is True
+    assert state.paused_tool_name == "update_customer_account"
+    assert state.paused_tool_result is not None
+    assert state.paused_tool_result.success is True
+    assert state.paused_tool_result.arguments["customer_id"] == "C1"
+    assert state.paused_tool_result.arguments["email"] == "john.doe.new@example.com"
+    
+    # The tool should have been executed, but not yet added to tool_calls
+    # It's in paused_tool_result but the tool_calls won't be updated until we resume
+    assert state.paused_tool_result is not None
+    assert state.paused_tool_result.tool_name == "update_customer_account"
+    assert state.paused_tool_result.success is True
+    
+    # Now resume execution
+    result = await engine.resume_from_pause(state, execute_tool=True)
+    final_state = result.state
+    
+    # The execution should be complete
+    assert final_state.is_paused is False
+    assert final_state.is_complete is True
+    
+    # The final message should be added
+    assert any("successfully updated" in msg.content.lower() for msg in final_state.messages if msg.role == "assistant")
