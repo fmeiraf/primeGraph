@@ -344,19 +344,6 @@ async def test_checkpoint_pause_before_execution(postgres_storage, tool_tools):
     # Load the checkpoint
     new_graph.load_from_checkpoint(chain_id)
     
-    # Manually transfer state attributes as a workaround
-    # This is what we're adding to our ToolEngine class in a more robust way
-    new_graph.state.is_paused = first_state.is_paused
-    new_graph.state.paused_tool_id = first_state.paused_tool_id
-    new_graph.state.paused_tool_name = first_state.paused_tool_name
-    new_graph.state.paused_tool_arguments = first_state.paused_tool_arguments
-    new_graph.state.paused_after_execution = first_state.paused_after_execution
-    new_graph.state.paused_tool_result = first_state.paused_tool_result
-    
-    # Also transfer message and tool call history
-    new_graph.state.messages = first_state.messages
-    new_graph.state.tool_calls = first_state.tool_calls
-    
     # Verify the loaded state is paused correctly
     assert new_graph.state.is_paused is True
     assert new_graph.state.paused_tool_name == "process_payment"
@@ -376,10 +363,9 @@ async def test_checkpoint_pause_before_execution(postgres_storage, tool_tools):
     tool_calls = [call.tool_name for call in final_state.tool_calls]
     assert "process_payment" in tool_calls
     
-    # NOTE: In the real implementation, when we fix the load_from_checkpoint method in ToolEngine,
-    # we should also check that the previous tool calls are preserved:
-    # assert "get_customer_info" in tool_calls
-    # assert "get_order_details" in tool_calls
+    # Also check that previous tool calls are preserved
+    assert "get_customer_info" in tool_calls
+    assert "get_order_details" in tool_calls
     
     # Check final message
     assert "successfully processed" in final_state.final_output
@@ -469,19 +455,6 @@ async def test_checkpoint_pause_after_execution(postgres_storage, tool_tools):
     # Load the checkpoint
     new_graph.load_from_checkpoint(chain_id)
     
-    # Manually transfer state attributes as a workaround
-    # This is what we're adding to our ToolEngine class in a more robust way
-    new_graph.state.is_paused = first_state.is_paused
-    new_graph.state.paused_tool_id = first_state.paused_tool_id
-    new_graph.state.paused_tool_name = first_state.paused_tool_name
-    new_graph.state.paused_tool_arguments = first_state.paused_tool_arguments
-    new_graph.state.paused_after_execution = first_state.paused_after_execution
-    new_graph.state.paused_tool_result = first_state.paused_tool_result
-    
-    # Also transfer message and tool call history
-    new_graph.state.messages = first_state.messages
-    new_graph.state.tool_calls = first_state.tool_calls
-    
     # Verify the loaded state is paused correctly
     assert new_graph.state.is_paused is True
     assert new_graph.state.paused_tool_name == "update_customer_account"
@@ -502,9 +475,8 @@ async def test_checkpoint_pause_after_execution(postgres_storage, tool_tools):
     tool_calls = [call.tool_name for call in final_state.tool_calls]
     assert "update_customer_account" in tool_calls
     
-    # NOTE: In the real implementation, when we fix the load_from_checkpoint method in ToolEngine,
-    # we should also check that the previous tool calls are preserved:
-    # assert "get_customer_info" in tool_calls
+    # Also check that the previous tool call is preserved
+    assert "get_customer_info" in tool_calls
     
     # Check final message
     assert "successfully updated" in final_state.final_output
@@ -589,27 +561,11 @@ async def test_checkpoint_reject_execution(postgres_storage, tool_tools):
     # Load the checkpoint
     new_graph.load_from_checkpoint(chain_id)
     
-    # Manually transfer state attributes as a workaround
-    # This is what we're adding to our ToolEngine class in a more robust way
-    new_graph.state.is_paused = first_state.is_paused
-    new_graph.state.paused_tool_id = first_state.paused_tool_id
-    new_graph.state.paused_tool_name = first_state.paused_tool_name
-    new_graph.state.paused_tool_arguments = first_state.paused_tool_arguments
-    new_graph.state.paused_after_execution = first_state.paused_after_execution
-    new_graph.state.paused_tool_result = first_state.paused_tool_result
-    
-    # Also transfer message and tool call history
-    new_graph.state.messages = first_state.messages
-    new_graph.state.tool_calls = first_state.tool_calls
-    
     # Resume execution with execute_tool=False to reject the tool execution
     result = await new_engine.resume_from_pause(new_graph.state, execute_tool=False)
     
     # Get final state
     final_state = result.state
-    
-    # Since we rejected the tool execution but didn't provide an alternative,
-    # the execution ends here rather than continuing to the next step
     
     # Check that the tool wasn't executed after rejecting
     process_payment_calls = [
@@ -617,3 +573,10 @@ async def test_checkpoint_reject_execution(postgres_storage, tool_tools):
         if call.tool_name == "process_payment"
     ]
     assert len(process_payment_calls) == 0
+    
+    # Check that we have a system message about skipping the tool
+    system_messages = [
+        msg for msg in final_state.messages
+        if msg.role == "system" and "skipped" in msg.content.lower()
+    ]
+    assert len(system_messages) > 0

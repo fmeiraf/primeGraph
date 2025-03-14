@@ -8,6 +8,7 @@ specifically focusing on tool/function calling capabilities.
 import asyncio
 import json
 import os
+import time
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -242,6 +243,10 @@ class AnthropicClient(LLMClientBase):
         if "model" not in api_kwargs:
             api_kwargs["model"] = "claude-3-7-sonnet-latest"
 
+        # Ensure max_tokens is set
+        if "max_tokens" not in api_kwargs:
+            api_kwargs["max_tokens"] = 4096
+
         # Call the API in a non-blocking way
         response = await asyncio.to_thread(self.client.messages.create, messages=anthropic_messages, **api_kwargs)  # type: ignore
 
@@ -272,7 +277,12 @@ class AnthropicClient(LLMClientBase):
         if hasattr(response, "content") and isinstance(response.content, list):
             for block in response.content:
                 if getattr(block, "type", None) == "tool_use":
-                    tool_calls.append({"id": block.id, "name": block.name, "arguments": block.input})
+                    tool_call = {
+                        "id": getattr(block, "id", f"tool_{int(time.time())}"),
+                        "name": getattr(block, "name", ""),
+                        "arguments": getattr(block, "input", {}),
+                    }
+                    tool_calls.append(tool_call)
 
         return tool_calls
 

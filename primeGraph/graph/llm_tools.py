@@ -17,13 +17,13 @@ from typing import Any, Callable, Dict, List, Optional, Type, get_type_hints
 from pydantic import BaseModel, Field, create_model
 
 from primeGraph.buffer.factory import History, LastValue
-from primeGraph.checkpoint.base import StorageBackend
+from primeGraph.checkpoint.base import CheckpointData, StorageBackend
 from primeGraph.constants import END, START
 from primeGraph.graph.base import Node
 from primeGraph.graph.engine import Engine, ExecutionFrame
 from primeGraph.graph.executable import Graph
-from primeGraph.models.checkpoint import ChainStatus
 from primeGraph.models.state import GraphState
+from primeGraph.types import ChainStatus
 
 
 class ToolType(str, Enum):
@@ -389,10 +389,10 @@ class ToolNode(Node):
 
 class ToolGraph(Graph):
     """
-    Specialized graph for tool-based LLM workflows.
+    A graph specialized for executing LLM-based tool workflows.
 
-    This extends the base Graph with functionality specific to tool-based
-    execution, making it easier to create and work with tool-based workflows.
+    This graph extension provides additional methods for creating and connecting
+    tool nodes to enable tool-based workflows with LLMs.
     """
 
     def __init__(
@@ -431,6 +431,11 @@ class ToolGraph(Graph):
             execution_timeout=execution_timeout,
             max_node_iterations=max_node_iterations,
             verbose=verbose,
+        )
+
+        # Replace the default Engine with a ToolEngine
+        self.execution_engine = ToolEngine(
+            graph=self, timeout=execution_timeout, max_node_iterations=max_node_iterations
         )
 
         self.max_iterations = max_iterations
@@ -524,6 +529,94 @@ class ToolGraph(Graph):
 
         return nodes
 
+    def load_from_checkpoint(self, chain_id: str, checkpoint_id: Optional[str] = None) -> None:
+        """
+        Load graph state and execution variables from a checkpoint.
+        Overrides the base Graph implementation to handle ToolState-specific attributes.
+
+        Args:
+            chain_id: The chain ID to load
+            checkpoint_id: Optional specific checkpoint ID to load. If None, loads the last checkpoint.
+        """
+        if not self.checkpoint_storage:
+            raise ValueError("Checkpoint storage must be configured to load from checkpoint")
+
+        # Get checkpoint ID if not specified
+        if not checkpoint_id:
+            checkpoint_id = self.checkpoint_storage.get_last_checkpoint_id(chain_id)
+            if not checkpoint_id:
+                raise ValueError(f"No checkpoints found for chain {chain_id}")
+
+        # Load checkpoint data
+        if self.state:
+            checkpoint = self.checkpoint_storage.load_checkpoint(
+                state_instance=self.state,
+                chain_id=chain_id,
+                checkpoint_id=checkpoint_id,
+            )
+
+        # Verify state class matches
+        current_state_class = f"{self.state.__class__.__module__}.{self.state.__class__.__name__}"
+        if current_state_class != checkpoint.state_class:
+            raise ValueError(
+                f"State class mismatch. Current: {current_state_class}, Checkpoint: {checkpoint.state_class}"
+            )
+
+        self._clean_graph_variables()
+
+        # Update state from serialized data
+        if self.initial_state:
+            self.state = self.initial_state.__class__.model_validate_json(checkpoint.data)
+
+        # Update buffers with current state values
+        for field_name, buffer in self.buffers.items():
+            if hasattr(self.state, field_name):
+                buffer.set_value(getattr(self.state, field_name))
+
+        # Update execution variables
+        if checkpoint:
+            self.chain_id = checkpoint.chain_id
+            self.chain_status = checkpoint.chain_status
+
+            if checkpoint.engine_state:
+                # This will properly handle ToolState attributes
+                self.execution_engine.load_full_state(checkpoint.engine_state)
+            else:
+                self.logger.warning("No engine state found in checkpoint")
+
+        if self.verbose:
+            self.logger.debug(f"Loaded checkpoint {checkpoint_id} for chain {self.chain_id}")
+
+    def _save_checkpoint(self, node_name: str, engine_state: Dict[str, Any]) -> None:
+        """
+        Override the base Graph's _save_checkpoint method to ensure tool-specific state is preserved.
+
+        Args:
+            node_name: The node name where the checkpoint is being created
+            engine_state: The engine state to save
+        """
+        if self.state and self.checkpoint_storage:
+            # Create a custom checkpoint data object with ToolState-specific attributes
+            checkpoint_data = CheckpointData(
+                chain_id=self.chain_id,
+                chain_status=self.chain_status,
+                engine_state=engine_state,
+            )
+
+            # Add debug output showing what's being saved
+            print(f"[ToolGraph._save_checkpoint] Saving checkpoint at node {node_name}")
+            if hasattr(self.state, "is_paused"):
+                print(f"[ToolGraph._save_checkpoint] State is_paused: {self.state.is_paused}")
+
+            # Save the checkpoint
+            self.checkpoint_storage.save_checkpoint(
+                state_instance=self.state,
+                checkpoint_data=checkpoint_data,
+            )
+
+        if self.verbose:
+            self.logger.debug(f"Checkpoint saved after node: {node_name}")
+
 
 class ToolEngine(Engine):
     """
@@ -569,204 +662,286 @@ class ToolEngine(Engine):
         print("\n[ToolEngine.resume_from_pause] Resuming from paused state")
         print(f"[ToolEngine.resume_from_pause] Paused tool: {state.paused_tool_name}")
 
-        # Check if this is a post-execution pause
-        is_post_execution_pause = hasattr(state, "paused_after_execution") and state.paused_after_execution
-        if is_post_execution_pause:
-            print("[ToolEngine.resume_from_pause] This is a post-execution pause")
+        # Only needed for state consistency - ensure our engine has the current state
+        self.graph.state = state
 
-        # Reset the pause flags
-        state.is_paused = False
-        if is_post_execution_pause:
-            state.paused_after_execution = False
+        # Find the correct tool node in the graph
+        tool_node = None
+        tool_node_name = None
+        for node_name, node in self.graph.nodes.items():
+            if hasattr(node, "is_tool_node") and node.is_tool_node:
+                tool_node = node
+                tool_node_name = node_name
+                break
 
-        # Determine the current node based on the state
-        if not hasattr(state, "current_trace") or not state.current_trace:
-            # Default to START if we can't determine the node
-            current_node = START
-        else:
-            # Try to extract node information from the trace
-            # Default to START if unsuccessful
-            current_node = getattr(state.current_trace, "node_id", START)
+        if not tool_node:
+            raise ValueError("Cannot find any tool node in the graph to resume execution")
 
-        # Create a frame for the current node
-        frame = ExecutionFrame(current_node, state)
+        # Execute the tool if requested
+        if execute_tool:
+            if state.paused_after_execution:
+                # For pause_after_execution, we've already executed the tool
+                # and just need to continue with the next step
+                print(
+                    f"[ToolEngine.resume_from_pause] Tool {state.paused_tool_name} already executed (pause_after_execution)"
+                )
+                print("[ToolEngine.resume_from_pause] Continuing with next step...")
 
-        # If a node has tool nodes, set the current_node to the actual node object
-        if current_node in self.graph.nodes:
-            frame.current_node = self.graph.nodes[current_node]
+                # Clear the pause state
+                state.is_paused = False
+                state.paused_tool_id = None
+                state.paused_tool_name = None
+                state.paused_tool_arguments = None
+                state.paused_after_execution = False
+                # Keep the paused_tool_result for reference
 
-        # Start execution from this frame
-        self.execution_frames = [frame]
+                # Add a system message about continuing
+                if hasattr(state, "messages"):
+                    state.messages.append(
+                        LLMMessage(role="system", content="Tool execution approved. Continuing with the next steps.")
+                    )
+            else:
+                # For pause_before_execution, we need to execute the tool
+                print(f"[ToolEngine.resume_from_pause] Executing tool: {state.paused_tool_name}")
 
-        # Handle tool execution or continuation based on pause type
-        if is_post_execution_pause:
-            # For post-execution pause, we already have the result
-            if execute_tool and hasattr(state, "paused_tool_result") and state.paused_tool_result:
-                tool_id = state.paused_tool_id
-                tool_name = state.paused_tool_name
-                tool_result = state.paused_tool_result
+                # Find the tool
+                tool_func = tool_node.find_tool_by_name(state.paused_tool_name)
+                if not tool_func:
+                    raise ValueError(f"Tool {state.paused_tool_name} not found")
 
-                print(f"[ToolEngine.resume_from_pause] Continuing with result of tool: {tool_name}")
-
-                # Ensure the tool_calls attribute is a list
-                if not hasattr(state, "tool_calls"):
-                    state.tool_calls = []
-                elif not isinstance(state.tool_calls, list) and hasattr(state.tool_calls, "get"):
-                    state.tool_calls = state.tool_calls.get(None)
-                    if state.tool_calls is None:
-                        state.tool_calls = []
-
-                # Check if the tool result is already in tool_calls
-                result_already_added = False
-                if isinstance(state.tool_calls, list):
-                    result_already_added = any(call.id == tool_id for call in state.tool_calls)
-
-                # Add the result to state if not already added
-                if not result_already_added:
-                    if isinstance(state.tool_calls, list):
-                        state.tool_calls.append(tool_result)
-                    elif hasattr(state.tool_calls, "append"):
-                        state.tool_calls.append(tool_result)
-                    else:
-                        state.tool_calls = [tool_result]
-
-                # Ensure the messages attribute is a list
-                if not hasattr(state, "messages"):
-                    state.messages = []
-                elif not isinstance(state.messages, list) and hasattr(state.messages, "get"):
-                    state.messages = state.messages.get(None)
-                    if state.messages is None:
-                        state.messages = []
-
-                # Add tool message for the tool result if not already done
-                # Check if we already have a tool message with this ID
-                tool_message_already_added = False
-                for msg in state.messages:
-                    if (
-                        getattr(msg, "role", None) == "tool"
-                        or (getattr(msg, "role", None) == "user" and "Tool result" in getattr(msg, "content", ""))
-                    ) and getattr(msg, "tool_call_id", None) == tool_id:
-                        tool_message_already_added = True
-                        break
-
-                if not tool_message_already_added and hasattr(state, "messages"):
-                    # Find the node for this tool to determine provider
-                    provider = "openai"  # Default
-                    node = frame.current_node
-                    if not isinstance(node, ToolNode):
-                        node = None
-                        for n in self.graph.nodes.values():
-                            if isinstance(n, ToolNode) and any(t._tool_definition.name == tool_name for t in n.tools):
-                                node = n
-                                break
-
-                    if node and hasattr(node, "llm_client") and hasattr(node.llm_client, "client"):
-                        client_module = node.llm_client.client.__class__.__module__
-                        if "anthropic" in client_module:
-                            provider = "anthropic"
-
-                    # Format depends on provider
-                    if provider == "anthropic":
-                        tool_message = {
-                            "role": "user",
-                            "content": f"Tool result for {tool_name}: {str(tool_result.result)}",
-                        }
-                    else:
-                        tool_message = {
-                            "role": "tool",
-                            "content": str(tool_result.result),
-                            "tool_call_id": tool_id,
-                        }
-
-                    if isinstance(state.messages, list):
-                        state.messages.append(LLMMessage(**tool_message))
-                    elif hasattr(state.messages, "append"):
-                        state.messages.append(LLMMessage(**tool_message))
-                    else:
-                        state.messages = [LLMMessage(**tool_message)]
-
-            # For post-execution pause, if execute_tool is False, we don't continue
-            if not execute_tool:
-                print("[ToolEngine.resume_from_pause] Not continuing execution as requested")
-                return type("ExecutionResult", (), {"state": state, "chain_id": self.graph.chain_id})
-
-        # For pre-execution pause, handle tool execution
-        elif execute_tool and state.paused_tool_name and state.paused_tool_id and state.paused_tool_arguments:
-            # Find the tool function
-            tool_name = state.paused_tool_name
-            tool_id = state.paused_tool_id
-            tool_args = state.paused_tool_arguments
-
-            # Find the node for this tool
-            node = frame.current_node
-            if not isinstance(node, ToolNode):
-                node = None
-                for n in self.graph.nodes.values():
-                    if isinstance(n, ToolNode) and any(t._tool_definition.name == tool_name for t in n.tools):
-                        node = n
-                        break
-
-            if node and isinstance(node, ToolNode):
-                tool_func = node.find_tool_by_name(tool_name)
-                if tool_func:
+                try:
                     # Execute the tool
-                    print(f"[ToolEngine.resume_from_pause] Executing paused tool: {tool_name}")
-                    tool_result = await node.execute_tool(tool_func, tool_args, tool_id)
+                    tool_id = state.paused_tool_id or f"manual_execution_{int(time.time())}"
+                    tool_result = await tool_node.execute_tool(tool_func, state.paused_tool_arguments, tool_id)
 
-                    # Ensure the tool_calls attribute is a list
-                    if not hasattr(state, "tool_calls"):
-                        state.tool_calls = []
-                    elif not isinstance(state.tool_calls, list) and hasattr(state.tool_calls, "get"):
-                        state.tool_calls = state.tool_calls.get(None)
-                        if state.tool_calls is None:
-                            state.tool_calls = []
+                    # Add the result to tool calls
+                    if hasattr(state, "tool_calls"):
+                        # Ensure tool_calls is a list of ToolCallLog objects, not dictionaries
+                        if isinstance(state.tool_calls, list):
+                            # It's already a list, just append the new result
+                            state.tool_calls.append(tool_result)
+                        else:
+                            # It's not a list, create a new list with existing items and the new result
+                            # Note: this handles the case where it's a dict or other type
+                            existing_calls = []
+                            if hasattr(state.tool_calls, "items"):
+                                # It's a dict-like object, try to convert each item
+                                for k, v in state.tool_calls.items():
+                                    if isinstance(v, ToolCallLog):
+                                        existing_calls.append(v)
+                                    elif isinstance(v, dict) and "id" in v and "tool_name" in v:
+                                        # Try to convert dict to ToolCallLog
+                                        existing_calls.append(ToolCallLog(**v))
+                            elif hasattr(state.tool_calls, "__iter__"):
+                                # It's an iterable, try to convert each item
+                                for item in state.tool_calls:
+                                    if isinstance(item, ToolCallLog):
+                                        existing_calls.append(item)
+                                    elif isinstance(item, dict) and "id" in item and "tool_name" in item:
+                                        # Try to convert dict to ToolCallLog
+                                        existing_calls.append(ToolCallLog(**item))
 
-                    # Add the result to state
-                    if isinstance(state.tool_calls, list):
-                        state.tool_calls.append(tool_result)
-                    elif hasattr(state.tool_calls, "append"):
-                        state.tool_calls.append(tool_result)
-                    else:
-                        state.tool_calls = [tool_result]
+                            # Add the new tool result
+                            existing_calls.append(tool_result)
+                            # Replace the tool_calls attribute with our new list
+                            state.tool_calls = existing_calls
 
-                    # Ensure the messages attribute is a list
-                    if not hasattr(state, "messages"):
-                        state.messages = []
-                    elif not isinstance(state.messages, list) and hasattr(state.messages, "get"):
-                        state.messages = state.messages.get(None)
-                        if state.messages is None:
-                            state.messages = []
+                    # Add a tool result message
+                    if hasattr(state, "messages"):
+                        anthropic_client = False
+                        if (
+                            hasattr(tool_node, "llm_client")
+                            and hasattr(tool_node.llm_client, "client")
+                            and tool_node.llm_client.client
+                            and hasattr(tool_node.llm_client.client, "__class__")
+                        ):
+                            client_module = tool_node.llm_client.client.__class__.__module__
+                            anthropic_client = "anthropic" in client_module
 
-                    # Find the existing assistant message with tool calls or create a new one
-                    found_assistant_msg = False
-                    for i, msg in enumerate(state.messages):
-                        if getattr(msg, "role", None) == "assistant" and getattr(msg, "tool_calls", None):
-                            # Found the existing assistant message with tool calls
-                            found_assistant_msg = True
+                        if anthropic_client:
+                            # For Anthropic, use a simpler format
+                            tool_message = LLMMessage(
+                                role="user",
+                                content=f"Tool result for {state.paused_tool_name}: {str(tool_result.result)}",
+                            )
+                        else:
+                            # For OpenAI, use the standard format with tool_call_id
+                            # This is critical for OpenAI to associate the tool response with the tool call
+                            tool_message = LLMMessage(
+                                role="tool", content=str(tool_result.result), tool_call_id=tool_id
+                            )
+
+                        # Add tool result to messages and tool call entries
+                        state.messages.append(tool_message)
+
+                    print("[ToolEngine.resume_from_pause] Tool execution successful")
+                except Exception as e:
+                    print(f"[ToolEngine.resume_from_pause] Tool execution failed: {str(e)}")
+                    # Add an error message
+                    if hasattr(state, "messages"):
+                        state.messages.append(
+                            LLMMessage(
+                                role="system", content=f"Error executing tool {state.paused_tool_name}: {str(e)}"
+                            )
+                        )
+                    if hasattr(state, "error"):
+                        state.error = str(e)
+
+                # Clear the pause state
+                state.is_paused = False
+                state.paused_tool_id = None
+                state.paused_tool_name = None
+                state.paused_tool_arguments = None
+                state.paused_after_execution = False
+                state.paused_tool_result = None
+        else:
+            # Skip tool execution
+            print("[ToolEngine.resume_from_pause] Skipping tool execution")
+
+            # Add a system message about skipping
+            if hasattr(state, "messages"):
+                state.messages.append(
+                    LLMMessage(role="system", content=f"Tool execution skipped: {state.paused_tool_name}")
+                )
+
+            # Clear the pause state
+            state.is_paused = False
+            state.paused_tool_id = None
+            state.paused_tool_name = None
+            state.paused_tool_arguments = None
+            state.paused_after_execution = False
+            state.paused_tool_result = None
+
+        # Continue execution with the identified tool node
+        print(f"[ToolEngine.resume_from_pause] Continuing with execution of node: {tool_node_name}")
+        self.graph._update_chain_status(ChainStatus.RUNNING)
+
+        # Execute the node loop
+        try:
+            # Create a frame for the tool node
+            frame = ExecutionFrame(tool_node_name, state)
+
+            # Execute the tool node directly
+            print(f"[ToolEngine.resume_from_pause] Executing tool node: {tool_node_name}")
+            await self._execute_tool_node(frame)
+
+            # Mark as complete after tool execution
+            if hasattr(state, "is_complete"):
+                state.is_complete = True
+
+            # Get the final output if available
+            if hasattr(state, "final_output") and not state.final_output:
+                if hasattr(state, "messages") and state.messages:
+                    # Get the last assistant message as final output
+                    for msg in reversed(state.messages):
+                        if msg.role == "assistant" and msg.content:
+                            state.final_output = msg.content
                             break
 
-                    # If we didn't find an assistant message with tool calls, we may need to create one
-                    if not found_assistant_msg:
-                        # Log this situation for debugging
-                        print("[ToolEngine.resume_from_pause] No assistant message with tool calls found")
+            print("[ToolEngine.resume_from_pause] Execution completed successfully")
+        except Exception as e:
+            error = str(e)
+            print(f"[ToolEngine.resume_from_pause] Error in node execution: {error}")
+            if hasattr(state, "error"):
+                state.error = error
 
-                    # Add tool message for the tool result
-                    if hasattr(state, "messages"):
-                        tool_message = {"role": "tool", "content": str(tool_result.result), "tool_call_id": tool_id}
-
-                        if isinstance(state.messages, list):
-                            state.messages.append(LLMMessage(**tool_message))
-                        elif hasattr(state.messages, "append"):
-                            state.messages.append(LLMMessage(**tool_message))
-                        else:
-                            state.messages = [LLMMessage(**tool_message)]
-
-        # Resume normal execution
-        self.graph._update_chain_status(ChainStatus.RUNNING)
-        await self._execute_all()
-
-        # Return result
+        # Return the result
         return type("ExecutionResult", (), {"state": state, "chain_id": self.graph.chain_id})
+
+    def get_full_state(self) -> Dict[str, Any]:
+        """
+        Get the complete executor state for checkpointing/resumption.
+        Extends the parent method to include ToolState attributes.
+        """
+        # First, ensure the pause state is correctly set in the state object
+        # before getting the full state. This is critical for correct checkpointing.
+        if hasattr(self.graph, "state") and isinstance(self.graph.state, ToolState):
+            print(f"[ToolEngine.get_full_state] State object before saving: is_paused={self.graph.state.is_paused}")
+            print(f"[ToolEngine.get_full_state] Paused tool name: {self.graph.state.paused_tool_name}")
+
+        # Get the base engine state from parent method
+        state = super().get_full_state()
+
+        # Add explicit debug logging for better understanding during testing
+        print(f"[ToolEngine.get_full_state] Saving state, chain_status: {self.graph.chain_status}")
+
+        # Add ToolState-specific attributes if available
+        if hasattr(self.graph, "state") and isinstance(self.graph.state, ToolState):
+            # Add pause state attributes - use graph state values directly
+            is_paused = self.graph.state.is_paused
+            print(f"[ToolEngine.get_full_state] Saving is_paused: {is_paused}")
+
+            # Make sure current is_paused value is captured
+            state["is_paused"] = is_paused
+            state["paused_tool_id"] = self.graph.state.paused_tool_id
+            state["paused_tool_name"] = self.graph.state.paused_tool_name
+            state["paused_tool_arguments"] = self.graph.state.paused_tool_arguments
+            state["paused_after_execution"] = self.graph.state.paused_after_execution
+            state["paused_tool_result"] = self.graph.state.paused_tool_result
+
+            # Also store them in a structured format for clarity in future checkpoint format
+            pause_state = {
+                "is_paused": is_paused,
+                "paused_tool_id": self.graph.state.paused_tool_id,
+                "paused_tool_name": self.graph.state.paused_tool_name,
+                "paused_tool_arguments": self.graph.state.paused_tool_arguments,
+                "paused_after_execution": self.graph.state.paused_after_execution,
+                "paused_tool_result": self.graph.state.paused_tool_result,
+            }
+            state["graph_pause_state"] = pause_state
+
+            # Store message and tool call history
+            if hasattr(self.graph.state, "messages"):
+                state["tool_state_messages"] = self.graph.state.messages
+                print(f"[ToolEngine.get_full_state] Saving {len(self.graph.state.messages)} messages")
+            if hasattr(self.graph.state, "tool_calls"):
+                state["tool_state_tool_calls"] = self.graph.state.tool_calls
+                print(f"[ToolEngine.get_full_state] Saving {len(self.graph.state.tool_calls)} tool calls")
+
+            # Store additional ToolState properties
+            if hasattr(self.graph.state, "current_iteration"):
+                state["tool_state_current_iteration"] = self.graph.state.current_iteration
+            if hasattr(self.graph.state, "max_iterations"):
+                state["tool_state_max_iterations"] = self.graph.state.max_iterations
+            if hasattr(self.graph.state, "is_complete"):
+                state["tool_state_is_complete"] = self.graph.state.is_complete
+            if hasattr(self.graph.state, "final_output"):
+                state["tool_state_final_output"] = self.graph.state.final_output
+            if hasattr(self.graph.state, "error"):
+                state["tool_state_error"] = self.graph.state.error
+            if hasattr(self.graph.state, "current_trace"):
+                state["tool_state_current_trace"] = self.graph.state.current_trace
+            if hasattr(self.graph.state, "raw_response_history"):
+                state["tool_state_raw_response_history"] = self.graph.state.raw_response_history
+
+            # Make sure the pause state is also set in each execution frame
+            if "execution_frames" in state and state["execution_frames"]:
+                for frame in state["execution_frames"]:
+                    if frame and hasattr(frame, "state") and frame.state and hasattr(frame.state, "is_paused"):
+                        print(f"[ToolEngine.get_full_state] Found frame with is_paused: {frame.state.is_paused}")
+                        if frame.state.is_paused:
+                            self.graph.state.is_paused = frame.state.is_paused
+                            if hasattr(frame.state, "paused_tool_id"):
+                                self.graph.state.paused_tool_id = frame.state.paused_tool_id
+                            if hasattr(frame.state, "paused_tool_name"):
+                                self.graph.state.paused_tool_name = frame.state.paused_tool_name
+                            if hasattr(frame.state, "paused_tool_arguments"):
+                                self.graph.state.paused_tool_arguments = frame.state.paused_tool_arguments
+                            if hasattr(frame.state, "paused_after_execution"):
+                                self.graph.state.paused_after_execution = frame.state.paused_after_execution
+                            if hasattr(frame.state, "paused_tool_result"):
+                                self.graph.state.paused_tool_result = frame.state.paused_tool_result
+                            break
+
+            if self.graph.state.is_paused:
+                print(
+                    f"[ToolEngine.get_full_state] Restored pause state: paused={self.graph.state.is_paused}, "
+                    f"tool={self.graph.state.paused_tool_name}"
+                )
+            else:
+                print("[ToolEngine.get_full_state] Restored tool state (not paused)")
+
+        return state
 
     def load_full_state(self, saved_state: Dict[str, Any]) -> None:
         """
@@ -776,11 +951,18 @@ class ToolEngine(Engine):
         # Call parent method to load the basic engine state
         super().load_full_state(saved_state)
 
+        # Debug log the saved state keys
+        pause_keys = [k for k in saved_state.keys() if "pause" in k.lower()]
+        tool_keys = [k for k in saved_state.keys() if "tool_state" in k]
+        print(f"[ToolEngine.load_full_state] Found pause-related keys: {pause_keys}")
+        print(f"[ToolEngine.load_full_state] Found tool state keys: {tool_keys}")
+
         # Additionally, restore the ToolState-specific attributes if they exist in the state
         if hasattr(self.graph, "state") and isinstance(self.graph.state, ToolState):
             # Check for pause-related attributes directly in the saved state
             # This handles existing checkpoints that store this info at the top level
             if hasattr(self.graph.state, "is_paused") and "is_paused" in saved_state:
+                print(f"[ToolEngine.load_full_state] Setting is_paused from saved_state: {saved_state['is_paused']}")
                 self.graph.state.is_paused = saved_state["is_paused"]
             if hasattr(self.graph.state, "paused_tool_id") and "paused_tool_id" in saved_state:
                 self.graph.state.paused_tool_id = saved_state["paused_tool_id"]
@@ -797,9 +979,13 @@ class ToolEngine(Engine):
             # This handles the new format introduced with this update
             if "graph_pause_state" in saved_state:
                 pause_state = saved_state["graph_pause_state"]
+                print(f"[ToolEngine.load_full_state] Found graph_pause_state: {pause_state}")
 
                 # Set the pause attributes on the graph's state
                 if hasattr(self.graph.state, "is_paused") and "is_paused" in pause_state:
+                    print(
+                        f"[ToolEngine.load_full_state] Setting is_paused from pause_state: {pause_state['is_paused']}"
+                    )
                     self.graph.state.is_paused = pause_state["is_paused"]
                 if hasattr(self.graph.state, "paused_tool_id") and "paused_tool_id" in pause_state:
                     self.graph.state.paused_tool_id = pause_state["paused_tool_id"]
@@ -812,11 +998,87 @@ class ToolEngine(Engine):
                 if hasattr(self.graph.state, "paused_tool_result") and "paused_tool_result" in pause_state:
                     self.graph.state.paused_tool_result = pause_state["paused_tool_result"]
 
-            # Check for tool_calls and messages history
+            # Restore tool_calls and messages history
             if hasattr(self.graph.state, "tool_calls") and "tool_state_tool_calls" in saved_state:
-                self.graph.state.tool_calls = saved_state["tool_state_tool_calls"]
+                print(
+                    f"[ToolEngine.load_full_state] Restoring tool_calls from saved_state, found {len(saved_state['tool_state_tool_calls'])} entries"
+                )
+                # Process each tool call to ensure it's a ToolCallLog object
+                tool_calls = []
+                for item in saved_state["tool_state_tool_calls"]:
+                    if isinstance(item, ToolCallLog):
+                        tool_calls.append(item)
+                    elif isinstance(item, dict) and "id" in item and "tool_name" in item:
+                        try:
+                            # Convert dict to ToolCallLog
+                            tool_calls.append(ToolCallLog(**item))
+                        except Exception as e:
+                            print(f"[ToolEngine.load_full_state] Error converting tool call: {str(e)}")
+                            # If conversion fails, still include the original item
+                            tool_calls.append(item)
+                    else:
+                        # If it's not a valid format, include as is
+                        tool_calls.append(item)
+
+                self.graph.state.tool_calls = tool_calls
             if hasattr(self.graph.state, "messages") and "tool_state_messages" in saved_state:
-                self.graph.state.messages = saved_state["tool_state_messages"]
+                print(
+                    f"[ToolEngine.load_full_state] Restoring messages from saved_state, found {len(saved_state['tool_state_messages'])} entries"
+                )
+                # Process each message to ensure it's an LLMMessage object
+                messages = []
+                for item in saved_state["tool_state_messages"]:
+                    if isinstance(item, LLMMessage):
+                        messages.append(item)
+                    elif isinstance(item, dict) and "role" in item:
+                        try:
+                            # Convert dict to LLMMessage
+                            messages.append(LLMMessage(**item))
+                        except Exception as e:
+                            print(f"[ToolEngine.load_full_state] Error converting message: {str(e)}")
+                            # If conversion fails, still include the original item
+                            messages.append(item)
+                    else:
+                        # If it's not a valid format, include as is
+                        messages.append(item)
+
+                self.graph.state.messages = messages
+
+            # Restore additional ToolState properties
+            if hasattr(self.graph.state, "current_iteration") and "tool_state_current_iteration" in saved_state:
+                self.graph.state.current_iteration = saved_state["tool_state_current_iteration"]
+            if hasattr(self.graph.state, "max_iterations") and "tool_state_max_iterations" in saved_state:
+                self.graph.state.max_iterations = saved_state["tool_state_max_iterations"]
+            if hasattr(self.graph.state, "is_complete") and "tool_state_is_complete" in saved_state:
+                self.graph.state.is_complete = saved_state["tool_state_is_complete"]
+            if hasattr(self.graph.state, "final_output") and "tool_state_final_output" in saved_state:
+                self.graph.state.final_output = saved_state["tool_state_final_output"]
+            if hasattr(self.graph.state, "error") and "tool_state_error" in saved_state:
+                self.graph.state.error = saved_state["tool_state_error"]
+            if hasattr(self.graph.state, "current_trace") and "tool_state_current_trace" in saved_state:
+                self.graph.state.current_trace = saved_state["tool_state_current_trace"]
+            if hasattr(self.graph.state, "raw_response_history") and "tool_state_raw_response_history" in saved_state:
+                self.graph.state.raw_response_history = saved_state["tool_state_raw_response_history"]
+
+            # In case the pause state wasn't properly set in any of the above methods,
+            # Check if the frame state has the is_paused attribute and try to restore from there
+            if "execution_frames" in saved_state and saved_state["execution_frames"]:
+                for frame in saved_state["execution_frames"]:
+                    if frame and hasattr(frame, "state") and frame.state and hasattr(frame.state, "is_paused"):
+                        print(f"[ToolEngine.load_full_state] Found frame with is_paused: {frame.state.is_paused}")
+                        if frame.state.is_paused:
+                            self.graph.state.is_paused = frame.state.is_paused
+                            if hasattr(frame.state, "paused_tool_id"):
+                                self.graph.state.paused_tool_id = frame.state.paused_tool_id
+                            if hasattr(frame.state, "paused_tool_name"):
+                                self.graph.state.paused_tool_name = frame.state.paused_tool_name
+                            if hasattr(frame.state, "paused_tool_arguments"):
+                                self.graph.state.paused_tool_arguments = frame.state.paused_tool_arguments
+                            if hasattr(frame.state, "paused_after_execution"):
+                                self.graph.state.paused_after_execution = frame.state.paused_after_execution
+                            if hasattr(frame.state, "paused_tool_result"):
+                                self.graph.state.paused_tool_result = frame.state.paused_tool_result
+                            break
 
             if self.graph.state.is_paused:
                 print(
@@ -825,43 +1087,6 @@ class ToolEngine(Engine):
                 )
             else:
                 print("[ToolEngine.load_full_state] Restored tool state (not paused)")
-
-    def get_full_state(self) -> Dict[str, Any]:
-        """
-        Get the complete executor state for checkpointing/resumption.
-        Extends the parent method to include ToolState attributes.
-        """
-        # Get the base engine state from parent method
-        state = super().get_full_state()
-
-        # Add ToolState-specific attributes if available
-        if hasattr(self.graph, "state") and isinstance(self.graph.state, ToolState):
-            # Add pause state attributes
-            state["is_paused"] = self.graph.state.is_paused
-            state["paused_tool_id"] = self.graph.state.paused_tool_id
-            state["paused_tool_name"] = self.graph.state.paused_tool_name
-            state["paused_tool_arguments"] = self.graph.state.paused_tool_arguments
-            state["paused_after_execution"] = self.graph.state.paused_after_execution
-            state["paused_tool_result"] = self.graph.state.paused_tool_result
-
-            # Also store them in a structured format for clarity in future checkpoint format
-            pause_state = {
-                "is_paused": self.graph.state.is_paused,
-                "paused_tool_id": self.graph.state.paused_tool_id,
-                "paused_tool_name": self.graph.state.paused_tool_name,
-                "paused_tool_arguments": self.graph.state.paused_tool_arguments,
-                "paused_after_execution": self.graph.state.paused_after_execution,
-                "paused_tool_result": self.graph.state.paused_tool_result,
-            }
-            state["graph_pause_state"] = pause_state
-
-            # Store message and tool call history
-            if hasattr(self.graph.state, "messages"):
-                state["tool_state_messages"] = self.graph.state.messages
-            if hasattr(self.graph.state, "tool_calls"):
-                state["tool_state_tool_calls"] = self.graph.state.tool_calls
-
-        return state
 
     async def execute(self, initial_state: Optional[GraphState] = None) -> Any:
         """
@@ -1021,350 +1246,418 @@ class ToolEngine(Engine):
 
     async def _execute_tool_node(self, frame: ExecutionFrame) -> Dict[str, Any]:
         """
-        Execute a tool node with its LLM interaction loop.
+        Execute a tool node.
+
+        This is a specialized execution loop for tool nodes that interact with LLMs and tools.
+        It handles the conversation loop with an LLM, gathering tool calls, executing them,
+        and building up the conversation history.
 
         Args:
-            frame: Current execution frame
+            frame: The execution frame with the current node and state
 
         Returns:
-            Dictionary of buffer updates
+            The updated state after execution
         """
-        node = frame.current_node
-
-        # If node is not set, try to get it from the graph
-        if node is None and frame.node_id in self.graph.nodes:
-            node = self.graph.nodes[frame.node_id]
-            frame.current_node = node
-
-        # Make sure node is a ToolNode
-        if not isinstance(node, ToolNode):
-            raise TypeError(f"Expected ToolNode, got {type(node)}")
-
-        # Make sure we have a state to work with
-        if frame.state is None:
-            raise ValueError("Frame state is None, cannot execute tool node")
-
-        # For clarity, get the state
+        node_name = frame.node_id
+        node = self.graph.nodes[node_name]
         state = frame.state
 
-        # Initialize variables
-        current_iteration = 0
+        # Debug info
+        print(f"\nExecuting tool node: {node_name}")
+        print(f"State type: {type(state)}")
+        print(f"State fields: {state.model_fields.keys() if hasattr(state, 'model_fields') else 'No model_fields'}")
+
+        # Check if the node is a ToolNode
+        if not isinstance(node, ToolNode):
+            error_msg = f"Expected ToolNode, got {type(node)}"
+            if hasattr(state, "error"):
+                state.error = error_msg
+            return {"error": error_msg}
+
+        # Get options from the node
         max_iterations = node.options.max_iterations
+        if hasattr(state, "max_iterations"):
+            state.max_iterations = max_iterations
+
+        # Initialize tracking variables
         is_complete = False
         error = None
         buffer_updates = {}
+        tool_call_entries = []
 
-        # Print debug info
-        print(f"\nExecuting tool node: {node.name}")
-        print(f"State type: {type(state)}")
-        print(f"State fields: {state.model_fields.keys()}")
+        # Initialize conversation if not already present
+        if hasattr(state, "messages") and state.messages:
+            print(f"    Found {len(state.messages)} messages in state")
+        if not hasattr(state, "messages") or not state.messages:
+            # Set default messages if none exist
+            state.messages = []
 
-        # Check if the node has the LLM client set
-        if not hasattr(node, "llm_client") or node.llm_client is None:
-            error = "LLM client not set for tool node"
-            buffer_updates["error"] = error
-            buffer_updates["is_complete"] = True
-            return buffer_updates
+        # IMPORTANT: Save the state to ensure initial conditions are captured
+        self._capture_state_checkpoint(node_name, state)
 
-        # Get messages from state
-        try:
-            messages_list = getattr(state, "messages", [])
-            if hasattr(messages_list, "get") and callable(messages_list.get):
-                messages_list = messages_list.get(None)
-                if messages_list is None:
-                    messages_list = []
-            messages = [msg.model_dump() for msg in messages_list]
-            print(f"Found {len(messages)} messages in state")
-        except Exception as e:
-            print(f"Error getting messages: {e}")
-            messages = []
-
-        if not messages:
-            # No messages to work with
-            error = "No messages found in state"
-            buffer_updates["error"] = error
-            buffer_updates["is_complete"] = True
-            return buffer_updates
-
-        # Get provider-specific tool schemas
+        # Determine LLM provider and prepare tools
         provider = "openai"  # Default
-        if hasattr(node.llm_client, "client"):
-            # Try to determine provider from client type
+        if (
+            hasattr(node.llm_client, "client")
+            and node.llm_client.client
+            and hasattr(node.llm_client.client, "__class__")
+        ):
+            # Check if this is an Anthropic client by module name
             client_module = node.llm_client.client.__class__.__module__
             if "anthropic" in client_module:
+                # Anthropic doesn't support the "auto" string
                 provider = "anthropic"
-            elif "openai" in client_module:
-                provider = "openai"
 
-        print(f"Using provider: {provider}")
-
-        # Get tool schemas for the provider
+        # Generate tool schemas for the provider
         tool_schemas = node.get_tool_schemas(provider)
         print(f"Generated {len(tool_schemas)} tool schemas")
 
-        # Record in state that we've started
-        buffer_updates["current_iteration"] = current_iteration
-        buffer_updates["max_iterations"] = max_iterations
-        buffer_updates["is_complete"] = is_complete
+        # Begin conversation loop
+        current_iteration = 0
+        if hasattr(state, "current_iteration"):
+            current_iteration = state.current_iteration
 
-        # Set timeout if specified
-        timeout_s = node.options.timeout_seconds
-        start_time = time.time()
+        # Handle pause state, if we're resuming from a pause
+        if hasattr(state, "is_paused") and state.is_paused:
+            print(f"Resuming from paused state, tool: {state.paused_tool_name}")
+            if hasattr(state, "paused_after_execution") and state.paused_after_execution:
+                print("We're resuming after a tool has already been executed")
+                # Handle tool result that was already executed but paused after
+                # We'll skip straight to the result handling
 
-        # Create a list to collect tool call entries
-        tool_call_entries = []
+                # Clear the pause state
+                state.is_paused = False
+                state.paused_tool_name = None
+                state.paused_tool_id = None
+                state.paused_tool_arguments = None
+                state.paused_after_execution = False
 
-        # Main LLM interaction loop
+                # Keep the paused_tool_result for processing
+                # You might want to handle this result differently...
+
+                # Save this state change to checkpoint
+                self._capture_state_checkpoint(node_name, state)
+            # If not paused after execution, we're paused before execution of a tool
+            # Let the normal flow handle this
+
+        # Main tool loop
         while current_iteration < max_iterations and not is_complete and not error:
             print(f"\nTool loop iteration {current_iteration + 1}/{max_iterations}")
 
-            # Check timeout if specified
-            if timeout_s and (time.time() - start_time) > timeout_s:
-                buffer_updates["error"] = f"Execution timed out after {timeout_s}s"
-                break
+            # Save checkpoint at the start of each iteration
+            self._capture_state_checkpoint(node_name, state)
 
-            # Save checkpoint after each iteration
-            if hasattr(self.graph, "_save_checkpoint"):
-                self.graph._save_checkpoint(frame.node_id, self.get_full_state())
+            # Set current iteration in state
+            if hasattr(state, "current_iteration"):
+                state.current_iteration = current_iteration
 
             try:
-                # Set up kwargs for API call
-                api_kwargs = {}
+                # Call LLM with current messages and tools
+                print(f"Calling LLM generate with {len(state.messages)} messages and {len(tool_schemas)} tools")
 
-                # Extract model and other options if available
-                if hasattr(node.options, "model_dump"):
-                    options_dict = node.options.model_dump()
-                    if "model" in options_dict and options_dict["model"] is not None:
-                        api_kwargs["model"] = options_dict["model"]
-                    if "max_tokens" in options_dict:
-                        api_kwargs["max_tokens"] = options_dict["max_tokens"]
-                    if "api_kwargs" in options_dict and options_dict["api_kwargs"]:
-                        api_kwargs.update(options_dict["api_kwargs"])
+                # Convert LLMMessage objects to dictionaries
+                message_dicts = []
+                for msg in state.messages:
+                    if hasattr(msg, "model_dump"):
+                        # Use pydantic's model_dump method if available
+                        message_dicts.append(msg.model_dump())
+                    elif hasattr(msg, "dict"):
+                        # For older pydantic versions
+                        message_dicts.append(msg.dict())
+                    else:
+                        # Fallback to manual conversion
+                        msg_dict = {"role": msg.role, "content": msg.content}
+                        if msg.tool_calls is not None:
+                            msg_dict["tool_calls"] = msg.tool_calls
+                        if msg.tool_call_id is not None:
+                            msg_dict["tool_call_id"] = msg.tool_call_id
+                        message_dicts.append(msg_dict)
 
-                # Generate response from LLM
-                print(f"Calling LLM generate with {len(messages)} messages and {len(tool_schemas)} tools")
-                content, raw_response = await node.llm_client.generate(
-                    messages=messages, tools=tool_schemas, **api_kwargs
+                # Get API kwargs, ensuring model is included if specified in options
+                api_kwargs = node.options.api_kwargs.copy()
+                if node.options.model:
+                    api_kwargs["model"] = node.options.model
+
+                # Format tool_choice properly for the provider
+                tool_choice_param = None
+                if (
+                    hasattr(node.llm_client, "client")
+                    and node.llm_client.client
+                    and hasattr(node.llm_client.client, "__class__")
+                ):
+                    # Check if this is an Anthropic client by module name
+                    client_module = node.llm_client.client.__class__.__module__
+                    if "anthropic" in client_module:
+                        # Anthropic uses different parameters
+                        tool_choice_param = None
+                    elif "openai" in client_module:
+                        # For OpenAI, we need to format the tool_choice parameter differently
+                        tool_choice_param = {"type": "function"}
+                        # For OpenAI, it requires a specific format with a function parameter
+                        # If any tools are available, use the first one to avoid "missing tool_choice.function" error
+                        if tool_schemas and len(tool_schemas) > 0:
+                            first_tool = tool_schemas[0]
+                            if isinstance(first_tool, dict) and "function" in first_tool:
+                                tool_choice_param = {
+                                    "type": "function",
+                                    "function": {"name": first_tool["function"]["name"]},
+                                }
+
+                # Make the API call with proper parameters
+                content, response = await node.llm_client.generate(
+                    messages=message_dicts, tools=tool_schemas, tool_choice=tool_choice_param, **api_kwargs
                 )
 
-                # Store raw response in history
-                # Add to raw response history
-                if "raw_response_history" not in buffer_updates:
-                    response_history = getattr(state, "raw_response_history", [])
-                    if hasattr(response_history, "get") and callable(response_history.get):
-                        response_history = response_history.get(None)
-                        if response_history is None:
-                            response_history = []
-                    buffer_updates["raw_response_history"] = list(response_history)
+                # Check if this is a tool use response
+                is_tool_use = False
+                try:
+                    is_tool_use = node.llm_client.is_tool_use_response(response)
+                except Exception as e:
+                    print(f"Error checking for tool use: {str(e)}")
+                    # Continue with default (False)
 
-                buffer_updates["raw_response_history"].append(raw_response)
+                print(f"is_tool_use_response: {is_tool_use}")
 
-                # Check if response requires tool use
-                if node.llm_client.is_tool_use_response(raw_response):
+                # Store raw response for debugging/logging if needed
+                if hasattr(state, "raw_response_history"):
+                    state.raw_response_history.append(response)
+
+                # Handle the assistant message
+                if is_tool_use:
                     print("Response contains tool calls")
+                    # Extract tool calls - extract manually if needed
+                    tool_calls = []
+                    try:
+                        tool_calls = node.llm_client.extract_tool_calls(response)
+                    except Exception as e:
+                        print(f"Error extracting tool calls via client: {str(e)}")
+                        # Try manual extraction as fallback
+                        if hasattr(response, "choices") and response.choices:
+                            message = response.choices[0].message
+                            if hasattr(message, "tool_calls") and message.tool_calls:
+                                for tc in message.tool_calls:
+                                    try:
+                                        args = json.loads(tc.function.arguments)
+                                    except:
+                                        args = {"input": tc.function.arguments}
+                                    tool_calls.append({"id": tc.id, "name": tc.function.name, "arguments": args})
+                        elif hasattr(response, "content") and isinstance(response.content, list):
+                            for block in response.content:
+                                if getattr(block, "type", None) == "tool_use":
+                                    tool_calls.append(
+                                        {
+                                            "id": getattr(block, "id", f"tool_{int(time.time())}"),
+                                            "name": getattr(block, "name", ""),
+                                            "arguments": getattr(block, "input", {}),
+                                        }
+                                    )
 
-                    # Get tool calls
-                    tool_calls = node.llm_client.extract_tool_calls(raw_response)
+                    print(f"Extracted {len(tool_calls)} tool calls")
 
-                    # Prepare assistant message with tool calls
-                    if provider == "openai":
-                        # For OpenAI, we need to include the tool_calls in the assistant message
-                        assistant_message = {
-                            "role": "assistant",
-                            "content": content or "",
-                            "tool_calls": [
-                                {
-                                    "id": call["id"],
-                                    "type": "function",
-                                    "function": {"name": call["name"], "arguments": json.dumps(call["arguments"])},
-                                }
-                                for call in tool_calls
-                            ],
-                        }
-                    else:
-                        # For other providers
-                        assistant_message = {
-                            "role": "assistant",
-                            "content": content or "",
-                        }
+                    # Create assistant message - without actual tool_calls attached
+                    assistant_message = LLMMessage(role="assistant", content=content)
 
-                    # Append to messages list for next iteration
-                    messages.append(assistant_message)
+                    # For OpenAI, we need to add the tool_calls field to the message
+                    # This is needed for the OpenAI API to properly associate tool responses
+                    if (
+                        hasattr(node.llm_client, "client")
+                        and node.llm_client.client
+                        and hasattr(node.llm_client.client, "__class__")
+                        and "openai" in node.llm_client.client.__class__.__module__
+                    ):
+                        # Extract tool_calls from the response
+                        openai_tool_calls = []
+                        if hasattr(response, "choices") and response.choices:
+                            message = response.choices[0].message
+                            if hasattr(message, "tool_calls") and message.tool_calls:
+                                # Store the raw tool_calls in a format that can be serialized
+                                tool_calls_data = []
+                                for tc in message.tool_calls:
+                                    tool_calls_data.append(
+                                        {
+                                            "id": tc.id,
+                                            "type": tc.type,
+                                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                                        }
+                                    )
+                                # Store the serializable version
+                                assistant_message.tool_calls = tool_calls_data
 
-                    # Add to buffer updates for state update
-                    if "messages" not in buffer_updates:
-                        buffer_updates["messages"] = list(messages_list)
-                    buffer_updates["messages"].append(LLMMessage(**assistant_message))
+                    state.messages.append(assistant_message)
 
-                    # Call the on_message callback if provided and there's content
-                    if hasattr(node, "on_message") and node.on_message and content:
+                    # Call the on_message callback for the assistant message with tool calls
+                    if hasattr(node, "on_message") and node.on_message:
                         node.on_message(
                             {
                                 "message_type": "assistant",
                                 "content": content,
-                                "raw_response": raw_response,
+                                "raw_response": response,
                                 "has_tool_calls": True,
-                                "tool_calls": tool_calls,
                                 "is_final": False,
                                 "iteration": current_iteration,
                                 "timestamp": time.time(),
                             }
                         )
 
+                    if not tool_calls:
+                        error_msg = "Failed to extract tool calls from response"
+                        print(error_msg)
+                        if hasattr(state, "error"):
+                            state.error = error_msg
+                        break
+
                     # Process each tool call
-                    for tool_call in tool_calls:
-                        tool_id = tool_call["id"]
-                        tool_name = tool_call["name"]
-                        tool_args = tool_call["arguments"]
+                    for tc in tool_calls:
+                        # Prepare tool call arguments
+                        tool_name = tc.get("name", "")
+                        tool_id = tc.get("id", f"call_{int(time.time())}")
+                        arguments = tc.get("arguments", {})
 
-                        print(f"Processing tool call: {tool_name}({tool_args})")
+                        print(f"Processing tool call: {tool_name}({arguments})")
 
-                        # Find the tool function
+                        # Find the tool by name
                         tool_func = node.find_tool_by_name(tool_name)
+                        if not tool_func:
+                            error_msg = f"Tool {tool_name} not found"
+                            tool_error_message = LLMMessage(role="system", content=f"Error: {error_msg}")
+                            state.messages.append(tool_error_message)
 
-                        if tool_func:
-                            # Check if we should pause before execution
-                            tool_def = tool_func._tool_definition
+                            # Call the on_message callback for the error message
+                            if hasattr(node, "on_message") and node.on_message:
+                                node.on_message(
+                                    {
+                                        "message_type": "system",
+                                        "content": f"Error: {error_msg}",
+                                        "is_final": False,
+                                        "is_error": True,
+                                        "iteration": current_iteration,
+                                        "timestamp": time.time(),
+                                    }
+                                )
+                            continue  # Skip to next tool
 
-                            if tool_def.pause_before_execution:
-                                print(f"Pausing execution before tool: {tool_name}")
+                        print(f"Executing tool: {tool_name}")
 
-                                # Update state with pause information
-                                buffer_updates["is_paused"] = True
-                                buffer_updates["paused_tool_id"] = tool_id
-                                buffer_updates["paused_tool_name"] = tool_name
-                                buffer_updates["paused_tool_arguments"] = tool_args
+                        # Check for pause_before_execution
+                        if hasattr(tool_func, "_tool_definition") and tool_func._tool_definition.pause_before_execution:
+                            print(f"Pausing execution before tool: {tool_name}")
+                            state.is_paused = True
+                            state.paused_tool_id = tool_id
+                            state.paused_tool_name = tool_name
+                            state.paused_tool_arguments = arguments
+                            state.paused_after_execution = False
+                            state.paused_tool_result = None
 
-                                # Update state directly
-                                state.is_paused = True
-                                state.paused_tool_id = tool_id
-                                state.paused_tool_name = tool_name
-                                state.paused_tool_arguments = tool_args
+                            # CRITICAL: Save pause state to checkpoint
+                            self._capture_state_checkpoint(node_name, state)
 
-                                # Save checkpoint
-                                if hasattr(self.graph, "_save_checkpoint"):
-                                    self.graph._save_checkpoint(frame.node_id, self.get_full_state())
+                            # Return early with updated state
+                            if hasattr(state, "is_complete"):
+                                state.is_complete = False
+                            return {"state": state}
 
-                                # Return early without completing the execution
-                                return buffer_updates
+                        # Execute the tool and capture the result
+                        tool_result = await node.execute_tool(tool_func, arguments, tool_id)
 
-                            # Execute the tool
-                            print(f"Executing tool: {tool_name}")
-                            tool_result = await node.execute_tool(tool_func, tool_args, tool_id)
-
-                            # Add to tool call entries
-                            tool_call_entries.append(tool_result)
-
-                            # Check if we should pause after execution
-                            tool_def = tool_func._tool_definition
-                            if tool_def.pause_after_execution:
-                                print(f"Pausing execution after tool: {tool_name}")
-
-                                # Update state with pause information
-                                buffer_updates["is_paused"] = True
-                                buffer_updates["paused_tool_id"] = tool_id
-                                buffer_updates["paused_tool_name"] = tool_name
-                                buffer_updates["paused_tool_arguments"] = tool_args
-                                buffer_updates["paused_after_execution"] = True
-                                buffer_updates["paused_tool_result"] = tool_result
-
-                                # Update state directly
-                                state.is_paused = True
-                                state.paused_tool_id = tool_id
-                                state.paused_tool_name = tool_name
-                                state.paused_tool_arguments = tool_args
-                                state.paused_after_execution = True
-                                state.paused_tool_result = tool_result
-
-                                # Save checkpoint
-                                if hasattr(self.graph, "_save_checkpoint"):
-                                    self.graph._save_checkpoint(frame.node_id, self.get_full_state())
-
-                                # Return early without continuing the execution
-                                return buffer_updates
-
-                            # Add tool response to messages - format depends on provider
-                            if provider == "anthropic":
-                                # For Anthropic, use a simpler format
-                                tool_message = {
-                                    "role": "user",
-                                    "content": f"Tool result for {tool_name}: {str(tool_result.result)}",
-                                }
+                        # Add to tool call history
+                        if hasattr(state, "tool_calls"):
+                            # Ensure tool_calls is a list of ToolCallLog objects, not dictionaries
+                            if isinstance(state.tool_calls, list):
+                                # It's already a list, just append the new result
+                                state.tool_calls.append(tool_result)
                             else:
-                                # For OpenAI, use the standard format
-                                tool_message = {
-                                    "role": "tool",
-                                    "content": str(tool_result.result),
-                                    "tool_call_id": tool_id,
-                                }
+                                # It's not a list, create a new list with existing items and the new result
+                                # Note: this handles the case where it's a dict or other type
+                                existing_calls = []
+                                if hasattr(state.tool_calls, "items"):
+                                    # It's a dict-like object, try to convert each item
+                                    for k, v in state.tool_calls.items():
+                                        if isinstance(v, ToolCallLog):
+                                            existing_calls.append(v)
+                                        elif isinstance(v, dict) and "id" in v and "tool_name" in v:
+                                            # Try to convert dict to ToolCallLog
+                                            existing_calls.append(ToolCallLog(**v))
+                                elif hasattr(state.tool_calls, "__iter__"):
+                                    # It's an iterable, try to convert each item
+                                    for item in state.tool_calls:
+                                        if isinstance(item, ToolCallLog):
+                                            existing_calls.append(item)
+                                        elif isinstance(item, dict) and "id" in item and "tool_name" in item:
+                                            # Try to convert dict to ToolCallLog
+                                            existing_calls.append(ToolCallLog(**item))
 
-                            # Append tool message to messages for next iteration
-                            messages.append(tool_message)
+                                # Add the new tool result
+                                existing_calls.append(tool_result)
+                                # Replace the tool_calls attribute with our new list
+                                state.tool_calls = existing_calls
 
-                            # Add to buffer updates for state update
-                            buffer_updates["messages"].append(LLMMessage(**tool_message))
+                        # Check for pause_after_execution
+                        if hasattr(tool_func, "_tool_definition") and tool_func._tool_definition.pause_after_execution:
+                            print(f"Pausing execution after tool: {tool_name}")
+                            state.is_paused = True
+                            state.paused_tool_id = tool_id
+                            state.paused_tool_name = tool_name
+                            state.paused_tool_arguments = arguments
+                            state.paused_after_execution = True
+                            state.paused_tool_result = tool_result
+
+                            # CRITICAL: Save pause state to checkpoint
+                            self._capture_state_checkpoint(node_name, state)
+
+                            # Return early with updated state
+                            return {"state": state}
+
+                        # Add tool response to messages
+                        anthropic_client = False
+                        if (
+                            hasattr(node, "llm_client")
+                            and hasattr(node.llm_client, "client")
+                            and node.llm_client.client
+                            and hasattr(node.llm_client.client, "__class__")
+                        ):
+                            client_module = node.llm_client.client.__class__.__module__
+                            anthropic_client = "anthropic" in client_module
+
+                        if anthropic_client:
+                            # For Anthropic, use a simpler format
+                            tool_message = LLMMessage(
+                                role="user", content=f"Tool result for {tool_name}: {str(tool_result.result)}"
+                            )
                         else:
-                            # Tool not found
-                            error_msg = f"Tool '{tool_name}' not found"
-                            print(f"Error: {error_msg}")
-
-                            # Create error tool call log
-                            tool_result = ToolCallLog(
-                                id=tool_id,
-                                tool_name=tool_name,
-                                arguments=tool_args,
-                                result=f"Error: {error_msg}",
-                                success=False,
-                                timestamp=time.time(),
-                                error=error_msg,
+                            # For OpenAI, use the standard format
+                            tool_message = LLMMessage(
+                                role="tool", content=str(tool_result.result), tool_call_id=tool_id
                             )
 
-                            # Add to tool call entries
-                            tool_call_entries.append(tool_result)
+                        # Add tool result to messages and tool call entries
+                        state.messages.append(tool_message)
+                        tool_call_entries.append(tool_result)
 
-                            # Add error response to messages
-                            tool_message = {
-                                "role": "tool" if provider != "anthropic" else "user",
-                                "content": f"Error: {error_msg}",
-                            }
+                        # Call the on_message callback for the tool result message
+                        if hasattr(node, "on_message") and node.on_message:
+                            node.on_message(
+                                {
+                                    "message_type": "tool",
+                                    "content": str(tool_result.result),
+                                    "tool_id": tool_id,
+                                    "tool_name": tool_name,
+                                    "is_final": False,
+                                    "iteration": current_iteration,
+                                    "timestamp": time.time(),
+                                }
+                            )
 
-                            if provider != "anthropic":
-                                tool_message["tool_call_id"] = tool_id
-
-                            # Append tool message to messages
-                            messages.append(tool_message)
-
-                            # Add to buffer updates for state update
-                            buffer_updates["messages"].append(LLMMessage(**tool_message))
-
-                    # Update tool_calls in buffer_updates
-                    buffer_updates["tool_calls"] = tool_call_entries
-
-                    # Continue to next iteration
-                    current_iteration += 1
-                    buffer_updates["current_iteration"] = current_iteration
-
+                        # Add to buffer updates
+                        buffer_updates["tool_calls"] = tool_call_entries
                 else:
                     # No tool use, this is the final response
                     print("Response does not contain tool calls, finishing")
 
                     # Create assistant message for final response
-                    assistant_message = {
-                        "role": "assistant",
-                        "content": content,
-                    }
+                    assistant_message = LLMMessage(role="assistant", content=content)
 
                     # Add to messages
-                    messages.append(assistant_message)
-
-                    # Add to buffer updates
-                    if "messages" not in buffer_updates:
-                        buffer_updates["messages"] = list(messages_list)
-                    buffer_updates["messages"].append(LLMMessage(**assistant_message))
-
-                    # Update tool_calls if any were made
-                    if tool_call_entries:
-                        buffer_updates["tool_calls"] = tool_call_entries
+                    state.messages.append(assistant_message)
 
                     # Call the on_message callback if provided
                     if hasattr(node, "on_message") and node.on_message:
@@ -1372,7 +1665,7 @@ class ToolEngine(Engine):
                             {
                                 "message_type": "assistant",
                                 "content": content,
-                                "raw_response": raw_response,
+                                "raw_response": response,
                                 "has_tool_calls": False,
                                 "is_final": True,
                                 "iteration": current_iteration,
@@ -1381,36 +1674,83 @@ class ToolEngine(Engine):
                         )
 
                     # Mark as complete with final output
-                    buffer_updates["final_output"] = content
-                    buffer_updates["is_complete"] = True
+                    if hasattr(state, "final_output"):
+                        state.final_output = content
+                    if hasattr(state, "is_complete"):
+                        state.is_complete = True
                     is_complete = True
+                    buffer_updates["is_complete"] = True
+                    buffer_updates["final_output"] = content
 
-                    # Save the raw response for the user to access
-                    buffer_updates["current_trace"] = {"raw_response": raw_response}
-
+                    # Save the raw response
+                    if hasattr(state, "current_trace"):
+                        state.current_trace = {"raw_response": response}
+                    buffer_updates["current_trace"] = {"raw_response": response}
+                    break
             except Exception as e:
                 # Record error
                 error = str(e)
                 print(f"Error in tool loop: {error}")
+                if hasattr(state, "error"):
+                    state.error = error
+                if hasattr(state, "is_complete"):
+                    state.is_complete = True
                 buffer_updates["error"] = error
                 buffer_updates["is_complete"] = True
-                is_complete = True
 
-            # Check if we've reached max iterations
-            if current_iteration >= max_iterations and not is_complete:
-                print(f"Reached maximum iterations ({max_iterations})")
-                buffer_updates["is_complete"] = True
-                buffer_updates["final_output"] = f"Reached maximum iterations ({max_iterations})"
-                is_complete = True
+                # Call the on_message callback for the error
+                if hasattr(node, "on_message") and node.on_message:
+                    node.on_message(
+                        {
+                            "message_type": "system",
+                            "content": f"Error: {error}",
+                            "is_final": True,
+                            "is_error": True,
+                            "iteration": current_iteration,
+                            "timestamp": time.time(),
+                        }
+                    )
+                break
+
+            # Increment iteration counter
+            current_iteration += 1
+            if hasattr(state, "current_iteration"):
+                state.current_iteration = current_iteration
+            buffer_updates["current_iteration"] = current_iteration
+
+        # Check if we've reached max iterations
+        if current_iteration >= max_iterations and not is_complete:
+            print(f"Reached maximum iterations ({max_iterations})")
+            max_iter_message = f"Reached maximum iterations ({max_iterations})"
+            if hasattr(state, "is_complete"):
+                state.is_complete = True
+            if hasattr(state, "final_output"):
+                state.final_output = max_iter_message
+            buffer_updates["is_complete"] = True
+            buffer_updates["final_output"] = max_iter_message
+
+            # Call the on_message callback for the max iterations message
+            if hasattr(node, "on_message") and node.on_message:
+                node.on_message(
+                    {
+                        "message_type": "system",
+                        "content": max_iter_message,
+                        "is_final": True,
+                        "is_error": False,
+                        "iteration": current_iteration,
+                        "timestamp": time.time(),
+                    }
+                )
 
         # Save final checkpoint
-        if hasattr(self.graph, "_save_checkpoint"):
-            self.graph._save_checkpoint(frame.node_id, self.get_full_state())
+        self._capture_state_checkpoint(node_name, state)
 
-        # Ensure is_complete is set
+        # Ensure buffer_updates has all needed fields
         buffer_updates["is_complete"] = True
+        if "tool_calls" in buffer_updates:
+            buffer_updates["tool_calls"] = tool_call_entries
 
-        # Update our frame.state directly (needed because we're using custom state objects)
+        # Update state with buffer updates
         for key, value in buffer_updates.items():
             if hasattr(state, key):
                 setattr(state, key, value)
@@ -1418,11 +1758,25 @@ class ToolEngine(Engine):
         # Print summary
         print("Tool node execution complete:")
         print(f"- Tool calls: {len(tool_call_entries)}")
-        print(f"- Final messages: {len(messages)}")
+        print(f"- Final messages: {len(state.messages)}")
         print(f"- Is complete: {is_complete}")
-
         if error:
             print(f"- Error: {error}")
 
-        # Return buffer updates for the engine
+        # Return buffer updates
         return buffer_updates
+
+    def _capture_state_checkpoint(self, node_name: str, state: Any) -> None:
+        """
+        Helper method to capture the current state in a checkpoint.
+
+        Args:
+            node_name: Current node name
+            state: Current state object
+        """
+        # Make sure this state is the current graph state
+        self.graph.state = state
+
+        # Get the full state and save checkpoint
+        engine_state = self.get_full_state()
+        self.graph._save_checkpoint(node_name, engine_state)
