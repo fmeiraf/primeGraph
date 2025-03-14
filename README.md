@@ -4,7 +4,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Package Version](https://img.shields.io/badge/package-1.3.0-blue.svg)](https://pypi.org/project/primegraph/)
+[![Package Version](https://img.shields.io/badge/package-1.4.0-blue.svg)](https://pypi.org/project/primegraph/)
 
 ---
 
@@ -734,6 +734,36 @@ async def run_research():
 asyncio.run(run_research())
 ```
 
+### LLM Message Callbacks
+
+You can register callbacks to receive messages from LLMs during tool execution:
+
+```python
+# Define callback functions for LLM messages and tool usage
+def on_message(message_data):
+    """Callback triggered whenever the LLM generates a message"""
+    print(f"LLM MESSAGE: {message_data['content']}")
+    print(f"Is final: {message_data['is_final']}")
+    if message_data['has_tool_calls']:
+        print(f"Contains {len(message_data['tool_calls'])} tool calls")
+
+def on_tool_use(tool_data):
+    """Callback triggered when a tool is executed"""
+    print(f"TOOL EXECUTED: {tool_data['name']}")
+    print(f"Arguments: {tool_data['arguments']}")
+    print(f"Result: {tool_data['result']}")
+
+# Register callbacks when creating the tool node
+node = graph.add_tool_node(
+    name="researcher",
+    tools=[search_web, summarize],
+    llm_client=llm_client,
+    options=ToolLoopOptions(max_iterations=5),
+    on_message=on_message,  # Register message callback
+    on_tool_use=on_tool_use  # Register tool use callback
+)
+```
+
 ### Tool Pause and Resume
 
 ```python
@@ -787,6 +817,64 @@ elif paused_state.is_paused and paused_state.paused_after_execution:
     
     # Resume execution with the existing result
     resumed_result = await engine.resume_from_pause(paused_state, execute_tool=True)
+```
+
+### PostgreSQL Checkpoint with Tool Pauses
+
+You can save and restore paused tool sessions using PostgreSQL:
+
+```python
+from primeGraph.checkpoint.postgresql import PostgreSQLStorage, PostgreSQLConfig
+
+# Configure PostgreSQL storage
+postgres_storage = PostgreSQLStorage.from_config(
+    host="localhost",
+    port=5432,
+    user="primegraph",
+    password="primegraph",
+    database="primegraph",
+)
+
+# Create a tool graph with PostgreSQL storage
+graph = ToolGraph(
+    "payment_processing", 
+    state_class=ToolState,
+    checkpoint_storage=postgres_storage  # Use PostgreSQL for checkpoints
+)
+
+# Add tools and node to graph
+node = graph.add_tool_node(
+    name="payment_agent",
+    tools=[process_payment, update_account, get_user_details],
+    llm_client=llm_client
+)
+
+# Connect nodes
+graph.add_edge(START, node.name)
+graph.add_edge(node.name, END)
+
+# Run the graph - it will pause when a tool with pause flag is triggered
+result = await engine.execute(initial_state)
+chain_id = graph.chain_id  # Store this to load checkpoint later
+
+# In a separate session or process, load the paused state
+new_graph = ToolGraph(
+    "payment_processing", 
+    state_class=ToolState,
+    checkpoint_storage=postgres_storage
+)
+
+# Add the same tools and structure
+# ...
+
+# Load the checkpoint
+new_graph.load_from_checkpoint(chain_id)
+
+# Check if graph is paused
+if new_graph.state.is_paused:
+    # Resume execution from the paused state
+    new_engine = ToolEngine(new_graph)
+    resumed_result = await new_engine.resume_from_pause(new_graph.state, execute_tool=True)  # approve
 ```
 
 ## Roadmap

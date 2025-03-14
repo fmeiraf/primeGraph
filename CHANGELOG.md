@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.4.0] - 2025-03-14
+
+### Added
+
+- Added `on_message` callback for LLM messages in ToolNode
+- Enhanced checkpointing for ToolEngine to properly save and restore paused tool state
+- Added support for preserving tool call and message history in PostgreSQL checkpoints
+- Added examples for LLM message callbacks and PostgreSQL checkpointing with paused tools
+- Added comprehensive tests for PostgreSQL checkpointing with tool pauses
+
+### Changed
+
+- Improved state serialization/deserialization for complex objects in checkpoints
+
+### Fixed
+
+- Fixed issue where pause state attributes weren't being properly stored in checkpoints
+- Fixed restoration of tool execution state and message history from checkpoints
+
 # [1.3.0] - 2025-03-13
 
 ### Added
