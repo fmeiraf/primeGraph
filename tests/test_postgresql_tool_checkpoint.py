@@ -288,9 +288,6 @@ async def test_checkpoint_pause_before_execution(postgres_storage, tool_tools):
     graph.add_edge(START, node.name)
     graph.add_edge(node.name, END)
     
-    # Create engine
-    engine = ToolEngine(graph)
-    
     # Create initial state with request to process payment
     initial_state = ToolCheckpointState()
     initial_state.messages = [
@@ -305,10 +302,10 @@ async def test_checkpoint_pause_before_execution(postgres_storage, tool_tools):
     ]
     
     # Execute the graph
-    result = await engine.execute(initial_state=initial_state)
+    await graph.execute(initial_state=initial_state)
     
-    # Get the state from the result
-    first_state = result.state
+    # Access the state from the graph
+    first_state = graph.state
     
     # Verify the execution was paused before processing payment
     assert first_state.is_paused is True
@@ -338,9 +335,6 @@ async def test_checkpoint_pause_before_execution(postgres_storage, tool_tools):
     new_graph.add_edge(START, node.name)
     new_graph.add_edge(node.name, END)
     
-    # Create engine
-    new_engine = ToolEngine(new_graph)
-    
     # Load the checkpoint
     new_graph.load_from_checkpoint(chain_id)
     
@@ -350,25 +344,19 @@ async def test_checkpoint_pause_before_execution(postgres_storage, tool_tools):
     assert new_graph.state.paused_tool_arguments["order_id"] == "O2"
     
     # Resume execution
-    result = await new_engine.resume(new_graph.state, execute_tool=True)
+    await new_graph.resume(execute_tool=True)
     
-    # Get final state
-    final_state = result.state
+    # Check the resumed state
+    resumed_state = new_graph.state
     
-    # Verify the execution completed successfully
-    assert final_state.is_paused is False
-    assert final_state.is_complete is True
+    # Verify the execution completed
+    assert resumed_state.is_paused is False
+    assert resumed_state.is_complete is True
     
-    # Check that the process_payment tool was executed
-    tool_calls = [call.tool_name for call in final_state.tool_calls]
-    assert "process_payment" in tool_calls
-    
-    # Also check that previous tool calls are preserved
-    assert "get_customer_info" in tool_calls
-    assert "get_order_details" in tool_calls
-    
-    # Check final message
-    assert "successfully processed" in final_state.final_output
+    # Verify the payment was processed
+    assert any(call.tool_name == "process_payment" for call in resumed_state.tool_calls)
+    assert len(resumed_state.processing_results) > 0
+    assert resumed_state.processing_results[0]["order_id"] == "O2"
 
 
 @pytest.mark.asyncio

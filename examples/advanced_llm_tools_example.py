@@ -17,8 +17,8 @@ from pydantic import Field
 
 from primeGraph.buffer.history import History
 from primeGraph.graph.llm_clients import LLMClientFactory, Provider
-from primeGraph.graph.llm_tools import (LLMMessage, ToolEngine, ToolGraph,
-                                        ToolLoopOptions, ToolState, tool)
+from primeGraph.graph.llm_tools import (LLMMessage, ToolGraph, ToolLoopOptions,
+                                        ToolState, tool)
 
 
 # Custom state model with different sections for different phases
@@ -359,13 +359,9 @@ async def main():
     )
     
     # Connect the nodes in sequence
-    graph.add_edge(graph.START, planner_node)
     graph.add_edge(planner_node, researcher_node)
     graph.add_edge(researcher_node, analyzer_node)
     graph.add_edge(analyzer_node, graph.END)
-    
-    # Create the engine
-    engine = ToolEngine(graph)
     
     # Set up initial state with messages for the first node
     initial_state = ResearchPlannerState()
@@ -381,37 +377,28 @@ async def main():
         )
     ]
     
-    print("Running research planning workflow...\n")
-    
     # Execute the graph
-    result = await engine.execute(initial_state=initial_state)
+    print("\nExecuting multi-step research workflow...")
+    print("(This will use your OpenAI API key and may incur charges)")
+    await graph.execute(initial_state=initial_state)
     
-    # Print results
-    final_state = result.state
+    # Access the final state
+    final_state = graph.state
     
-    print("\n=== Research Plan ===")
-    if final_state.research_plan:
-        print(final_state.research_plan)
-    else:
-        print("No research plan was generated.")
+    # Print the final report
+    print("\n=== Research Report ===")
+    print(final_state.report or final_state.final_output or "No report generated.")
     
-    print("\n=== Key Insights ===")
-    for i, insight in enumerate(final_state.key_insights):
-        print(f"{i+1}. {insight}")
-    
-    print("\n=== Final Summary ===")
-    if final_state.summary:
-        print(final_state.summary)
-    else:
-        print("No summary was generated.")
+    print(f"\nTotal tool calls: {len(final_state.tool_calls)}")
+    # Simplified analysis of tool usage
+    tool_usage = {}
+    for call in final_state.tool_calls:
+        tool_usage[call.tool_name] = tool_usage.get(call.tool_name, 0) + 1
     
     print("\n=== Tool Usage ===")
-    for i, tool_call in enumerate(final_state.tool_calls):
-        print(f"\nNode: {tool_call.tool_name}")
-        print(f"  Success: {tool_call.success}")
-        if not tool_call.success and tool_call.error:
-            print(f"  Error: {tool_call.error}")
-    
+    for tool, count in tool_usage.items():
+        print(f"{tool}: {count} calls")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

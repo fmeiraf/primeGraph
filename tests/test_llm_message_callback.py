@@ -18,8 +18,8 @@ from primeGraph.buffer.factory import History, LastValue
 from primeGraph.constants import END, START
 from primeGraph.graph.llm_clients import (LLMClientBase, LLMClientFactory,
                                           Provider)
-from primeGraph.graph.llm_tools import (LLMMessage, ToolEngine, ToolGraph,
-                                        ToolLoopOptions, ToolState, tool)
+from primeGraph.graph.llm_tools import (LLMMessage, ToolGraph, ToolLoopOptions,
+                                        ToolState, tool)
 
 load_dotenv()
 
@@ -186,9 +186,6 @@ async def test_on_message_callback_with_mock(customer_tools, mock_llm_client, me
     graph.add_edge(START, node.name)
     graph.add_edge(node.name, END)
     
-    # Create engine
-    engine = ToolEngine(graph)
-    
     # Create initial state with request to get customer info
     initial_state = MessageCollectorState()
     initial_state.messages = [
@@ -202,8 +199,11 @@ async def test_on_message_callback_with_mock(customer_tools, mock_llm_client, me
         )
     ]
     
-    # Execute the graph
-    await engine.execute(initial_state=initial_state)
+    # Execute the graph directly
+    await graph.execute(initial_state=initial_state)
+    
+    # Access final state
+    final_state = graph.state
     
     # Verify the callback was called for all messages (assistant, tool, and final)
     assert len(message_collector_callback.messages) == 3
@@ -258,9 +258,6 @@ async def test_on_message_callback_with_openai(customer_tools, message_collector
     graph.add_edge(START, node.name)
     graph.add_edge(node.name, END)
     
-    # Create engine
-    engine = ToolEngine(graph)
-    
     # Create initial state with request to get customer info
     initial_state = MessageCollectorState()
     initial_state.messages = [
@@ -274,10 +271,11 @@ async def test_on_message_callback_with_openai(customer_tools, message_collector
         )
     ]
     
-    # Execute the graph
-    await engine.execute(initial_state=initial_state)
+    # Execute the graph directly
+    await graph.execute(initial_state=initial_state)
     
-    
+    # Access final state
+    final_state = graph.state
     
     # Verify the callback was called at least once
     assert len(message_collector_callback.messages) >= 1

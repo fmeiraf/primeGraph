@@ -4,7 +4,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Package Version](https://img.shields.io/badge/package-1.5.0-blue.svg)](https://pypi.org/project/primegraph/)
+[![Package Version](https://img.shields.io/badge/package-1.5.1-blue.svg)](https://pypi.org/project/primegraph/)
 
 ---
 
@@ -665,7 +665,7 @@ import asyncio
 from typing import Dict, List, Any
 from primeGraph import START, END
 from primeGraph.graph.llm_tools import (
-    tool, ToolNode, ToolGraph, ToolEngine, ToolState,
+    tool, ToolNode, ToolGraph, ToolState,
     ToolLoopOptions, LLMMessage
 )
 from primeGraph.graph.llm_clients import OpenAIClient, AnthropicClient
@@ -713,9 +713,6 @@ graph.add_edge(node.name, END)
 
 # Execute the graph
 async def run_research():
-    # Initialize the engine
-    engine = ToolEngine(graph)
-
     # Create initial state with user query
     initial_state = ResearchState()
     initial_state.messages = [
@@ -724,10 +721,10 @@ async def run_research():
     ]
 
     # Execute the graph
-    result = await engine.execute(initial_state=initial_state)
+    await graph.execute(initial_state=initial_state)
 
     # Access final state
-    final_state = result.state
+    final_state = graph.state
     print(f"Tool calls: {len(final_state.tool_calls)}")
     print(f"Final output: {final_state.final_output}")
 
@@ -796,27 +793,26 @@ tool_node = graph.add_tool_node(
 )
 
 # Execute the graph - will pause before/after tool execution depending on configuration
-result = await engine.execute(initial_state)
-paused_state = result.state
+await graph.execute(initial_state)
 
 # Check if paused before execution
-if paused_state.is_paused and not paused_state.paused_after_execution:
+if graph.state.is_paused and not graph.state.paused_after_execution:
     print("Paused before execution")
-    print(f"Tool: {paused_state.paused_tool_name}")
-    print(f"Arguments: {paused_state.paused_tool_arguments}")
+    print(f"Tool: {graph.state.paused_tool_name}")
+    print(f"Arguments: {graph.state.paused_tool_arguments}")
 
     # Resume with execution (approve) or skip (reject)
-    resumed_result = await engine.resume(paused_state, execute_tool=True)  # approve
-    # resumed_result = await engine.resume(paused_state, execute_tool=False)  # reject
+    await graph.resume(execute_tool=True)  # approve
+    # await graph.resume(execute_tool=False)  # reject
 
 # Check if paused after execution
-elif paused_state.is_paused and paused_state.paused_after_execution:
+elif graph.state.is_paused and graph.state.paused_after_execution:
     print("Paused after execution")
-    print(f"Tool: {paused_state.paused_tool_name}")
-    print(f"Result: {paused_state.paused_tool_result.result}")
+    print(f"Tool: {graph.state.paused_tool_name}")
+    print(f"Result: {graph.state.paused_tool_result.result}")
 
     # Resume execution with the existing result
-    resumed_result = await engine.resume(paused_state, execute_tool=True)
+    await graph.resume(execute_tool=True)
 ```
 
 ### PostgreSQL Checkpoint with Tool Pauses
@@ -854,7 +850,7 @@ graph.add_edge(START, node.name)
 graph.add_edge(node.name, END)
 
 # Run the graph - it will pause when a tool with pause flag is triggered
-result = await engine.execute(initial_state)
+await graph.execute(initial_state)
 chain_id = graph.chain_id  # Store this to load checkpoint later
 
 # In a separate session or process, load the paused state
@@ -873,6 +869,5 @@ new_graph.load_from_checkpoint(chain_id)
 # Check if graph is paused
 if new_graph.state.is_paused:
     # Resume execution from the paused state
-    new_engine = ToolEngine(new_graph)
-    resumed_result = await new_engine.resume(new_graph.state, execute_tool=True)  # approve
+    await new_graph.resume(execute_tool=True)  # approve
 ```

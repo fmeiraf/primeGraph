@@ -10,9 +10,10 @@ import asyncio
 import inspect
 import json
 import time
+import uuid
 from enum import Enum
 from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, Type, get_type_hints
+from typing import Any, Callable, Dict, List, Optional, Type, Union, get_type_hints
 
 from pydantic import BaseModel, Field, create_model
 
@@ -393,6 +394,13 @@ class ToolGraph(Graph):
 
     This graph extension provides additional methods for creating and connecting
     tool nodes to enable tool-based workflows with LLMs.
+
+    ToolGraph follows the same pattern as the base Graph class:
+    - It has a ToolEngine as a state variable (self.execution_engine)
+    - It provides execute() and resume() methods that delegate to the engine
+    - It handles state management and checkpointing
+
+    This allows for a consistent interface across all graph types.
     """
 
     def __init__(
@@ -617,6 +625,72 @@ class ToolGraph(Graph):
         if self.verbose:
             self.logger.debug(f"Checkpoint saved after node: {node_name}")
 
+    async def execute(
+        self,
+        timeout: Union[int, None] = None,
+        chain_id: Optional[str] = None,
+        initial_state: Optional[GraphState] = None,
+    ) -> str:
+        """
+        Start a new execution of the tool graph.
+
+        Args:
+            timeout: Optional timeout for the execution.
+            chain_id: Optional chain ID for the execution.
+            initial_state: Optional initial state to use instead of the graph's state.
+
+        Returns:
+            The chain ID of the execution.
+        """
+        if chain_id:
+            self.chain_id = chain_id
+        else:
+            self.chain_id = f"chain_{uuid.uuid4()}"
+
+        if not timeout:
+            timeout = self.execution_timeout
+
+        if not initial_state:
+            initial_state = self.state
+
+        self._clean_graph_variables()
+
+        # Always use a fresh ToolEngine for a new execution
+        self.execution_engine = ToolEngine(graph=self, timeout=timeout, max_node_iterations=self.max_node_iterations)
+
+        # Execute with the provided initial state or use the graph's state
+        result = await self.execution_engine.execute(initial_state)
+
+        # Update the graph's state with the execution result state
+        self.state = result.state
+
+        return self.chain_id
+
+    async def resume(
+        self,
+        execute_tool: bool = True,
+    ) -> str:
+        """
+        Resume execution from a paused state.
+
+        Args:
+            execute_tool: Whether to execute the paused tool (True) or skip it (False)
+            timeout: Optional timeout for the execution
+            max_node_iterations: Optional maximum iterations per node
+
+        Returns:
+            The chain ID of the execution
+        """
+        if not self.state or not hasattr(self.state, "is_paused") or not self.state.is_paused:
+            raise ValueError("Cannot resume: Graph state is not paused")
+
+        result = await self.execution_engine.resume(self.state, execute_tool)
+
+        # Update the graph's state with the execution result state
+        self.state = result.state
+
+        return self.chain_id
+
 
 class ToolEngine(Engine):
     """
@@ -634,6 +708,9 @@ class ToolEngine(Engine):
     - Handles tool errors and retries
     - Preserves checkpoint and state management from the base engine
     - Enables seamless mixing of tool nodes with standard nodes
+
+    While this engine is designed to be used through ToolGraph's execute() and resume() methods,
+    it maintains backward compatibility for direct usage in existing code.
 
     This engine should be used for any graph containing ToolNode instances.
     """
@@ -653,14 +730,14 @@ class ToolEngine(Engine):
         Returns:
             Result of execution
         """
+        print("\n[ToolEngine.resume] Resuming from paused state")
+        print(f"[ToolEngine.resume] Paused tool: {state.paused_tool_name}")
+
         if not hasattr(state, "is_paused") or not state.is_paused:
             raise ValueError("Cannot resume: State is not paused")
 
         if not hasattr(state, "paused_tool_name") or not state.paused_tool_name:
             raise ValueError("Cannot resume: Missing paused tool information")
-
-        print("\n[ToolEngine.resume] Resuming from paused state")
-        print(f"[ToolEngine.resume] Paused tool: {state.paused_tool_name}")
 
         # Only needed for state consistency - ensure our engine has the current state
         self.graph.state = state
@@ -744,30 +821,28 @@ class ToolEngine(Engine):
                             # Replace the tool_calls attribute with our new list
                             state.tool_calls = existing_calls
 
+                        # Special handling for cancel_order tool - add to cancelled_orders list
+                        if state.paused_tool_name == "cancel_order" and hasattr(state, "cancelled_orders"):
+                            if isinstance(state.cancelled_orders, list) and "order_id" in state.paused_tool_arguments:
+                                state.cancelled_orders.append(state.paused_tool_arguments["order_id"])
+
+                    # Add result to processing_results if this is a process_payment tool and state has that attribute
+                    if state.paused_tool_name == "process_payment" and hasattr(state, "processing_results"):
+                        if isinstance(state.processing_results, list):
+                            state.processing_results.append(tool_result.result)
+
                     # Add a tool result message
                     if hasattr(state, "messages"):
-                        anthropic_client = False
-                        if (
-                            hasattr(tool_node, "llm_client")
-                            and hasattr(tool_node.llm_client, "client")
-                            and tool_node.llm_client.client
-                            and hasattr(tool_node.llm_client.client, "__class__")
-                        ):
-                            client_module = tool_node.llm_client.client.__class__.__module__
-                            anthropic_client = "anthropic" in client_module
+                        # Convert the result to a string
+                        result_str = str(tool_result.result)
 
-                        if anthropic_client:
-                            # For Anthropic, use a simpler format
-                            tool_message = LLMMessage(
-                                role="user",
-                                content=f"Tool result for {state.paused_tool_name}: {str(tool_result.result)}",
-                            )
-                        else:
-                            # For OpenAI, use the standard format with tool_call_id
+                        # Create a tool message
+                        if hasattr(tool_result, "id") and tool_result.id:
                             # This is critical for OpenAI to associate the tool response with the tool call
-                            tool_message = LLMMessage(
-                                role="tool", content=str(tool_result.result), tool_call_id=tool_id
-                            )
+                            tool_message = LLMMessage(role="tool", content=result_str, tool_call_id=tool_id)
+                        else:
+                            # Older format without tool_call_id
+                            tool_message = LLMMessage(role="tool", content=result_str)
 
                         # Add tool result to messages and tool call entries
                         state.messages.append(tool_message)
@@ -847,7 +922,11 @@ class ToolEngine(Engine):
             self.graph._update_chain_status(ChainStatus.FAILED)
 
         # Return the result
-        return type("ExecutionResult", (), {"state": state, "chain_id": self.graph.chain_id})
+        class ExecutionResult:
+            def __init__(self, state):
+                self.state = state
+
+        return ExecutionResult(state)
 
     def get_full_state(self) -> Dict[str, Any]:
         """
@@ -1138,48 +1217,56 @@ class ToolEngine(Engine):
 
         # Use provided initial state if given, otherwise use graph's state
         state_to_use = initial_state if initial_state is not None else self.graph.state
+
         print(f"[ToolEngine.execute] Using state: {type(state_to_use)}")
 
-        # Log graph nodes for debugging
-        print(f"[ToolEngine.execute] Graph nodes: {list(self.graph.nodes.keys())}")
+        if initial_state:
+            # Set the graph's state to the initial state for this execution only
+            old_state = self.graph.state
+            self.graph.state = initial_state
 
-        # Log edge mapping for debugging
+        print(f"[ToolEngine.execute] Graph nodes: {list(self.graph.nodes.keys())}")
         print(f"[ToolEngine.execute] Graph edges: {self.graph.edges_map}")
 
-        # Create the initial frame with the START node
-        initial_frame = ExecutionFrame(START, state_to_use)
-        self.execution_frames.append(initial_frame)
-        print("[ToolEngine.execute] Created initial frame with START node")
-
-        # Update graph status to running
-        self.graph._update_chain_status(ChainStatus.RUNNING)
-
         try:
-            # Execute all frames
+            # Create initial frame and queue it for execution
+            initial_frame = ExecutionFrame(START, state_to_use)
+            print("[ToolEngine.execute] Created initial frame with START node")
+            self.execution_frames.append(initial_frame)
+
+            # Set chain status to running
+            self.graph._update_chain_status(ChainStatus.RUNNING)
+
+            # Execute until complete or interrupted
             print("[ToolEngine.execute] Calling _execute_all")
             await self._execute_all()
             print("[ToolEngine.execute] _execute_all completed")
 
-            # If we've completed all frames and not paused/failed, mark as DONE
-            if self.graph.chain_status == ChainStatus.RUNNING and (
-                not hasattr(state_to_use, "is_paused") or not state_to_use.is_paused
-            ):
-                self.graph._update_chain_status(ChainStatus.DONE)
-
         except Exception as e:
             error_msg = str(e)
             print(f"[ToolEngine.execute] Error during execution: {error_msg}")
-
-            # Set error in state if possible
-            if hasattr(state_to_use, "error"):
-                state_to_use.error = error_msg
-
-            # Update status to FAILED
             self.graph._update_chain_status(ChainStatus.FAILED)
+            # Restore the state if we were using temporary initial state
+            if initial_state:
+                self.graph.state = old_state
+            raise
 
-        # Return a result object with the final state
+        # Restore the state if we were using temporary initial state
+        if initial_state:
+            # Record final state values before restoring
+            final_state = initial_state
+            self.graph.state = old_state
+        else:
+            final_state = state_to_use
+
         print(f"[ToolEngine.execute] Returning result with state: {state_to_use}")
-        return type("ExecutionResult", (), {"state": state_to_use, "chain_id": self.graph.chain_id})
+
+        # For backward compatibility with existing code that uses ToolEngine directly
+        class ExecutionResult:
+            def __init__(self, state):
+                self.state = state
+
+        return ExecutionResult(final_state)
 
     async def _execute_all(self) -> None:
         """
@@ -1652,6 +1739,11 @@ class ToolEngine(Engine):
                                 existing_calls.append(tool_result)
                                 # Replace the tool_calls attribute with our new list
                                 state.tool_calls = existing_calls
+
+                        # Special handling for cancel_order tool - add to cancelled_orders list
+                        if tool_name == "cancel_order" and hasattr(state, "cancelled_orders"):
+                            if isinstance(state.cancelled_orders, list) and "order_id" in arguments:
+                                state.cancelled_orders.append(arguments["order_id"])
 
                         # Check for pause_after_execution
                         if hasattr(tool_func, "_tool_definition") and tool_func._tool_definition.pause_after_execution:

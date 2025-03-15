@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.6.0] - 2025-03-15
+
+### Added
+
+- N/A
+
+### Changed
+
+- Moved engine execution to run inside the ToolGraph class as we currently have with Graph, for consistency and easy of use.
+
+### Fixed
+
+- N/A
+
 # [1.5.0] - 2025-03-15
 
 ### Added

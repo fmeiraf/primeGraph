@@ -18,8 +18,8 @@ from rich import print as rprint
 from primeGraph import END, START
 from primeGraph.buffer.factory import LastValue
 from primeGraph.graph.llm_clients import LLMClientFactory, Provider
-from primeGraph.graph.llm_tools import (LLMMessage, ToolEngine, ToolGraph,
-                                        ToolLoopOptions, ToolState, tool)
+from primeGraph.graph.llm_tools import (LLMMessage, ToolGraph, ToolLoopOptions,
+                                        ToolState, tool)
 
 # Load environment variables for API keys
 load_dotenv()
@@ -213,9 +213,6 @@ async def main():
     graph.add_edge(START, tool_node.name)
     graph.add_edge(tool_node.name, END)
     
-    # Create the engine
-    engine = ToolEngine(graph)
-    
     # Set up initial messages in the state
     initial_state = CustomerServiceState()
     initial_state.messages = [
@@ -232,10 +229,10 @@ async def main():
     # Execute the graph
     print("\nRunning the customer service assistant...")
     print("(This will use your OpenAI API key and may incur charges)")
-    result = await engine.execute(initial_state=initial_state)
+    await graph.execute(initial_state=initial_state)
     
     # Access the final state
-    final_state = result.state
+    final_state = graph.state
 
     rprint(final_state)
     
@@ -248,31 +245,7 @@ async def main():
         print(f"\nTool Call {i+1}:")
         print(f"  Tool: {tool_call.tool_name}")
         print(f"  Arguments: {json.dumps(tool_call.arguments, indent=2)}")
-        print(f"  Result: {json.dumps(tool_call.result if tool_call.success else str(tool_call.error), indent=2)}")
-        print(f"  Success: {tool_call.success}")
-        
-    print("\n=== Conversation ===")
-    for i, message in enumerate(final_state.messages):
-        print(f"\n[{message.role}]:")
-        print(message.content)
-    
-    # Example of how to access state data
-    if hasattr(final_state, "customer_data") and final_state.customer_data is not None:
-        if hasattr(final_state.customer_data, "get") and callable(final_state.customer_data.get):
-            customer_data = final_state.customer_data.get(None)  # Pass None as default argument
-            if customer_data:
-                print("\n=== Customer Data ===")
-                print(json.dumps(customer_data, indent=2))
-    
-    if hasattr(final_state, "cancelled_orders") and final_state.cancelled_orders:
-        cancelled_orders = final_state.cancelled_orders
-        if hasattr(cancelled_orders, "get") and callable(cancelled_orders.get):
-            cancelled_orders = cancelled_orders.get(None)  # Pass None as default argument
-            
-        if cancelled_orders:
-            print("\n=== Cancelled Orders ===")
-            for order in cancelled_orders:
-                print(f"- {order}")
+        print(f"  Result: {json.dumps(tool_call.result, indent=2) if tool_call.result else 'N/A'}")
 
 
 if __name__ == "__main__":
