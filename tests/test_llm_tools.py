@@ -561,6 +561,10 @@ async def test_openai_cancel_orders(openai_tool_graph):
     # Check state
     final_state = result.state
     
+    # Check if there was an API quota error
+    if final_state.error and "insufficient_quota" in final_state.error:
+        pytest.skip("OpenAI API quota exceeded, skipping test")
+    
     # Verify tool call types are as expected 
     tool_names = [call.tool_name for call in final_state.tool_calls]
     assert len(tool_names) >= 1  # Should make at least one tool call
@@ -675,6 +679,10 @@ async def test_openai_order_query(openai_client, customer_tools):
     
     # Check state
     final_state = result.state
+    
+    # Check if there was an API quota error
+    if final_state.error and "insufficient_quota" in final_state.error:
+        pytest.skip("OpenAI API quota exceeded, skipping test")
     
     # Check if the LLM made any tool calls
     tool_names = [call.tool_name for call in final_state.tool_calls]

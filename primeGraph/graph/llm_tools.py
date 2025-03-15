@@ -971,7 +971,19 @@ class ToolEngine(Engine):
             if hasattr(self.graph.state, "paused_after_execution") and "paused_after_execution" in saved_state:
                 self.graph.state.paused_after_execution = saved_state["paused_after_execution"]
             if hasattr(self.graph.state, "paused_tool_result") and "paused_tool_result" in saved_state:
-                self.graph.state.paused_tool_result = saved_state["paused_tool_result"]
+                # Convert dict to ToolCallLog if needed
+                if (
+                    isinstance(saved_state["paused_tool_result"], dict)
+                    and "id" in saved_state["paused_tool_result"]
+                    and "tool_name" in saved_state["paused_tool_result"]
+                ):
+                    try:
+                        self.graph.state.paused_tool_result = ToolCallLog(**saved_state["paused_tool_result"])
+                    except Exception as e:
+                        print(f"[ToolEngine.load_full_state] Error converting paused_tool_result: {str(e)}")
+                        self.graph.state.paused_tool_result = saved_state["paused_tool_result"]
+                else:
+                    self.graph.state.paused_tool_result = saved_state["paused_tool_result"]
 
             # Check for pause-related attributes in graph_pause_state structure
             # This handles the new format introduced with this update
@@ -994,7 +1006,21 @@ class ToolEngine(Engine):
                 if hasattr(self.graph.state, "paused_after_execution") and "paused_after_execution" in pause_state:
                     self.graph.state.paused_after_execution = pause_state["paused_after_execution"]
                 if hasattr(self.graph.state, "paused_tool_result") and "paused_tool_result" in pause_state:
-                    self.graph.state.paused_tool_result = pause_state["paused_tool_result"]
+                    # Convert dict to ToolCallLog if needed
+                    if (
+                        isinstance(pause_state["paused_tool_result"], dict)
+                        and "id" in pause_state["paused_tool_result"]
+                        and "tool_name" in pause_state["paused_tool_result"]
+                    ):
+                        try:
+                            self.graph.state.paused_tool_result = ToolCallLog(**pause_state["paused_tool_result"])
+                        except Exception as e:
+                            print(
+                                f"[ToolEngine.load_full_state] Error converting paused_tool_result from pause_state: {str(e)}"
+                            )
+                            self.graph.state.paused_tool_result = pause_state["paused_tool_result"]
+                    else:
+                        self.graph.state.paused_tool_result = pause_state["paused_tool_result"]
 
             # Restore tool_calls and messages history
             if hasattr(self.graph.state, "tool_calls") and "tool_state_tool_calls" in saved_state:
