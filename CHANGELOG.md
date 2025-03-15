@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.5.0] - 2025-03-15
+
+### Added
+
+- Added proper ChainStatus synchronization with tool pause states in ToolGraph and ToolEngine
+- Enhanced ChainStatus handling in ToolEngine's execute, resume, and \_execute_all methods
+- Added safeguards to ensure ToolState.is_paused flag and ChainStatus are always consistent
+
+### Changed
+
+- Updated ToolEngine.resume to properly set ChainStatus.FAILED on error
+- Improved ChainStatus state management in ToolEngine execution and checkpointing
+
+### Fixed
+
+- Fixed issue where ChainStatus wasn't properly updated to PAUSE when tools paused execution
+- Fixed state restoration to ensure ChainStatus matches is_paused state after loading from checkpoint
+
 # [1.4.0] - 2025-03-14
 
 ### Added

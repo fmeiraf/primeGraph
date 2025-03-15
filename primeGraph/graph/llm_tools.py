@@ -843,6 +843,9 @@ class ToolEngine(Engine):
             if hasattr(state, "error"):
                 state.error = error
 
+            # Update chain status to FAILED on error
+            self.graph._update_chain_status(ChainStatus.FAILED)
+
         # Return the result
         return type("ExecutionResult", (), {"state": state, "chain_id": self.graph.chain_id})
 
@@ -936,6 +939,8 @@ class ToolEngine(Engine):
                     f"[ToolEngine.get_full_state] Restored pause state: paused={self.graph.state.is_paused}, "
                     f"tool={self.graph.state.paused_tool_name}"
                 )
+                # Ensure chain status is set to PAUSE
+                self.graph._update_chain_status(ChainStatus.PAUSE)
             else:
                 print("[ToolEngine.get_full_state] Restored tool state (not paused)")
 
@@ -1112,6 +1117,8 @@ class ToolEngine(Engine):
                     f"[ToolEngine.load_full_state] Restored pause state: paused={self.graph.state.is_paused}, "
                     f"tool={self.graph.state.paused_tool_name}"
                 )
+                # Ensure chain status is set to PAUSE
+                self.graph._update_chain_status(ChainStatus.PAUSE)
             else:
                 print("[ToolEngine.load_full_state] Restored tool state (not paused)")
 
@@ -1147,10 +1154,28 @@ class ToolEngine(Engine):
         # Update graph status to running
         self.graph._update_chain_status(ChainStatus.RUNNING)
 
-        # Execute all frames
-        print("[ToolEngine.execute] Calling _execute_all")
-        await self._execute_all()
-        print("[ToolEngine.execute] _execute_all completed")
+        try:
+            # Execute all frames
+            print("[ToolEngine.execute] Calling _execute_all")
+            await self._execute_all()
+            print("[ToolEngine.execute] _execute_all completed")
+
+            # If we've completed all frames and not paused/failed, mark as DONE
+            if self.graph.chain_status == ChainStatus.RUNNING and (
+                not hasattr(state_to_use, "is_paused") or not state_to_use.is_paused
+            ):
+                self.graph._update_chain_status(ChainStatus.DONE)
+
+        except Exception as e:
+            error_msg = str(e)
+            print(f"[ToolEngine.execute] Error during execution: {error_msg}")
+
+            # Set error in state if possible
+            if hasattr(state_to_use, "error"):
+                state_to_use.error = error_msg
+
+            # Update status to FAILED
+            self.graph._update_chain_status(ChainStatus.FAILED)
 
         # Return a result object with the final state
         print(f"[ToolEngine.execute] Returning result with state: {state_to_use}")
@@ -1174,6 +1199,12 @@ class ToolEngine(Engine):
                 if frame is not None:
                     print(f"[ToolEngine._execute_all] Executing single frame: {frame.node_id}")
                     await self._execute_frame(frame)
+
+            # Check if any frame has paused execution - if so, break the loop
+            if hasattr(self.graph, "state") and hasattr(self.graph.state, "is_paused") and self.graph.state.is_paused:
+                print("[ToolEngine._execute_all] Detected paused state, stopping execution")
+                self.graph._update_chain_status(ChainStatus.PAUSE)
+                break
 
         print(f"[ToolEngine._execute_all] Execution complete, frames remaining: {len(self.execution_frames)}")
 
@@ -1576,6 +1607,9 @@ class ToolEngine(Engine):
                             state.paused_after_execution = False
                             state.paused_tool_result = None
 
+                            # Update chain status to PAUSE
+                            self.graph._update_chain_status(ChainStatus.PAUSE)
+
                             # CRITICAL: Save pause state to checkpoint
                             self._capture_state_checkpoint(node_name, state)
 
@@ -1628,6 +1662,9 @@ class ToolEngine(Engine):
                             state.paused_tool_arguments = arguments
                             state.paused_after_execution = True
                             state.paused_tool_result = tool_result
+
+                            # Update chain status to PAUSE
+                            self.graph._update_chain_status(ChainStatus.PAUSE)
 
                             # CRITICAL: Save pause state to checkpoint
                             self._capture_state_checkpoint(node_name, state)
@@ -1804,6 +1841,11 @@ class ToolEngine(Engine):
         """
         # Make sure this state is the current graph state
         self.graph.state = state
+
+        # Ensure chain status is consistent with is_paused
+        if hasattr(state, "is_paused") and state.is_paused and self.graph.chain_status != ChainStatus.PAUSE:
+            print("[ToolEngine._capture_state_checkpoint] Setting chain status to PAUSE for paused state")
+            self.graph._update_chain_status(ChainStatus.PAUSE)
 
         # Get the full state and save checkpoint
         engine_state = self.get_full_state()
