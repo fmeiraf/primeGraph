@@ -203,10 +203,7 @@ async def test_on_message_callback_with_mock(customer_tools, mock_llm_client, me
     ]
     
     # Execute the graph
-    result = await engine.execute(initial_state=initial_state)
-    
-    # Check state
-    final_state = result.state
+    await engine.execute(initial_state=initial_state)
     
     # Verify the callback was called for all messages (assistant, tool, and final)
     assert len(message_collector_callback.messages) == 3
@@ -278,10 +275,9 @@ async def test_on_message_callback_with_openai(customer_tools, message_collector
     ]
     
     # Execute the graph
-    result = await engine.execute(initial_state=initial_state)
+    await engine.execute(initial_state=initial_state)
     
-    # Check state
-    final_state = result.state
+    
     
     # Verify the callback was called at least once
     assert len(message_collector_callback.messages) >= 1

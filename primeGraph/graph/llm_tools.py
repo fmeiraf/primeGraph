@@ -1016,7 +1016,8 @@ class ToolEngine(Engine):
                             self.graph.state.paused_tool_result = ToolCallLog(**pause_state["paused_tool_result"])
                         except Exception as e:
                             print(
-                                f"[ToolEngine.load_full_state] Error converting paused_tool_result from pause_state: {str(e)}"
+                                f"[ToolEngine.load_full_state] Error converting \
+                                    paused_tool_result from pause_state: {str(e)}"
                             )
                             self.graph.state.paused_tool_result = pause_state["paused_tool_result"]
                     else:
@@ -1025,7 +1026,8 @@ class ToolEngine(Engine):
             # Restore tool_calls and messages history
             if hasattr(self.graph.state, "tool_calls") and "tool_state_tool_calls" in saved_state:
                 print(
-                    f"[ToolEngine.load_full_state] Restoring tool_calls from saved_state, found {len(saved_state['tool_state_tool_calls'])} entries"
+                    f"[ToolEngine.load_full_state] Restoring tool_calls from saved_state, \
+                        found {len(saved_state['tool_state_tool_calls'])} entries"
                 )
                 # Process each tool call to ensure it's a ToolCallLog object
                 tool_calls = []
@@ -1047,7 +1049,8 @@ class ToolEngine(Engine):
                 self.graph.state.tool_calls = tool_calls
             if hasattr(self.graph.state, "messages") and "tool_state_messages" in saved_state:
                 print(
-                    f"[ToolEngine.load_full_state] Restoring messages from saved_state, found {len(saved_state['tool_state_messages'])} entries"
+                    f"[ToolEngine.load_full_state] Restoring messages from saved_state, \
+                        found {len(saved_state['tool_state_messages'])} entries"
                 )
                 # Process each message to ensure it's an LLMMessage object
                 messages = []
@@ -1462,8 +1465,9 @@ class ToolEngine(Engine):
                                 for tc in message.tool_calls:
                                     try:
                                         args = json.loads(tc.function.arguments)
-                                    except:
+                                    except Exception as e:
                                         args = {"input": tc.function.arguments}
+
                                     tool_calls.append({"id": tc.id, "name": tc.function.name, "arguments": args})
                         elif hasattr(response, "content") and isinstance(response.content, list):
                             for block in response.content:
@@ -1490,7 +1494,7 @@ class ToolEngine(Engine):
                         and "openai" in node.llm_client.client.__class__.__module__
                     ):
                         # Extract tool_calls from the response
-                        openai_tool_calls = []
+
                         if hasattr(response, "choices") and response.choices:
                             message = response.choices[0].message
                             if hasattr(message, "tool_calls") and message.tool_calls:

@@ -500,12 +500,15 @@ class Engine:
             saved_state: The state dictionary from a checkpoint
         """
         # Get the state class
-        state_class = type(self.graph.state)
+        state_class = type(self.graph.state) if self.graph.state is not None else None
 
         # Extract default values from the current state for required fields
-        default_values = {}
+        default_values: Dict[str, Any] = {}
 
         # Handle specific known classes with required fields
+        if state_class is None:
+            print("[Engine.load_full_state] Cannot initialize state: state is None")
+            return
         if state_class.__name__ == "StateForTestWithHistory":
             # This class requires execution_order to be initialized
             default_values["execution_order"] = []
@@ -515,12 +518,17 @@ class Engine:
                 # Check if it's a History field - which needs to be initialized with an empty list
                 if (
                     hasattr(field_info, "__origin__")
-                    and field_info.__origin__ == list
+                    and isinstance(field_info.__origin__, list)
                     or str(field_info).startswith("History[")
                 ):
                     default_values[field_name] = []
 
         # Create a new state object of the same class with default values
+        if state_class is type(None):
+            # Handle case where state_class is NoneType
+            print("[Engine.load_full_state] Cannot initialize state: state is None")
+            return
+
         new_state = state_class(**default_values)
 
         if not hasattr(saved_state, "items"):
