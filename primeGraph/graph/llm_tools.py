@@ -638,7 +638,7 @@ class ToolEngine(Engine):
     This engine should be used for any graph containing ToolNode instances.
     """
 
-    async def resume_from_pause(self, state: GraphState, execute_tool: bool = True) -> Any:
+    async def resume(self, state: GraphState, execute_tool: bool = True) -> Any:
         """
         Resume execution from a paused state.
 
@@ -659,8 +659,8 @@ class ToolEngine(Engine):
         if not hasattr(state, "paused_tool_name") or not state.paused_tool_name:
             raise ValueError("Cannot resume: Missing paused tool information")
 
-        print("\n[ToolEngine.resume_from_pause] Resuming from paused state")
-        print(f"[ToolEngine.resume_from_pause] Paused tool: {state.paused_tool_name}")
+        print("\n[ToolEngine.resume] Resuming from paused state")
+        print(f"[ToolEngine.resume] Paused tool: {state.paused_tool_name}")
 
         # Only needed for state consistency - ensure our engine has the current state
         self.graph.state = state
@@ -682,10 +682,8 @@ class ToolEngine(Engine):
             if state.paused_after_execution:
                 # For pause_after_execution, we've already executed the tool
                 # and just need to continue with the next step
-                print(
-                    f"[ToolEngine.resume_from_pause] Tool {state.paused_tool_name} already executed (pause_after_execution)"
-                )
-                print("[ToolEngine.resume_from_pause] Continuing with next step...")
+                print(f"[ToolEngine.resume] Tool {state.paused_tool_name} already executed (pause_after_execution)")
+                print("[ToolEngine.resume] Continuing with next step...")
 
                 # Clear the pause state
                 state.is_paused = False
@@ -702,7 +700,7 @@ class ToolEngine(Engine):
                     )
             else:
                 # For pause_before_execution, we need to execute the tool
-                print(f"[ToolEngine.resume_from_pause] Executing tool: {state.paused_tool_name}")
+                print(f"[ToolEngine.resume] Executing tool: {state.paused_tool_name}")
 
                 # Find the tool
                 tool_func = tool_node.find_tool_by_name(state.paused_tool_name)
@@ -774,9 +772,9 @@ class ToolEngine(Engine):
                         # Add tool result to messages and tool call entries
                         state.messages.append(tool_message)
 
-                    print("[ToolEngine.resume_from_pause] Tool execution successful")
+                    print("[ToolEngine.resume] Tool execution successful")
                 except Exception as e:
-                    print(f"[ToolEngine.resume_from_pause] Tool execution failed: {str(e)}")
+                    print(f"[ToolEngine.resume] Tool execution failed: {str(e)}")
                     # Add an error message
                     if hasattr(state, "messages"):
                         state.messages.append(
@@ -796,7 +794,7 @@ class ToolEngine(Engine):
                 state.paused_tool_result = None
         else:
             # Skip tool execution
-            print("[ToolEngine.resume_from_pause] Skipping tool execution")
+            print("[ToolEngine.resume] Skipping tool execution")
 
             # Add a system message about skipping
             if hasattr(state, "messages"):
@@ -813,7 +811,7 @@ class ToolEngine(Engine):
             state.paused_tool_result = None
 
         # Continue execution with the identified tool node
-        print(f"[ToolEngine.resume_from_pause] Continuing with execution of node: {tool_node_name}")
+        print(f"[ToolEngine.resume] Continuing with execution of node: {tool_node_name}")
         self.graph._update_chain_status(ChainStatus.RUNNING)
 
         # Execute the node loop
@@ -822,7 +820,7 @@ class ToolEngine(Engine):
             frame = ExecutionFrame(tool_node_name, state)
 
             # Execute the tool node directly
-            print(f"[ToolEngine.resume_from_pause] Executing tool node: {tool_node_name}")
+            print(f"[ToolEngine.resume] Executing tool node: {tool_node_name}")
             await self._execute_tool_node(frame)
 
             # Mark as complete after tool execution
@@ -838,10 +836,10 @@ class ToolEngine(Engine):
                             state.final_output = msg.content
                             break
 
-            print("[ToolEngine.resume_from_pause] Execution completed successfully")
+            print("[ToolEngine.resume] Execution completed successfully")
         except Exception as e:
             error = str(e)
-            print(f"[ToolEngine.resume_from_pause] Error in node execution: {error}")
+            print(f"[ToolEngine.resume] Error in node execution: {error}")
             if hasattr(state, "error"):
                 state.error = error
 

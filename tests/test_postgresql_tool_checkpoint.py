@@ -350,7 +350,7 @@ async def test_checkpoint_pause_before_execution(postgres_storage, tool_tools):
     assert new_graph.state.paused_tool_arguments["order_id"] == "O2"
     
     # Resume execution
-    result = await new_engine.resume_from_pause(new_graph.state, execute_tool=True)
+    result = await new_engine.resume(new_graph.state, execute_tool=True)
     
     # Get final state
     final_state = result.state
@@ -462,7 +462,7 @@ async def test_checkpoint_pause_after_execution(postgres_storage, tool_tools):
     assert new_graph.state.paused_tool_result is not None
     
     # Resume execution
-    result = await new_engine.resume_from_pause(new_graph.state, execute_tool=True)
+    result = await new_engine.resume(new_graph.state, execute_tool=True)
     
     # Get final state
     final_state = result.state
@@ -561,8 +561,8 @@ async def test_checkpoint_reject_execution(postgres_storage, tool_tools):
     # Load the checkpoint
     new_graph.load_from_checkpoint(chain_id)
     
-    # Resume execution with execute_tool=False to reject the tool execution
-    result = await new_engine.resume_from_pause(new_graph.state, execute_tool=False)
+    # Resume execution and reject the tool
+    result = await new_engine.resume(new_graph.state, execute_tool=False)
     
     # Get final state
     final_state = result.state

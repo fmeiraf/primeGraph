@@ -804,19 +804,19 @@ if paused_state.is_paused and not paused_state.paused_after_execution:
     print("Paused before execution")
     print(f"Tool: {paused_state.paused_tool_name}")
     print(f"Arguments: {paused_state.paused_tool_arguments}")
-    
+
     # Resume with execution (approve) or skip (reject)
-    resumed_result = await engine.resume_from_pause(paused_state, execute_tool=True)  # approve
-    # resumed_result = await engine.resume_from_pause(paused_state, execute_tool=False)  # reject
+    resumed_result = await engine.resume(paused_state, execute_tool=True)  # approve
+    # resumed_result = await engine.resume(paused_state, execute_tool=False)  # reject
 
 # Check if paused after execution
 elif paused_state.is_paused and paused_state.paused_after_execution:
     print("Paused after execution")
     print(f"Tool: {paused_state.paused_tool_name}")
     print(f"Result: {paused_state.paused_tool_result.result}")
-    
+
     # Resume execution with the existing result
-    resumed_result = await engine.resume_from_pause(paused_state, execute_tool=True)
+    resumed_result = await engine.resume(paused_state, execute_tool=True)
 ```
 
 ### PostgreSQL Checkpoint with Tool Pauses
@@ -837,7 +837,7 @@ postgres_storage = PostgreSQLStorage.from_config(
 
 # Create a tool graph with PostgreSQL storage
 graph = ToolGraph(
-    "payment_processing", 
+    "payment_processing",
     state_class=ToolState,
     checkpoint_storage=postgres_storage  # Use PostgreSQL for checkpoints
 )
@@ -859,7 +859,7 @@ chain_id = graph.chain_id  # Store this to load checkpoint later
 
 # In a separate session or process, load the paused state
 new_graph = ToolGraph(
-    "payment_processing", 
+    "payment_processing",
     state_class=ToolState,
     checkpoint_storage=postgres_storage
 )
@@ -874,13 +874,5 @@ new_graph.load_from_checkpoint(chain_id)
 if new_graph.state.is_paused:
     # Resume execution from the paused state
     new_engine = ToolEngine(new_graph)
-    resumed_result = await new_engine.resume_from_pause(new_graph.state, execute_tool=True)  # approve
+    resumed_result = await new_engine.resume(new_graph.state, execute_tool=True)  # approve
 ```
-
-## Roadmap
-
-- [ ] Add streaming support
-- [ ] Create documentation
-- [x] Add tools for agentic workflows
-- [ ] Add inter node ephemeral state for short term interactions
-- [ ] Add persistence support for other databases

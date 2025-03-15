@@ -803,7 +803,7 @@ async def test_pause_after_execution(tool_graph_with_account_update):
     assert state.paused_tool_result.success is True
     
     # Now resume execution
-    result = await engine.resume_from_pause(state, execute_tool=True)
+    result = await engine.resume(state, execute_tool=True)
     final_state = result.state
     
     # The execution should be complete

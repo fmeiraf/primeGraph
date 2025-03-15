@@ -330,3 +330,9 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - N/A
+
+## Unreleased
+
+### Changes
+
+- Renamed the `resume_from_pause` method to `resume` in the `ToolEngine` class to standardize method naming conventions
