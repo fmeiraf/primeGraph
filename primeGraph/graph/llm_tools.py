@@ -120,7 +120,8 @@ class ToolState(GraphState):
     final_output: LastValue[Optional[str]] = None  # type: ignore
     error: LastValue[Optional[str]] = None  # type: ignore
     current_trace: LastValue[Optional[Dict[str, Any]]] = None  # type: ignore
-    raw_response_history: History[Any] = Field(default_factory=lambda: [])  # type: ignore
+    # Mark raw_response_history as excluded from serialization - it often contains non-serializable objects
+    raw_response_history: History[Any] = Field(default_factory=lambda: [], exclude=True)  # type: ignore
     is_paused: LastValue[bool] = False  # type: ignore
     paused_tool_id: LastValue[Optional[str]] = None  # type: ignore
     paused_tool_name: LastValue[Optional[str]] = None  # type: ignore
@@ -1565,7 +1566,33 @@ class ToolEngine(Engine):
 
                 # Store raw response for debugging/logging if needed
                 if hasattr(state, "raw_response_history"):
-                    state.raw_response_history.append(response)
+                    # Convert the response to a safely serializable format
+                    try:
+                        # Extract only the basic properties that we need and ensure they're serializable
+                        serializable_response = {
+                            "timestamp": time.time(),
+                            "provider": getattr(response, "provider", "unknown"),
+                            "model": getattr(response, "model", None),
+                            "content_summary": content[:100] + "..." if len(content) > 100 else content,
+                        }
+
+                        # Add any other safely serializable properties
+                        if hasattr(response, "usage"):
+                            try:
+                                serializable_response["usage"] = (
+                                    response.usage._asdict()
+                                    if hasattr(response.usage, "_asdict")
+                                    else dict(response.usage)
+                                )
+                            except Exception:
+                                # If usage can't be converted, store a string representation
+                                serializable_response["usage"] = str(response.usage)
+
+                        state.raw_response_history.append(serializable_response)
+                    except Exception as e:
+                        # If conversion fails, store a minimal record instead of the raw response
+                        print(f"Error converting response for history: {str(e)}")
+                        state.raw_response_history.append({"timestamp": time.time(), "error": str(e)})
 
                 # Handle the assistant message
                 if is_tool_use:
@@ -1841,8 +1868,29 @@ class ToolEngine(Engine):
 
                     # Save the raw response
                     if hasattr(state, "current_trace"):
-                        state.current_trace = {"raw_response": response}
-                    buffer_updates["current_trace"] = {"raw_response": response}
+                        # Create a safely serializable trace object
+                        try:
+                            trace_data = {"timestamp": time.time(), "content": content, "is_final": True}
+
+                            # Try to extract useful serializable properties
+                            if hasattr(response, "model"):
+                                trace_data["model"] = response.model
+                            if hasattr(response, "usage") and response.usage:
+                                try:
+                                    trace_data["usage"] = (
+                                        response.usage._asdict()
+                                        if hasattr(response.usage, "_asdict")
+                                        else dict(response.usage)
+                                    )
+                                except Exception:
+                                    trace_data["usage"] = str(response.usage)
+
+                            state.current_trace = trace_data
+                        except Exception as e:
+                            print(f"Error creating trace data: {str(e)}")
+                            state.current_trace = {"error": str(e), "timestamp": time.time()}
+
+                    buffer_updates["current_trace"] = state.current_trace
                     break
             except Exception as e:
                 # Record error
@@ -1940,5 +1988,10 @@ class ToolEngine(Engine):
             self.graph._update_chain_status(ChainStatus.PAUSE)
 
         # Get the full state and save checkpoint
-        engine_state = self.get_full_state()
-        self.graph._save_checkpoint(node_name, engine_state)
+        try:
+            engine_state = self.get_full_state()
+            self.graph._save_checkpoint(node_name, engine_state)
+        except Exception as e:
+            print(f"[ToolEngine._capture_state_checkpoint] Error saving checkpoint: {str(e)}")
+            # Continue execution despite checkpoint failure
+            # This prevents serialization errors from breaking the entire workflow

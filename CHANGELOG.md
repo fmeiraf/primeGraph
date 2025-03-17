@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.6.1] - 2025-03-17
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Fixed save_checkpoint parsing errors from ToolGraph.
+
 # [1.6.0] - 2025-03-15
 
 ### Added

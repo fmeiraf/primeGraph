@@ -4,7 +4,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Package Version](https://img.shields.io/badge/package-1.5.1-blue.svg)](https://pypi.org/project/primegraph/)
+[![Package Version](https://img.shields.io/badge/package-1.6.1-blue.svg)](https://pypi.org/project/primegraph/)
 
 ---
 
