@@ -10,12 +10,13 @@ import asyncio
 import inspect
 import json
 import time
+import traceback
 import uuid
 from enum import Enum
 from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, Type, Union, get_type_hints
+from typing import Any, Callable, Dict, List, Optional, Type, Union
 
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, Field
 
 from primeGraph.buffer.factory import History, LastValue
 from primeGraph.checkpoint.base import CheckpointData, StorageBackend
@@ -137,85 +138,85 @@ def tool(
     pause_after_execution: bool = False,
 ) -> Callable:
     """
-    Decorator to mark a function as a tool available to LLMs.
+    Decorator for tool functions.
 
-    This decorator extracts type hints and parameter information from the function
-    to generate a schema that LLMs can use to call the function appropriately.
-    The decorated function can then be passed to a ToolNode for execution in
-    response to LLM requests.
+    This decorator creates a ToolDefinition for a function, which can
+    then be used by ToolNode to call the function on demand based on LLM
+    tool use requests.
 
     Args:
-        description: Description of what the tool does (shown to the LLM)
-        tool_type: Type of tool (function, action, retrieval)
-        pause_before_execution: If True, execution will pause before this tool runs,
-                                allowing for user intervention
-        pause_after_execution: If True, execution will pause after this tool runs,
-                               allowing for user verification of results
+        description: Description of what the tool does.
+        tool_type: Type of tool (function, action, retrieval).
+        pause_before_execution: Whether to pause before executing the tool.
+        pause_after_execution: Whether to pause after executing the tool.
 
-    Examples:
-        ```python
-        @tool("Get weather for a location")
-        async def get_weather(location: str, unit: str = "celsius") -> Dict:
-            # Implementation
-            return {"temperature": 22.5, "conditions": "sunny"}
-
-        @tool("Submit order to external system", pause_before_execution=True)
-        async def submit_order(order_id: str, amount: float) -> Dict:
-            # This will pause before execution, allowing user verification
-            return {"status": "submitted", "confirmation": "ABC123"}
-
-        @tool("Process payment", pause_after_execution=True)
-        async def process_payment(payment_id: str, amount: float) -> Dict:
-            # This will pause after execution, allowing result verification
-            return {"status": "processed", "transaction_id": "TX123"}
-        ```
+    Returns:
+        Decorated function with tool metadata.
     """
 
     def decorator(func: Callable) -> Callable:
-        hints = get_type_hints(func)
         sig = inspect.signature(func)
+        parameters = {}
+        required_params = []
 
-        # Create parameter schema based on type hints
-        properties = {}
-        required = []
-
-        for param_name, param in sig.parameters.items():
-            if param.name == "self" or param.name == "cls":
+        for name, param in sig.parameters.items():
+            if name == "state":
+                # Skip 'state' parameter as it's injected by the wrapper
                 continue
 
-            param_type = hints.get(param_name, Any)
-            is_required = param.default == inspect.Parameter.empty
+            param_schema: Dict[str, Any] = {"type": "string"}  # Default to string
 
-            if is_required:
-                required.append(param_name)
+            # Try to infer type from annotation
+            if param.annotation != inspect.Parameter.empty:
+                if isinstance(param.annotation, str):
+                    param_schema = {"type": "string"}
+                elif isinstance(param.annotation, int):
+                    param_schema = {"type": "integer"}
+                elif isinstance(param.annotation, float):
+                    param_schema = {"type": "number"}
+                elif isinstance(param.annotation, bool):
+                    param_schema = {"type": "boolean"}
+                elif isinstance(param.annotation, list) and isinstance(param.annotation.__args__[0], str):
+                    param_schema = {"type": "array", "items": {"type": "string"}}
+                elif isinstance(param.annotation, dict):
+                    param_schema = {"type": "object"}
+                # Add more type handling as needed
 
-            # Handle type conversions for parameters
-            if param_type in (str, int, float, bool):
-                properties[param_name] = (param_type, ... if is_required else None)
-            elif isinstance(param_type, type) and issubclass(param_type, BaseModel):
-                properties[param_name] = (param_type, ... if is_required else None)
+            # Handle default values
+            if param.default != inspect.Parameter.empty:
+                param_schema["default"] = param.default
             else:
-                properties[param_name] = (Any, ... if is_required else None)
+                required_params.append(name)
 
-        # Create schema for the tool
-        schema = {
-            "name": func.__name__,
-            "description": description,
-            "type": tool_type,
-            "parameters": properties,
-            "required_params": required,
-            "func": func,
-            "pause_before_execution": pause_before_execution,
-            "pause_after_execution": pause_after_execution,
-        }
+            parameters[name] = param_schema
 
-        # Store schema on the function
-        func._tool_definition = ToolDefinition(**schema)
+        # Create the tool definition object and attach it to the function
+        func._tool_definition = ToolDefinition(
+            name=func.__name__,
+            description=description,
+            type=tool_type,
+            parameters=parameters,
+            required_params=required_params,
+            func=func,
+            pause_before_execution=pause_before_execution,
+            pause_after_execution=pause_after_execution,
+        )
 
+        # Create a wrapper that injects the state parameter if the function supports it
         @wraps(func)
-        async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            # The actual tool execution is handled separately
-            return await func(*args, **kwargs)
+        async def wrapper(*args, state=None, **kwargs: Any) -> Any:
+            """Wrapper that injects state if the function accepts it"""
+            sig = inspect.signature(func)
+
+            if "state" in sig.parameters and state is not None:
+                # Function accepts state parameter, inject it
+                return await func(*args, state=state, **kwargs)
+            else:
+                # Function doesn't use state, call normally
+                return await func(*args, **kwargs)
+
+        # Add the tool definition to the wrapper
+        wrapper._tool_definition = func._tool_definition
 
         return wrapper
 
@@ -301,11 +302,12 @@ class ToolNode(Node):
         for tool_func in self.tools:
             tool_def = tool_func._tool_definition
 
-            # Create parameter schema
-            param_model = create_model(
-                f"{tool_def.name}Params", **{k: (v[0], v[1]) for k, v in tool_def.parameters.items()}
-            )
-            json_schema = param_model.model_json_schema()
+            # Create parameter schema for JSON schema format
+            json_schema = {"type": "object", "properties": {}, "required": tool_def.required_params}
+
+            # Add each parameter to the JSON schema
+            for param_name, param_info in tool_def.parameters.items():
+                json_schema["properties"][param_name] = param_info
 
             # Format for provider
             if provider and provider.lower() == "anthropic":
@@ -331,38 +333,34 @@ class ToolNode(Node):
                 return tool_func
         return None
 
-    async def execute_tool(self, tool_func: Callable, arguments: Dict[str, Any], tool_id: str) -> ToolCallLog:
-        """
-        Execute a tool function and record the execution.
-
-        Args:
-            tool_func: The tool function to execute
-            arguments: Arguments to pass to the tool
-            tool_id: Unique ID for this tool call
-
-        Returns:
-            ToolCallLog with the execution results
-        """
-        tool_name = tool_func._tool_definition.name
+    async def execute_tool(
+        self, tool_func: Callable, arguments: Dict[str, Any], tool_id: str, state: Optional[GraphState] = None
+    ) -> ToolCallLog:
+        """Execute a tool function with the given arguments."""
         start_time = time.time()
-        success = True
-        error = None
-        result = None
+        tool_name = getattr(tool_func, "__name__", "unknown")
 
         try:
-            # Execute the tool
-            result = await tool_func(**arguments)
+            # Check if the tool can accept a state parameter
+            sig = inspect.signature(tool_func)
+            if "state" in sig.parameters and state is not None:
+                # Pass the current state along with other arguments
+                result = await tool_func(state=state, **arguments)
+            else:
+                # Call without state
+                result = await tool_func(**arguments)
+
+            success = True
+            error = None
         except Exception as e:
+            result = None
             success = False
-            error = str(e)
-            result = f"Error: {error}"
+            error = f"Error executing tool {tool_name}: {str(e)}"
+            traceback.print_exc()
 
-        # Calculate duration
-        end_time = time.time()
-        duration_ms = (end_time - start_time) * 1000
+        duration_ms = (time.time() - start_time) * 1000
 
-        # Create log entry
-        log = ToolCallLog(
+        return ToolCallLog(
             id=tool_id,
             tool_name=tool_name,
             arguments=arguments,
@@ -372,21 +370,6 @@ class ToolNode(Node):
             duration_ms=duration_ms,
             error=error,
         )
-
-        # Call the callback if provided
-        if self.on_tool_use:
-            self.on_tool_use(
-                {
-                    "id": tool_id,
-                    "name": tool_name,
-                    "arguments": arguments,
-                    "success": success,
-                    "result": result,
-                    "error": error,
-                }
-            )
-
-        return log
 
 
 class ToolGraph(Graph):
@@ -792,7 +775,7 @@ class ToolEngine(Engine):
                 try:
                     # Execute the tool
                     tool_id = state.paused_tool_id or f"manual_execution_{int(time.time())}"
-                    tool_result = await tool_node.execute_tool(tool_func, state.paused_tool_arguments, tool_id)
+                    tool_result = await tool_node.execute_tool(tool_func, state.paused_tool_arguments, tool_id, state)
 
                     # Add the result to tool calls
                     if hasattr(state, "tool_calls"):
@@ -826,15 +809,15 @@ class ToolEngine(Engine):
                             # Replace the tool_calls attribute with our new list
                             state.tool_calls = existing_calls
 
-                        # Special handling for cancel_order tool - add to cancelled_orders list
-                        if state.paused_tool_name == "cancel_order" and hasattr(state, "cancelled_orders"):
-                            if isinstance(state.cancelled_orders, list) and "order_id" in state.paused_tool_arguments:
-                                state.cancelled_orders.append(state.paused_tool_arguments["order_id"])
+                    #     # Special handling for cancel_order tool - add to cancelled_orders list
+                    #     if state.paused_tool_name == "cancel_order" and hasattr(state, "cancelled_orders"):
+                    #         if isinstance(state.cancelled_orders, list) and "order_id" in state.paused_tool_arguments:
+                    #             state.cancelled_orders.append(state.paused_tool_arguments["order_id"])
 
-                    # Add result to processing_results if this is a process_payment tool and state has that attribute
-                    if state.paused_tool_name == "process_payment" and hasattr(state, "processing_results"):
-                        if isinstance(state.processing_results, list):
-                            state.processing_results.append(tool_result.result)
+                    # # Add result to processing_results if this is a process_payment tool and state has that attribute
+                    # if state.paused_tool_name == "process_payment" and hasattr(state, "processing_results"):
+                    #     if isinstance(state.processing_results, list):
+                    #         state.processing_results.append(tool_result.result)
 
                     # Add a tool result message
                     if hasattr(state, "messages"):
@@ -1751,7 +1734,7 @@ class ToolEngine(Engine):
                             return {"state": state}
 
                         # Execute the tool and capture the result
-                        tool_result = await node.execute_tool(tool_func, arguments, tool_id)
+                        tool_result = await node.execute_tool(tool_func, arguments, tool_id, state)
 
                         # Add to tool call history
                         if hasattr(state, "tool_calls"):

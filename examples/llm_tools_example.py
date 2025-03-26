@@ -35,12 +35,13 @@ class CustomerServiceState(ToolState):
 
 # Define tools using the @tool decorator
 @tool("Get customer information")
-async def get_customer_info(customer_id: str) -> Dict:
+async def get_customer_info(customer_id: str, state=None) -> Dict:
     """
     Get customer details by ID
     
     Args:
         customer_id: Customer identifier
+        state: Optional state object to update
         
     Returns:
         Customer information
@@ -64,16 +65,23 @@ async def get_customer_info(customer_id: str) -> Dict:
     if customer_id not in customers:
         raise ValueError(f"Customer {customer_id} not found")
     
-    return customers[customer_id]
+    customer_data = customers[customer_id]
+    
+    # Update the state directly if provided
+    if state is not None and hasattr(state, "customer_data"):
+        state.customer_data = customer_data
+    
+    return customer_data
 
 
 @tool("Get order details")
-async def get_order_details(order_id: str) -> Dict:
+async def get_order_details(order_id: str, state=None) -> Dict:
     """
     Get order details by ID
     
     Args:
         order_id: Order identifier
+        state: Optional state object to update
         
     Returns:
         Order information
@@ -109,16 +117,23 @@ async def get_order_details(order_id: str) -> Dict:
     if order_id not in orders:
         raise ValueError(f"Order {order_id} not found")
     
-    return orders[order_id]
+    order_data = orders[order_id]
+    
+    # Update the state directly if provided
+    if state is not None and hasattr(state, "order_data"):
+        state.order_data = order_data
+    
+    return order_data
 
 
 @tool("Cancel an order")
-async def cancel_order(order_id: str) -> Dict:
+async def cancel_order(order_id: str, state=None) -> Dict:
     """
     Cancel an order by ID
     
     Args:
         order_id: Order identifier
+        state: Optional state object to update
         
     Returns:
         Cancellation result
@@ -146,6 +161,11 @@ async def cancel_order(order_id: str) -> Dict:
     result = orders[order_id].copy()
     result["status"] = "cancelled"
     
+    # Update cancelled_orders in state if provided
+    if state is not None and hasattr(state, "cancelled_orders"):
+        if order_id not in state.cancelled_orders:
+            state.cancelled_orders.append(order_id)
+    
     return {
         "order_id": order_id,
         "status": "cancelled",
@@ -155,13 +175,14 @@ async def cancel_order(order_id: str) -> Dict:
 
 
 @tool("Process payment", pause_before_execution=True)
-async def process_payment(order_id: str, amount: float) -> Dict:
+async def process_payment(order_id: str, amount: float, state=None) -> Dict:
     """
     Process a payment for an order, pausing for verification
     
     Args:
         order_id: Order identifier
         amount: Payment amount
+        state: Optional state object to update
         
     Returns:
         Payment confirmation
@@ -170,12 +191,23 @@ async def process_payment(order_id: str, amount: float) -> Dict:
     # but for demonstration it just returns a confirmation
     await asyncio.sleep(0.5)  # Simulate payment processing time
     
-    return {
+    result = {
         "order_id": order_id,
         "amount": amount,
         "status": "processed",
         "transaction_id": f"TX-{order_id}-{int(time.time())}"
     }
+    
+    # Store the result in a processing_results list in the state
+    if state is not None:
+        # Create a processing_results field if it doesn't exist
+        if not hasattr(state, "processing_results"):
+            state.processing_results = []
+        
+        # Append the result
+        state.processing_results.append(result)
+    
+    return result
 
 
 async def main():
@@ -234,8 +266,6 @@ async def main():
     # Access the final state
     final_state = graph.state
 
-    rprint(final_state)
-    
     # Print results
     print("\n=== Final Output ===")
     print(final_state.final_output)
@@ -246,6 +276,16 @@ async def main():
         print(f"  Tool: {tool_call.tool_name}")
         print(f"  Arguments: {json.dumps(tool_call.arguments, indent=2)}")
         print(f"  Result: {json.dumps(tool_call.result, indent=2) if tool_call.result else 'N/A'}")
+    
+    # Print the custom state fields
+    print("\n=== Custom State Data ===")
+    print(f"Customer Data: {json.dumps(final_state.customer_data, indent=2) if final_state.customer_data else 'None'}")
+    print(f"Order Data: {json.dumps(final_state.order_data, indent=2) if final_state.order_data else 'None'}")
+    print(f"Cancelled Orders: {final_state.cancelled_orders}")
+    if hasattr(final_state, "processing_results"):
+        print(f"Processing Results: {json.dumps(final_state.processing_results, indent=2)}")
+
+    rprint(final_state)
 
 
 if __name__ == "__main__":

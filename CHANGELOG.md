@@ -9,6 +9,8 @@ All notable changes to this project will be documented in this file.
 - Added `should_show_to_user` flag to `LLMMessage` class to allow easy identification of messages that should be displayed to end users.
 - Automatically sets `should_show_to_user=False` for system messages, tool results, and LLM-internal messages.
 - Final assistant messages are automatically marked with `should_show_to_user=True`.
+- Enhanced state management in tool functions - tools can now directly access and modify custom state fields by accepting a `state` parameter
+- Support for state-aware tools that can keep track of their own context across multiple executions
 
 ### Changed
 
@@ -16,7 +18,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- N/A
+- Fixed redundant wrapper function definition in `tool` decorator, removing linter warning about redefinition of unused variable.
+- Improved state parameter handling in tool functions by simplifying the wrapper implementation.
 
 # [1.6.1] - 2025-03-17
 
@@ -392,9 +395,3 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - N/A
-
-## Unreleased
-
-### Changes
-
-- Renamed the `resume_from_pause` method to `resume` in the `ToolEngine` class to standardize method naming conventions

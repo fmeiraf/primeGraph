@@ -693,6 +693,14 @@ async def summarize(text: str) -> Dict[str, Any]:
     # Implementation would use an LLM or summarization service
     return {"summary": f"Summarized version of: {text[:30]}..."}
 
+# Create a tool with state parameter for direct state manipulation
+@tool("Store search information in state")
+async def save_to_state(result_id: str, state=None) -> Dict[str, Any]:
+    """Save search results directly to state"""
+    if state and hasattr(state, "search_results"):
+        state.search_results.append({"id": result_id, "saved_at": "now"})
+    return {"status": "saved", "result_id": result_id}
+
 # Create a graph for tool-based workflow
 graph = ToolGraph("research_workflow", state_class=ResearchState)
 
@@ -702,7 +710,7 @@ llm_client = OpenAIClient(api_key="your-api-key-here")
 # Add a tool node to the graph
 node = graph.add_tool_node(
     name="researcher",
-    tools=[search_web, summarize],
+    tools=[search_web, summarize, save_to_state],
     llm_client=llm_client,
     options=ToolLoopOptions(max_iterations=5)
 )
@@ -727,6 +735,7 @@ async def run_research():
     final_state = graph.state
     print(f"Tool calls: {len(final_state.tool_calls)}")
     print(f"Final output: {final_state.final_output}")
+    print(f"Saved search results: {final_state.search_results}")
 
 asyncio.run(run_research())
 ```
