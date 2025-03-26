@@ -180,14 +180,14 @@ async def process_payment(order_id: str, amount: float) -> Dict:
 
 async def main():
     # Get API key from environment variables
-    api_key = os.environ.get("OPENAI_API_KEY")
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        print("Error: OPENAI_API_KEY environment variable not set.")
+        print("Error: ANTHROPIC_API_KEY environment variable not set.")
         return
         
     # Create a client for the LLM provider
-    openai_client = LLMClientFactory.create_client(
-        Provider.OPENAI, 
+    anthropic_client = LLMClientFactory.create_client(
+        Provider.ANTHROPIC, 
         api_key=api_key
     )
     
@@ -205,7 +205,7 @@ async def main():
     tool_node = graph.add_tool_node(
         name="customer_service_agent",
         tools=[get_customer_info, get_order_details, cancel_order, process_payment],
-        llm_client=openai_client,
+        llm_client=anthropic_client,
         options=options
     )
     
@@ -228,7 +228,7 @@ async def main():
     
     # Execute the graph
     print("\nRunning the customer service assistant...")
-    print("(This will use your OpenAI API key and may incur charges)")
+    print("(This will use your Anthropic API key and may incur charges)")
     await graph.execute(initial_state=initial_state)
     
     # Access the final state

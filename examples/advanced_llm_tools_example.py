@@ -13,14 +13,16 @@ import os
 import time
 from typing import Dict, List, Optional
 
+from dotenv import load_dotenv
 from pydantic import Field
+from rich import print as rprint
 
-from primeGraph.buffer.history import History
+from primeGraph.buffer.factory import History
 from primeGraph.graph.llm_clients import LLMClientFactory, Provider
 from primeGraph.graph.llm_tools import (LLMMessage, ToolGraph, ToolLoopOptions,
                                         ToolState, tool)
 
-
+load_dotenv()
 # Custom state model with different sections for different phases
 class ResearchPlannerState(ToolState):
     """State for research planning and execution with tools"""
@@ -398,6 +400,8 @@ async def main():
     print("\n=== Tool Usage ===")
     for tool, count in tool_usage.items():
         print(f"{tool}: {count} calls")
+    
+    rprint(final_state)
 
 
 if __name__ == "__main__":

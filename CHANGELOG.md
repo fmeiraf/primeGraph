@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.7.0] - 2025-03-20
+
+### Added
+
+- Added `should_show_to_user` flag to `LLMMessage` class to allow easy identification of messages that should be displayed to end users.
+- Automatically sets `should_show_to_user=False` for system messages, tool results, and LLM-internal messages.
+- Final assistant messages are automatically marked with `should_show_to_user=True`.
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- N/A
+
 # [1.6.1] - 2025-03-17
 
 ### Added

@@ -91,6 +91,7 @@ class LLMMessage(BaseModel):
     content: str
     tool_calls: Optional[List[Dict[str, Any]]] = None
     tool_call_id: Optional[str] = None
+    should_show_to_user: bool = True  # Flag to indicate if this message should be shown to the user
 
     model_config = {
         "extra": "allow"  # Allow additional fields not specified in the model
@@ -774,7 +775,11 @@ class ToolEngine(Engine):
                 # Add a system message about continuing
                 if hasattr(state, "messages"):
                     state.messages.append(
-                        LLMMessage(role="system", content="Tool execution approved. Continuing with the next steps.")
+                        LLMMessage(
+                            role="system",
+                            content="Tool execution approved. Continuing with the next steps.",
+                            should_show_to_user=False,
+                        )
                     )
             else:
                 # For pause_before_execution, we need to execute the tool
@@ -840,7 +845,9 @@ class ToolEngine(Engine):
                         # Create a tool message
                         if hasattr(tool_result, "id") and tool_result.id:
                             # This is critical for OpenAI to associate the tool response with the tool call
-                            tool_message = LLMMessage(role="tool", content=result_str, tool_call_id=tool_id)
+                            tool_message = LLMMessage(
+                                role="tool", content=result_str, tool_call_id=tool_id, should_show_to_user=False
+                            )
                         else:
                             # Older format without tool_call_id
                             tool_message = LLMMessage(role="tool", content=result_str)
@@ -855,7 +862,9 @@ class ToolEngine(Engine):
                     if hasattr(state, "messages"):
                         state.messages.append(
                             LLMMessage(
-                                role="system", content=f"Error executing tool {state.paused_tool_name}: {str(e)}"
+                                role="system",
+                                content=f"Error executing tool {state.paused_tool_name}: {str(e)}",
+                                should_show_to_user=False,
                             )
                         )
                     if hasattr(state, "error"):
@@ -875,7 +884,11 @@ class ToolEngine(Engine):
             # Add a system message about skipping
             if hasattr(state, "messages"):
                 state.messages.append(
-                    LLMMessage(role="system", content=f"Tool execution skipped: {state.paused_tool_name}")
+                    LLMMessage(
+                        role="system",
+                        content=f"Tool execution skipped: {state.paused_tool_name}",
+                        should_show_to_user=False,
+                    )
                 )
 
             # Clear the pause state
@@ -1655,6 +1668,10 @@ class ToolEngine(Engine):
                                     )
                                 # Store the serializable version
                                 assistant_message.tool_calls = tool_calls_data
+                                # Tool calls are internal messages to the LLM, not user-facing
+                                assistant_message.should_show_to_user = not bool(
+                                    tool_calls_data
+                                )  # Only show to user if no tool calls
 
                     state.messages.append(assistant_message)
 
@@ -1692,7 +1709,9 @@ class ToolEngine(Engine):
                         tool_func = node.find_tool_by_name(tool_name)
                         if not tool_func:
                             error_msg = f"Tool {tool_name} not found"
-                            tool_error_message = LLMMessage(role="system", content=f"Error: {error_msg}")
+                            tool_error_message = LLMMessage(
+                                role="system", content=f"Error: {error_msg}", should_show_to_user=False
+                            )
                             state.messages.append(tool_error_message)
 
                             # Call the on_message callback for the error message
@@ -1805,12 +1824,17 @@ class ToolEngine(Engine):
                         if anthropic_client:
                             # For Anthropic, use a simpler format
                             tool_message = LLMMessage(
-                                role="user", content=f"Tool result for {tool_name}: {str(tool_result.result)}"
+                                role="user",
+                                content=f"Tool result for {tool_name}: {str(tool_result.result)}",
+                                should_show_to_user=False,
                             )
                         else:
                             # For OpenAI, use the standard format
                             tool_message = LLMMessage(
-                                role="tool", content=str(tool_result.result), tool_call_id=tool_id
+                                role="tool",
+                                content=str(tool_result.result),
+                                tool_call_id=tool_id,
+                                should_show_to_user=False,
                             )
 
                         # Add tool result to messages and tool call entries
@@ -1838,7 +1862,7 @@ class ToolEngine(Engine):
                     print("Response does not contain tool calls, finishing")
 
                     # Create assistant message for final response
-                    assistant_message = LLMMessage(role="assistant", content=content)
+                    assistant_message = LLMMessage(role="assistant", content=content, should_show_to_user=True)
 
                     # Add to messages
                     state.messages.append(assistant_message)
@@ -1903,6 +1927,12 @@ class ToolEngine(Engine):
                 buffer_updates["error"] = error
                 buffer_updates["is_complete"] = True
 
+                # Add error message to state
+                if hasattr(state, "messages"):
+                    state.messages.append(
+                        LLMMessage(role="system", content=f"Error: {error}", should_show_to_user=False)
+                    )
+
                 # Call the on_message callback for the error
                 if hasattr(node, "on_message") and node.on_message:
                     node.on_message(
@@ -1946,6 +1976,10 @@ class ToolEngine(Engine):
                         "timestamp": time.time(),
                     }
                 )
+
+            # Add a system message about max iterations
+            if hasattr(state, "messages"):
+                state.messages.append(LLMMessage(role="system", content=max_iter_message, should_show_to_user=True))
 
         # Save final checkpoint
         self._capture_state_checkpoint(node_name, state)
