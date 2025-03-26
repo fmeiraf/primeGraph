@@ -12,7 +12,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- N/A
+- Removed the exclude flag on `raw_response_history` so it's also saved with checkpoints
 
 ### Fixed
 

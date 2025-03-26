@@ -121,8 +121,7 @@ class ToolState(GraphState):
     final_output: LastValue[Optional[str]] = None  # type: ignore
     error: LastValue[Optional[str]] = None  # type: ignore
     current_trace: LastValue[Optional[Dict[str, Any]]] = None  # type: ignore
-    # Mark raw_response_history as excluded from serialization - it often contains non-serializable objects
-    raw_response_history: History[Any] = Field(default_factory=lambda: [], exclude=True)  # type: ignore
+    raw_response_history: History[Any] = Field(default_factory=lambda: [], exclude=False)  # type: ignore
     is_paused: LastValue[bool] = False  # type: ignore
     paused_tool_id: LastValue[Optional[str]] = None  # type: ignore
     paused_tool_name: LastValue[Optional[str]] = None  # type: ignore
