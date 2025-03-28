@@ -11,7 +11,6 @@ import inspect
 import json
 import time
 import traceback
-import uuid
 from enum import Enum
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Type, Union
@@ -628,8 +627,6 @@ class ToolGraph(Graph):
         """
         if chain_id:
             self.chain_id = chain_id
-        else:
-            self.chain_id = f"chain_{uuid.uuid4()}"
 
         if not timeout:
             timeout = self.execution_timeout

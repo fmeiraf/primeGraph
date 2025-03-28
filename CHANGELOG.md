@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.7.1] - 2025-03-20
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Fixed chain_id assigment on `ToolGraph` execution. Graph should keep the chain_id unless execution assigned a new chain_id.
+
 # [1.7.0] - 2025-03-20
 
 ### Added
