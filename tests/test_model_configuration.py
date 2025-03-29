@@ -19,8 +19,8 @@ from primeGraph.buffer.factory import History
 from primeGraph.constants import END, START
 from primeGraph.graph.llm_clients import (AnthropicClient, LLMClientFactory,
                                           OpenAIClient, Provider)
-from primeGraph.graph.llm_tools import (LLMMessage, ToolEngine, ToolGraph,
-                                        ToolLoopOptions, ToolState, tool)
+from primeGraph.graph.llm_tools import (LLMMessage, ToolGraph, ToolLoopOptions,
+                                        ToolState, tool)
 
 load_dotenv()
 
@@ -97,7 +97,11 @@ def mock_anthropic_client():
 
 def create_test_graph(llm_client, model=None, api_kwargs=None):
     """Create a test graph with the specified model configuration"""
-    graph = ToolGraph("model_test", state_class=ModelTestState)
+    # Create state instance
+    state = ModelTestState()
+    
+    # Create graph with state instance
+    graph = ToolGraph("model_test", state=state)
     
     options = ToolLoopOptions(
         max_iterations=2,
@@ -147,8 +151,12 @@ async def test_openai_model_configuration(mock_openai_client):
     """Test that OpenAI model configuration works correctly"""
     # Test with default model
     default_graph = create_test_graph(mock_openai_client)
-    engine = ToolEngine(default_graph)
-    await engine.execute(initial_state=create_initial_state())
+    
+    # Set the state directly on the graph
+    default_graph.state = create_initial_state()
+    
+    # Use the graph directly instead of creating a new engine
+    await default_graph.execute()
     
     # The default model should not be specified (library default will be used)
     assert "model" not in mock_openai_client.last_kwargs or mock_openai_client.last_kwargs["model"] == "gpt-4-turbo"
@@ -159,8 +167,12 @@ async def test_openai_model_configuration(mock_openai_client):
     # Test with specific model
     custom_model = "gpt-3.5-turbo"
     custom_graph = create_test_graph(mock_openai_client, model=custom_model)
-    engine = ToolEngine(custom_graph)
-    await engine.execute(initial_state=create_initial_state())
+    
+    # Set the state directly on the graph
+    custom_graph.state = create_initial_state()
+    
+    # Use the graph directly instead of creating a new engine
+    await custom_graph.execute()
     
     # The specified model should be used
     assert mock_openai_client.last_kwargs.get("model") == custom_model
@@ -172,8 +184,12 @@ async def test_anthropic_model_configuration(mock_anthropic_client):
     """Test that Anthropic model configuration works correctly"""
     # Test with default model
     default_graph = create_test_graph(mock_anthropic_client)
-    engine = ToolEngine(default_graph)
-    await engine.execute(initial_state=create_initial_state())
+    
+    # Set the state directly on the graph
+    default_graph.state = create_initial_state()
+    
+    # Use the graph directly
+    await default_graph.execute()
     
     # The default model should not be specified (library default will be used)
     assert "model" not in mock_anthropic_client.last_kwargs or mock_anthropic_client.last_kwargs["model"] == "claude-3-opus-20240229"
@@ -184,8 +200,12 @@ async def test_anthropic_model_configuration(mock_anthropic_client):
     # Test with specific model
     custom_model = "claude-3-sonnet-20240229"
     custom_graph = create_test_graph(mock_anthropic_client, model=custom_model)
-    engine = ToolEngine(custom_graph)
-    await engine.execute(initial_state=create_initial_state())
+    
+    # Set the state directly on the graph
+    custom_graph.state = create_initial_state()
+    
+    # Use the graph directly
+    await custom_graph.execute()
     
     # The specified model should be used
     assert mock_anthropic_client.last_kwargs.get("model") == custom_model
@@ -208,8 +228,11 @@ async def test_api_kwargs_configuration(mock_openai_client):
         api_kwargs=api_kwargs
     )
     
-    engine = ToolEngine(custom_graph)
-    await engine.execute(initial_state=create_initial_state())
+    # Set the state directly on the graph
+    custom_graph.state = create_initial_state()
+    
+    # Execute the graph directly
+    await custom_graph.execute()
     
     # Check that all kwargs were properly passed
     for key, value in api_kwargs.items():
@@ -230,6 +253,9 @@ async def test_real_openai_model_selection():
     custom_model = "gpt-3.5-turbo"  # Using a cheaper model for testing
     graph = create_test_graph(openai_client, model=custom_model)
     
+    # Set the state directly on the graph
+    graph.state = create_initial_state()
+    
     # Use patch to check if the right model is being passed
     with patch('openai.resources.chat.completions.Completions.create') as mock_create:
         # Set up mock response
@@ -239,9 +265,8 @@ async def test_real_openai_model_selection():
         mock_response.choices[0].message.tool_calls = None
         mock_create.return_value = mock_response
         
-        # Execute the graph
-        engine = ToolEngine(graph)
-        await engine.execute(initial_state=create_initial_state())
+        # Execute the graph directly
+        await graph.execute()
         
         # Check that the model was correctly passed
         call_args = mock_create.call_args[1]  # Get the kwargs of the call
@@ -259,6 +284,9 @@ async def test_real_anthropic_model_selection():
     custom_model = "claude-3-haiku-20240307"  # Using a cheaper model for testing
     graph = create_test_graph(anthropic_client, model=custom_model)
     
+    # Set the state directly on the graph
+    graph.state = create_initial_state()
+    
     # Use patch to check if the right model is being passed
     with patch('anthropic.resources.messages.Messages.create') as mock_create:
         # Set up mock response
@@ -266,9 +294,8 @@ async def test_real_anthropic_model_selection():
         mock_response.content = [MagicMock(type="text", text="Test response")]
         mock_create.return_value = mock_response
         
-        # Execute the graph
-        engine = ToolEngine(graph)
-        await engine.execute(initial_state=create_initial_state())
+        # Execute the graph directly
+        await graph.execute()
         
         # Check that the model was correctly passed
         call_args = mock_create.call_args[1]  # Get the kwargs of the call

@@ -294,9 +294,21 @@ async def test_checkpoint_pause_before_execution(postgres_storage, tool_tools):
     mock_client = MockLLMClient(conversation_flow=create_mock_flow_for_pause_before())
     
     # Create a graph with PostgreSQL checkpoint storage
+    # Create initial state with request to process payment
+    initial_state = ToolCheckpointState()
+    initial_state.messages = [
+        LLMMessage(
+            role="system",
+            content="You are a helpful payment assistant. Be concise."
+        ),
+        LLMMessage(
+            role="user",
+            content="Process payment for order O2 from customer C1."
+        )
+    ]
     graph = ToolGraph(
         "payment_processing", 
-        state_class=ToolCheckpointState,
+        state=initial_state,
         checkpoint_storage=postgres_storage
     )
     
@@ -312,21 +324,10 @@ async def test_checkpoint_pause_before_execution(postgres_storage, tool_tools):
     graph.add_edge(START, node.name)
     graph.add_edge(node.name, END)
     
-    # Create initial state with request to process payment
-    initial_state = ToolCheckpointState()
-    initial_state.messages = [
-        LLMMessage(
-            role="system",
-            content="You are a helpful payment assistant. Be concise."
-        ),
-        LLMMessage(
-            role="user",
-            content="Process payment for order O2 from customer C1."
-        )
-    ]
+    
     
     # Execute the graph
-    await graph.execute(initial_state=initial_state)
+    await graph.execute()
     
     # Access the state from the graph
     first_state = graph.state
@@ -343,7 +344,7 @@ async def test_checkpoint_pause_before_execution(postgres_storage, tool_tools):
     # Create a new graph instance
     new_graph = ToolGraph(
         "payment_processing", 
-        state_class=ToolCheckpointState,
+        state=initial_state,
         checkpoint_storage=postgres_storage
     )
     
@@ -389,10 +390,21 @@ async def test_checkpoint_pause_after_execution(postgres_storage, tool_tools):
     # Create mock LLM client
     mock_client = MockLLMClient(conversation_flow=create_mock_flow_for_pause_after())
     
-    # Create a graph with PostgreSQL checkpoint storage
+    # Create initial state with request to process payment
+    initial_state = ToolCheckpointState()
+    initial_state.messages = [
+        LLMMessage(
+            role="system",
+            content="You are a helpful payment assistant. Be concise."
+        ),
+        LLMMessage(
+            role="user",
+            content="Process payment for order O2 from customer C1."
+        )
+    ]
     graph = ToolGraph(
         "account_update", 
-        state_class=ToolCheckpointState,
+        state=initial_state,
         checkpoint_storage=postgres_storage
     )
     
@@ -410,22 +422,9 @@ async def test_checkpoint_pause_after_execution(postgres_storage, tool_tools):
     
     # Create engine
     engine = ToolEngine(graph)
-    
-    # Create initial state with request to update email
-    initial_state = ToolCheckpointState()
-    initial_state.messages = [
-        LLMMessage(
-            role="system",
-            content="You are a helpful account assistant. Be concise."
-        ),
-        LLMMessage(
-            role="user",
-            content="Update email for customer C1 to john.doe.new@example.com."
-        )
-    ]
-    
+        
     # Execute the graph
-    result = await engine.execute(initial_state=initial_state)
+    result = await engine.execute()
     
     # Get the state from the result
     first_state = result.state
@@ -445,7 +444,7 @@ async def test_checkpoint_pause_after_execution(postgres_storage, tool_tools):
     # Create a new graph instance
     new_graph = ToolGraph(
         "account_update", 
-        state_class=ToolCheckpointState,
+        state=initial_state,
         checkpoint_storage=postgres_storage
     )
     
@@ -500,10 +499,22 @@ async def test_checkpoint_reject_execution(postgres_storage, tool_tools):
     # Create mock LLM client
     mock_client = MockLLMClient(conversation_flow=create_mock_flow_for_pause_before())
     
-    # Create a graph with PostgreSQL checkpoint storage
+ 
+    # Create initial state with request to process payment
+    initial_state = ToolCheckpointState()
+    initial_state.messages = [
+        LLMMessage(
+            role="system",
+            content="You are a helpful payment assistant. Be concise."
+        ),
+        LLMMessage(
+            role="user",
+            content="Process payment for order O2 from customer C1."
+        )
+    ]
     graph = ToolGraph(
         "payment_reject", 
-        state_class=ToolCheckpointState,
+        state=initial_state,
         checkpoint_storage=postgres_storage
     )
     
@@ -522,21 +533,8 @@ async def test_checkpoint_reject_execution(postgres_storage, tool_tools):
     # Create engine
     engine = ToolEngine(graph)
     
-    # Create initial state with request to process payment
-    initial_state = ToolCheckpointState()
-    initial_state.messages = [
-        LLMMessage(
-            role="system",
-            content="You are a helpful payment assistant. Be concise."
-        ),
-        LLMMessage(
-            role="user",
-            content="Process payment for order O2 from customer C1."
-        )
-    ]
-    
     # Execute the graph
-    result = await engine.execute(initial_state=initial_state)
+    result = await engine.execute()
     
     # Get the state from the result
     first_state = result.state
@@ -551,7 +549,7 @@ async def test_checkpoint_reject_execution(postgres_storage, tool_tools):
     # Create a new graph instance
     new_graph = ToolGraph(
         "payment_reject", 
-        state_class=ToolCheckpointState,
+        state=initial_state,
         checkpoint_storage=postgres_storage
     )
     
@@ -610,15 +608,16 @@ async def test_state_persistence_through_checkpoint(postgres_storage, tool_tools
     ])
     
     # Setup and execute graph until pause
-    graph = ToolGraph("state_test", state_class=ToolCheckpointState, checkpoint_storage=postgres_storage)
+    initial_state = ToolCheckpointState()
+    initial_state.messages = [LLMMessage(role="user", content="Process my order")]
+    graph = ToolGraph("state_test", state=initial_state, checkpoint_storage=postgres_storage)
     node = graph.add_tool_node(name="agent", tools=tool_tools, llm_client=mock_client)
     graph.add_edge(START, node.name)
     graph.add_edge(node.name, END)
     
     # Execute
-    initial_state = ToolCheckpointState()
-    initial_state.messages = [LLMMessage(role="user", content="Process my order")]
-    await graph.execute(initial_state=initial_state)
+    
+    await graph.execute()
     
     # Check state before checkpoint
     first_state = graph.state
@@ -632,7 +631,7 @@ async def test_state_persistence_through_checkpoint(postgres_storage, tool_tools
     
     # Store chain ID and create new graph with same tools
     chain_id = graph.chain_id
-    new_graph = ToolGraph("state_test", state_class=ToolCheckpointState, checkpoint_storage=postgres_storage)
+    new_graph = ToolGraph("state_test", state=initial_state, checkpoint_storage=postgres_storage)
     node = new_graph.add_tool_node(name="agent", tools=tool_tools, llm_client=mock_client)
     new_graph.add_edge(START, node.name)
     new_graph.add_edge(node.name, END)

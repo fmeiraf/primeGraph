@@ -171,7 +171,19 @@ def message_collector_callback():
 async def test_on_message_callback_with_mock(customer_tools, mock_llm_client, message_collector_callback):
     """Test that on_message callback is properly triggered with mock LLM"""
     # Create graph
-    graph = ToolGraph("message_collector", state_class=MessageCollectorState)
+    # Create initial state with request to get customer info
+    initial_state = MessageCollectorState()
+    initial_state.messages = [
+        LLMMessage(
+            role="system",
+            content="You are a helpful customer service assistant. Be concise."
+        ),
+        LLMMessage(
+            role="user",
+            content="Get information for customer C1."
+        )
+    ]
+    graph = ToolGraph("message_collector", state=initial_state)
     
     # Add tool node with on_message callback
     node = graph.add_tool_node(
@@ -186,24 +198,11 @@ async def test_on_message_callback_with_mock(customer_tools, mock_llm_client, me
     graph.add_edge(START, node.name)
     graph.add_edge(node.name, END)
     
-    # Create initial state with request to get customer info
-    initial_state = MessageCollectorState()
-    initial_state.messages = [
-        LLMMessage(
-            role="system",
-            content="You are a helpful customer service assistant. Be concise."
-        ),
-        LLMMessage(
-            role="user",
-            content="Get information for customer C1."
-        )
-    ]
+    
     
     # Execute the graph directly
-    await graph.execute(initial_state=initial_state)
+    await graph.execute()
     
-    # Access final state
-    final_state = graph.state
     
     # Verify the callback was called for all messages (assistant, tool, and final)
     assert len(message_collector_callback.messages) == 3
@@ -243,7 +242,19 @@ async def test_on_message_callback_with_openai(customer_tools, message_collector
     openai_client = LLMClientFactory.create_client(Provider.OPENAI, api_key=api_key)
     
     # Create graph
-    graph = ToolGraph("openai_message_collector", state_class=MessageCollectorState)
+    # Create initial state with request to get customer info
+    initial_state = MessageCollectorState()
+    initial_state.messages = [
+        LLMMessage(
+            role="system",
+            content="You are a helpful customer service assistant. Be concise."
+        ),
+        LLMMessage(
+            role="user",
+            content="Get information for customer C1."
+        )
+    ]
+    graph = ToolGraph("openai_message_collector", state=initial_state)
     
     # Add tool node with on_message callback
     node = graph.add_tool_node(
@@ -258,24 +269,13 @@ async def test_on_message_callback_with_openai(customer_tools, message_collector
     graph.add_edge(START, node.name)
     graph.add_edge(node.name, END)
     
-    # Create initial state with request to get customer info
-    initial_state = MessageCollectorState()
-    initial_state.messages = [
-        LLMMessage(
-            role="system",
-            content="You are a helpful customer service assistant. Be concise."
-        ),
-        LLMMessage(
-            role="user",
-            content="Get information for customer C1."
-        )
-    ]
+    
+    
     
     # Execute the graph directly
-    await graph.execute(initial_state=initial_state)
+    await graph.execute()
     
-    # Access final state
-    final_state = graph.state
+    
     
     # Verify the callback was called at least once
     assert len(message_collector_callback.messages) >= 1

@@ -20,8 +20,8 @@ from primeGraph.buffer.factory import History, LastValue
 from primeGraph.constants import END, START
 from primeGraph.graph.llm_clients import (LLMClientBase, LLMClientFactory,
                                           Provider)
-from primeGraph.graph.llm_tools import (LLMMessage, ToolEngine, ToolGraph,
-                                        ToolLoopOptions, ToolState, tool)
+from primeGraph.graph.llm_tools import (LLMMessage, ToolGraph, ToolLoopOptions,
+                                        ToolState, tool)
 
 load_dotenv()
 
@@ -390,7 +390,11 @@ def mock_llm_client_for_account_update():
 @pytest.fixture
 def tool_graph_with_mock(customer_tools, mock_llm_client_for_cancel):
     """Fixture providing a tool graph with mock client"""
-    graph = ToolGraph("customer_service", state_class=CustomerServiceState)
+    # Create state instance
+    state = CustomerServiceState()
+    
+    # Create graph with state instance
+    graph = ToolGraph("customer_service", state=state)
     
     options = ToolLoopOptions(
         max_iterations=5,
@@ -414,7 +418,11 @@ def tool_graph_with_mock(customer_tools, mock_llm_client_for_cancel):
 @pytest.fixture
 def tool_graph_with_payment(customer_tools_with_payment, mock_llm_client_for_payment):
     """Fixture providing a tool graph with payment processing that pauses before execution"""
-    graph = ToolGraph("payment_processing", state_class=CustomerServiceState)
+    # Create state instance
+    state = CustomerServiceState()
+    
+    # Create graph with state instance
+    graph = ToolGraph("payment_processing", state=state)
     
     options = ToolLoopOptions(
         max_iterations=5,
@@ -437,7 +445,11 @@ def tool_graph_with_payment(customer_tools_with_payment, mock_llm_client_for_pay
 @pytest.fixture
 def tool_graph_with_account_update(customer_tools_with_account_update, mock_llm_client_for_account_update):
     """Fixture providing a tool graph with account update that pauses after execution"""
-    graph = ToolGraph("account_update", state_class=CustomerServiceState)
+    # Create state instance
+    state = CustomerServiceState()
+    
+    # Create graph with state instance
+    graph = ToolGraph("account_update", state=state)
     
     options = ToolLoopOptions(
         max_iterations=5,
@@ -489,7 +501,11 @@ def anthropic_client():
 @pytest.fixture
 def openai_tool_graph(customer_tools, openai_client):
     """Fixture providing a tool graph with OpenAI client"""
-    graph = ToolGraph("openai_customer_service", state_class=CustomerServiceState)
+    # Create state instance
+    state = CustomerServiceState()
+    
+    # Create graph with state instance
+    graph = ToolGraph("openai_customer_service", state=state)
     
     options = ToolLoopOptions(
         max_iterations=5,
@@ -513,7 +529,11 @@ def openai_tool_graph(customer_tools, openai_client):
 @pytest.fixture
 def anthropic_tool_graph(customer_tools, anthropic_client):
     """Fixture providing a tool graph with Anthropic client"""
-    graph = ToolGraph("anthropic_customer_service", state_class=CustomerServiceState)
+    # Create state instance
+    state = CustomerServiceState()
+    
+    # Create graph with state instance
+    graph = ToolGraph("anthropic_customer_service", state=state)
     
     options = ToolLoopOptions(
         max_iterations=5,
@@ -538,9 +558,8 @@ def anthropic_tool_graph(customer_tools, anthropic_client):
 @pytest.mark.asyncio
 async def test_openai_cancel_orders(tool_graph_with_mock):
     """Test cancelling orders with a mock client that simulates OpenAI behavior"""
-    # Create initial state with request to cancel all orders
-    initial_state = CustomerServiceState()
-    initial_state.messages = [
+    # Set up messages in the graph's state
+    tool_graph_with_mock.state.messages = [
         LLMMessage(
             role="system",
             content="You are a helpful customer service assistant. Be concise in your responses."
@@ -552,7 +571,7 @@ async def test_openai_cancel_orders(tool_graph_with_mock):
     ]
     
     # Execute the graph directly
-    await tool_graph_with_mock.execute(initial_state=initial_state)
+    await tool_graph_with_mock.execute()
     
     # Access final state
     final_state = tool_graph_with_mock.state
@@ -571,9 +590,8 @@ async def test_openai_cancel_orders(tool_graph_with_mock):
 @pytest.mark.skipif(not os.environ.get("ANTHROPIC_API_KEY"), reason="No Anthropic API key available")
 async def test_anthropic_cancel_orders(anthropic_tool_graph):
     """Test cancelling orders with Anthropic Claude (skipped if no API key)"""
-    # Create initial state with request to cancel all orders
-    initial_state = CustomerServiceState()
-    initial_state.messages = [
+    # Set up messages in the graph's state
+    anthropic_tool_graph.state.messages = [
         LLMMessage(
             role="system",
             content="You are a helpful customer service assistant. Be concise in your responses."
@@ -585,7 +603,7 @@ async def test_anthropic_cancel_orders(anthropic_tool_graph):
     ]
     
     # Execute the graph directly
-    await anthropic_tool_graph.execute(initial_state=initial_state)
+    await anthropic_tool_graph.execute()
     
     # Access final state
     final_state = anthropic_tool_graph.state
@@ -606,8 +624,23 @@ async def test_anthropic_cancel_orders(anthropic_tool_graph):
 @pytest.mark.skipif(not os.environ.get("OPENAI_API_KEY"), reason="No OpenAI API key available")
 async def test_openai_order_query(openai_client, customer_tools):
     """Test order query with OpenAI (skipped if no API key)"""
-    # Create graph
-    graph = ToolGraph("openai_order_query", state_class=CustomerServiceState)
+    # Create state instance
+    state = CustomerServiceState()
+    
+    # Set up messages in the state
+    state.messages = [
+        LLMMessage(
+            role="system",
+            content="You are a helpful customer service assistant. Be concise."
+        ),
+        LLMMessage(
+            role="user",
+            content="What's the status of order O2?"
+        )
+    ]
+    
+    # Create graph with state instance
+    graph = ToolGraph("openai_order_query", state=state)
     
     node = graph.add_tool_node(
         name="openai_order_query_agent",
@@ -619,26 +652,11 @@ async def test_openai_order_query(openai_client, customer_tools):
     graph.add_edge(START, node.name)
     graph.add_edge(node.name, END)
     
-    engine = ToolEngine(graph)
-    
-    # Create initial state with order query
-    initial_state = CustomerServiceState()
-    initial_state.messages = [
-        LLMMessage(
-            role="system",
-            content="You are a helpful customer service assistant. Be concise."
-        ),
-        LLMMessage(
-            role="user",
-            content="What's the status of order O2?"
-        )
-    ]
-    
-    # Execute the graph
-    result = await engine.execute(initial_state=initial_state)
+    # Execute the graph directly
+    await graph.execute()
     
     # Check state
-    final_state = result.state
+    final_state = graph.state
     
     # Check if there was an API quota error
     if final_state.error and "insufficient_quota" in final_state.error:
@@ -672,8 +690,23 @@ async def test_openai_order_query(openai_client, customer_tools):
 @pytest.mark.skipif(not os.environ.get("ANTHROPIC_API_KEY"), reason="No Anthropic API key available")
 async def test_anthropic_order_query(anthropic_client, customer_tools):
     """Test order query with Anthropic (skipped if no API key)"""
-    # Create graph
-    graph = ToolGraph("anthropic_order_query", state_class=CustomerServiceState)
+    # Create state instance
+    state = CustomerServiceState()
+    
+    # Set up messages in the state
+    state.messages = [
+        LLMMessage(
+            role="system",
+            content="You are a helpful customer service assistant. Be concise."
+        ),
+        LLMMessage(
+            role="user",
+            content="What's the status of order O2?"
+        )
+    ]
+    
+    # Create graph with state instance
+    graph = ToolGraph("anthropic_order_query", state=state)
     
     node = graph.add_tool_node(
         name="anthropic_order_query_agent",
@@ -685,26 +718,15 @@ async def test_anthropic_order_query(anthropic_client, customer_tools):
     graph.add_edge(START, node.name)
     graph.add_edge(node.name, END)
     
-    engine = ToolEngine(graph)
-    
-    # Create initial state with order query
-    initial_state = CustomerServiceState()
-    initial_state.messages = [
-        LLMMessage(
-            role="system",
-            content="You are a helpful customer service assistant. Be concise."
-        ),
-        LLMMessage(
-            role="user",
-            content="What's the status of order O2?"
-        )
-    ]
-    
-    # Execute the graph
-    result = await engine.execute(initial_state=initial_state)
+    # Execute the graph directly
+    await graph.execute()
     
     # Check state
-    final_state = result.state
+    final_state = graph.state
+    
+    # Check if there was an API quota error
+    if final_state.error and "insufficient_quota" in final_state.error:
+        pytest.skip("Anthropic API quota exceeded, skipping test")
     
     # Check if the LLM made any tool calls
     tool_names = [call.tool_name for call in final_state.tool_calls]
@@ -733,9 +755,8 @@ async def test_anthropic_order_query(anthropic_client, customer_tools):
 @pytest.mark.asyncio
 async def test_pause_after_execution(tool_graph_with_account_update):
     """Test the pause after execution functionality with the account update tool"""
-    # Create initial state with request to update customer email
-    initial_state = CustomerServiceState()
-    initial_state.messages = [
+    # Set up messages in the graph's state
+    tool_graph_with_account_update.state.messages = [
         LLMMessage(
             role="system",
             content="You are a helpful customer service assistant. Be concise."
@@ -747,7 +768,7 @@ async def test_pause_after_execution(tool_graph_with_account_update):
     ]
     
     # Execute the graph - should pause after account update
-    await tool_graph_with_account_update.execute(initial_state=initial_state)
+    await tool_graph_with_account_update.execute()
     
     # Check state
     assert tool_graph_with_account_update.state.is_paused == True
@@ -768,9 +789,8 @@ async def test_pause_after_execution(tool_graph_with_account_update):
 @pytest.mark.asyncio
 async def test_pause_before_execution(tool_graph_with_payment):
     """Test the pause before execution functionality with the payment tool"""
-    # Create initial state with request to process a payment
-    initial_state = CustomerServiceState()
-    initial_state.messages = [
+    # Set up messages in the graph's state
+    tool_graph_with_payment.state.messages = [
         LLMMessage(
             role="system",
             content="You are a helpful customer service assistant. Be concise."
@@ -782,7 +802,7 @@ async def test_pause_before_execution(tool_graph_with_payment):
     ]
     
     # Execute the graph - should pause before payment processing
-    await tool_graph_with_payment.execute(initial_state=initial_state)
+    await tool_graph_with_payment.execute()
     
     # Check state
     assert tool_graph_with_payment.state.is_paused == True

@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.7.2] - 2025-03-20
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Fixed how state is passed to the graph instance on `ToolGraph` and removed it from execute method.
+
 # [1.7.1] - 2025-03-20
 
 ### Added

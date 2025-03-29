@@ -389,7 +389,7 @@ class ToolGraph(Graph):
     def __init__(
         self,
         name: str,
-        state_class: Type[GraphState] = ToolState,
+        state: Optional[GraphState] = None,
         max_iterations: int = 10,
         checkpoint_storage: Optional[StorageBackend] = None,
         execution_timeout: int = 60 * 5,
@@ -409,11 +409,11 @@ class ToolGraph(Graph):
             verbose: Whether to enable verbose logging
         """
         # Initialize state from the state class
-        state = state_class()
 
         # Set graph name and state class as properties
         self.name = name
-        self.state_class = state_class
+        self.state = state or ToolState()
+        self.state_class = state.__class__ if state else ToolState
 
         # Call parent constructor with all required parameters
         super().__init__(
@@ -612,7 +612,6 @@ class ToolGraph(Graph):
         self,
         timeout: Union[int, None] = None,
         chain_id: Optional[str] = None,
-        initial_state: Optional[GraphState] = None,
     ) -> str:
         """
         Start a new execution of the tool graph.
@@ -620,7 +619,6 @@ class ToolGraph(Graph):
         Args:
             timeout: Optional timeout for the execution.
             chain_id: Optional chain ID for the execution.
-            initial_state: Optional initial state to use instead of the graph's state.
 
         Returns:
             The chain ID of the execution.
@@ -631,16 +629,13 @@ class ToolGraph(Graph):
         if not timeout:
             timeout = self.execution_timeout
 
-        if not initial_state:
-            initial_state = self.state
-
         self._clean_graph_variables()
 
         # Always use a fresh ToolEngine for a new execution
         self.execution_engine = ToolEngine(graph=self, timeout=timeout, max_node_iterations=self.max_node_iterations)
 
-        # Execute with the provided initial state or use the graph's state
-        result = await self.execution_engine.execute(initial_state)
+        # Execute with the graph's state
+        result = await self.execution_engine.execute()
 
         # Update the graph's state with the execution result state
         self.state = result.state
@@ -1194,30 +1189,21 @@ class ToolEngine(Engine):
             else:
                 print("[ToolEngine.load_full_state] Restored tool state (not paused)")
 
-    async def execute(self, initial_state: Optional[GraphState] = None) -> Any:
+    async def execute(self) -> Any:
         """
-        Begin executing the graph from the START node with optional initial state.
-
-        Args:
-            initial_state: Optional initial state to use
+        Begin executing the graph from the START node using graph's state.
 
         Returns:
             Result of execution
         """
-        print(f"\n[ToolEngine.execute] Starting execution with initial_state: {initial_state}")
+        print("\n[ToolEngine.execute] Starting execution with graph's state")
 
         self._has_executed = True  # Mark that execute() has been run
 
-        # Use provided initial state if given, otherwise use graph's state
-        state_to_use = initial_state if initial_state is not None else self.graph.state
+        # Always use the graph's state
+        state_to_use = self.graph.state
 
         print(f"[ToolEngine.execute] Using state: {type(state_to_use)}")
-
-        if initial_state:
-            # Set the graph's state to the initial state for this execution only
-            old_state = self.graph.state
-            self.graph.state = initial_state
-
         print(f"[ToolEngine.execute] Graph nodes: {list(self.graph.nodes.keys())}")
         print(f"[ToolEngine.execute] Graph edges: {self.graph.edges_map}")
 
@@ -1239,18 +1225,7 @@ class ToolEngine(Engine):
             error_msg = str(e)
             print(f"[ToolEngine.execute] Error during execution: {error_msg}")
             self.graph._update_chain_status(ChainStatus.FAILED)
-            # Restore the state if we were using temporary initial state
-            if initial_state:
-                self.graph.state = old_state
             raise
-
-        # Restore the state if we were using temporary initial state
-        if initial_state:
-            # Record final state values before restoring
-            final_state = initial_state
-            self.graph.state = old_state
-        else:
-            final_state = state_to_use
 
         print(f"[ToolEngine.execute] Returning result with state: {state_to_use}")
 
@@ -1259,128 +1234,7 @@ class ToolEngine(Engine):
             def __init__(self, state):
                 self.state = state
 
-        return ExecutionResult(final_state)
-
-    async def _execute_all(self) -> None:
-        """
-        Process all pending execution frames.
-        Override to add debugging.
-        """
-        print(f"[ToolEngine._execute_all] Starting execution of {len(self.execution_frames)} frames")
-
-        while self.execution_frames and self.graph.chain_status == ChainStatus.RUNNING:
-            if len(self.execution_frames) > 1:
-                print(f"[ToolEngine._execute_all] Executing {len(self.execution_frames)} frames in parallel")
-                await asyncio.gather(
-                    *(self._execute_frame(frame) for frame in self.execution_frames if frame is not None)
-                )
-            else:
-                frame = self.execution_frames.pop(0)
-                if frame is not None:
-                    print(f"[ToolEngine._execute_all] Executing single frame: {frame.node_id}")
-                    await self._execute_frame(frame)
-
-            # Check if any frame has paused execution - if so, break the loop
-            if hasattr(self.graph, "state") and hasattr(self.graph.state, "is_paused") and self.graph.state.is_paused:
-                print("[ToolEngine._execute_all] Detected paused state, stopping execution")
-                self.graph._update_chain_status(ChainStatus.PAUSE)
-                break
-
-        print(f"[ToolEngine._execute_all] Execution complete, frames remaining: {len(self.execution_frames)}")
-
-    async def _execute_frame(self, frame: ExecutionFrame) -> None:
-        """
-        Execute a single frame to process a path through the graph.
-        Override to add our own frame processing.
-        """
-        print(f"[ToolEngine._execute_frame] Executing frame: {frame.node_id}")
-
-        # Special handling for tool nodes - we don't have to go through the parent method
-        node_id = frame.node_id
-
-        if node_id == START:
-            # For START node, set up the next node and return
-            print("[ToolEngine._execute_frame] Processing START node")
-            children = self.graph.edges_map.get(node_id, [])
-            if children:
-                # Get the next node and create a new frame for it
-                next_node_id = children[0]
-                print(f"[ToolEngine._execute_frame] Setting up next node: {next_node_id}")
-                frame.node_id = next_node_id
-                frame.current_node = self.graph.nodes.get(next_node_id)
-                # Keep this frame in the execution_frames list
-                if frame not in self.execution_frames:
-                    self.execution_frames.append(frame)
-            else:
-                print("[ToolEngine._execute_frame] START node has no children!")
-        elif node_id in self.graph.nodes:
-            node = self.graph.nodes[node_id]
-            frame.current_node = node
-
-            # Handle tool node specially
-            if hasattr(node, "is_tool_node") and node.is_tool_node:
-                print(f"[ToolEngine._execute_frame] Node {node_id} is a tool node, executing")
-
-                # Execute the tool node
-                await self.execute_node(frame)
-
-                # Get next node
-                children = self.graph.edges_map.get(node_id, [])
-                if children:
-                    next_node_id = children[0]
-                    frame.node_id = next_node_id
-                    frame.current_node = self.graph.nodes.get(next_node_id)
-                    print(f"[ToolEngine._execute_frame] Moving to next node: {next_node_id}")
-
-                    # If we're moving to END, continue execution
-                    if next_node_id == END:
-                        # For other nodes, use parent method for END handling
-                        frame.node_id = END
-                        frame.current_node = None
-                        await super()._execute_frame(frame)
-                else:
-                    print(f"[ToolEngine._execute_frame] Node {node_id} has no children!")
-            else:
-                # For other nodes, use parent method
-                await super()._execute_frame(frame)
-        else:
-            # For other nodes, use parent method
-            await super()._execute_frame(frame)
-
-        print(f"[ToolEngine._execute_frame] Frame execution complete: {frame.node_id}")
-
-    async def execute_node(self, frame: ExecutionFrame) -> Dict[str, Any]:
-        """
-        Execute a node in the graph.
-
-        Overrides the base execute_node method to handle tool node execution.
-
-        Args:
-            frame: Current execution frame
-
-        Returns:
-            Dictionary of buffer updates
-        """
-        node = frame.current_node
-
-        # If node is not set, try to get it from the graph using node_id
-        if node is None and frame.node_id in self.graph.nodes:
-            node = self.graph.nodes[frame.node_id]
-            frame.current_node = node
-
-        if node is None:
-            raise ValueError(f"Cannot execute node: Node not found for ID {frame.node_id}")
-
-        print(f"[ToolEngine.execute_node] Executing node: {node.name}, type: {type(node)}")
-
-        # If this is a ToolNode, handle it specially
-        if isinstance(node, ToolNode):
-            print(f"[ToolEngine.execute_node] Node {node.name} is a ToolNode, delegating to _execute_tool_node")
-            return await self._execute_tool_node(frame)
-
-        # Otherwise, use the standard node execution
-        print(f"[ToolEngine.execute_node] Node {node.name} is a standard node, delegating to parent")
-        return await super().execute_node(frame)
+        return ExecutionResult(state_to_use)
 
     async def _execute_tool_node(self, frame: ExecutionFrame) -> Dict[str, Any]:
         """
@@ -2008,3 +1862,124 @@ class ToolEngine(Engine):
             print(f"[ToolEngine._capture_state_checkpoint] Error saving checkpoint: {str(e)}")
             # Continue execution despite checkpoint failure
             # This prevents serialization errors from breaking the entire workflow
+
+    async def _execute_all(self) -> None:
+        """
+        Process all pending execution frames.
+        Override to add debugging.
+        """
+        print(f"[ToolEngine._execute_all] Starting execution of {len(self.execution_frames)} frames")
+
+        while self.execution_frames and self.graph.chain_status == ChainStatus.RUNNING:
+            if len(self.execution_frames) > 1:
+                print(f"[ToolEngine._execute_all] Executing {len(self.execution_frames)} frames in parallel")
+                await asyncio.gather(
+                    *(self._execute_frame(frame) for frame in self.execution_frames if frame is not None)
+                )
+            else:
+                frame = self.execution_frames.pop(0)
+                if frame is not None:
+                    print(f"[ToolEngine._execute_all] Executing single frame: {frame.node_id}")
+                    await self._execute_frame(frame)
+
+            # Check if any frame has paused execution - if so, break the loop
+            if hasattr(self.graph, "state") and hasattr(self.graph.state, "is_paused") and self.graph.state.is_paused:
+                print("[ToolEngine._execute_all] Detected paused state, stopping execution")
+                self.graph._update_chain_status(ChainStatus.PAUSE)
+                break
+
+        print(f"[ToolEngine._execute_all] Execution complete, frames remaining: {len(self.execution_frames)}")
+
+    async def _execute_frame(self, frame: ExecutionFrame) -> None:
+        """
+        Execute a single frame to process a path through the graph.
+        Override to add our own frame processing.
+        """
+        print(f"[ToolEngine._execute_frame] Executing frame: {frame.node_id}")
+
+        # Special handling for tool nodes - we don't have to go through the parent method
+        node_id = frame.node_id
+
+        if node_id == START:
+            # For START node, set up the next node and return
+            print("[ToolEngine._execute_frame] Processing START node")
+            children = self.graph.edges_map.get(node_id, [])
+            if children:
+                # Get the next node and create a new frame for it
+                next_node_id = children[0]
+                print(f"[ToolEngine._execute_frame] Setting up next node: {next_node_id}")
+                frame.node_id = next_node_id
+                frame.current_node = self.graph.nodes.get(next_node_id)
+                # Keep this frame in the execution_frames list
+                if frame not in self.execution_frames:
+                    self.execution_frames.append(frame)
+            else:
+                print("[ToolEngine._execute_frame] START node has no children!")
+        elif node_id in self.graph.nodes:
+            node = self.graph.nodes[node_id]
+            frame.current_node = node
+
+            # Handle tool node specially
+            if hasattr(node, "is_tool_node") and node.is_tool_node:
+                print(f"[ToolEngine._execute_frame] Node {node_id} is a tool node, executing")
+
+                # Execute the tool node
+                await self.execute_node(frame)
+
+                # Get next node
+                children = self.graph.edges_map.get(node_id, [])
+                if children:
+                    next_node_id = children[0]
+                    frame.node_id = next_node_id
+                    frame.current_node = self.graph.nodes.get(next_node_id)
+                    print(f"[ToolEngine._execute_frame] Moving to next node: {next_node_id}")
+
+                    # If we're moving to END, continue execution
+                    if next_node_id == END:
+                        # For other nodes, use parent method for END handling
+                        frame.node_id = END
+                        frame.current_node = None
+                        await super()._execute_frame(frame)
+                else:
+                    print(f"[ToolEngine._execute_frame] Node {node_id} has no children!")
+            else:
+                # For other nodes, use parent method
+                await super()._execute_frame(frame)
+        else:
+            # For other nodes, use parent method
+            await super()._execute_frame(frame)
+
+        print(f"[ToolEngine._execute_frame] Frame execution complete: {frame.node_id}")
+
+    async def execute_node(self, frame: ExecutionFrame) -> Dict[str, Any]:
+        """
+        Execute a node in the graph.
+
+        Overrides the base execute_node method to handle tool node execution.
+
+        Args:
+            frame: Current execution frame
+
+        Returns:
+            Dictionary of buffer updates
+        """
+        node = frame.current_node
+
+        # If node is not set, try to get it from the graph using node_id
+        if node is None and frame.node_id in self.graph.nodes:
+            node = self.graph.nodes[frame.node_id]
+            frame.current_node = node
+
+        if node is None:
+            raise ValueError(f"Cannot execute node: Node not found for ID {frame.node_id}")
+
+        print(f"[ToolEngine.execute_node] Executing node: {node.name}, type: {type(node)}")
+
+        # If this is a ToolNode, handle it specially
+        if isinstance(node, ToolNode):
+            print(f"[ToolEngine.execute_node] Node {node.name} is a ToolNode, delegating to _execute_tool_node")
+            return await self._execute_tool_node(frame)
+
+        # Otherwise, use the standard node execution
+        print(f"[ToolEngine.execute_node] Node {node.name} is a standard node, delegating to parent")
+        return await super().execute_node(frame)
