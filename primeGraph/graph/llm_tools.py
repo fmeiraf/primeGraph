@@ -13,7 +13,7 @@ import time
 import traceback
 from enum import Enum
 from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Type, Union
 
 from pydantic import BaseModel, Field
 
@@ -23,6 +23,7 @@ from primeGraph.constants import END, START
 from primeGraph.graph.base import Node
 from primeGraph.graph.engine import Engine, ExecutionFrame
 from primeGraph.graph.executable import Graph
+from primeGraph.graph.llm_clients import StreamingConfig, StreamingEventType
 from primeGraph.models.state import GraphState
 from primeGraph.types import ChainStatus
 
@@ -108,6 +109,16 @@ class ToolLoopOptions(BaseModel):
     trace_enabled: bool = False
     model: Optional[str] = None
     api_kwargs: Dict[str, Any] = Field(default_factory=dict)
+    streaming_config: Optional[StreamingConfig] = None
+    # Streaming shortcut flags (will create a StreamingConfig if streaming_config is None)
+    stream: bool = False
+    stream_events: Optional[Set[StreamingEventType]] = None
+    redis_host: Optional[str] = None
+    redis_port: int = 6379
+    redis_channel: Optional[str] = None
+    stream_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+
+    model_config = {"arbitrary_types_allowed": True}
 
 
 class ToolState(GraphState):
@@ -128,6 +139,10 @@ class ToolState(GraphState):
     paused_tool_arguments: LastValue[Optional[Dict[str, Any]]] = None  # type: ignore
     paused_after_execution: LastValue[bool] = False  # type: ignore
     paused_tool_result: LastValue[Optional[ToolCallLog]] = None  # type: ignore
+    # Streaming-related fields
+    streaming_enabled: LastValue[bool] = False  # type: ignore
+    streaming_channel: LastValue[Optional[str]] = None  # type: ignore
+    last_stream_timestamp: LastValue[Optional[float]] = None  # type: ignore
 
 
 def tool(
@@ -1271,6 +1286,34 @@ class ToolEngine(Engine):
         if hasattr(state, "max_iterations"):
             state.max_iterations = max_iterations
 
+        # Set up streaming configuration if enabled
+        streaming_config = node.options.streaming_config
+
+        # If no streaming_config but streaming options are set, create one
+        if streaming_config is None and (
+            node.options.stream
+            or node.options.stream_events
+            or node.options.redis_host
+            or node.options.redis_channel
+            or node.options.stream_callback
+        ):
+            from primeGraph.graph.llm_clients import StreamingConfig
+
+            streaming_config = StreamingConfig(
+                enabled=node.options.stream,
+                event_types=node.options.stream_events or {StreamingEventType.TEXT},
+                redis_host=node.options.redis_host,
+                redis_port=node.options.redis_port,
+                redis_channel=node.options.redis_channel,
+                callback=node.options.stream_callback,
+            )
+
+        # Set streaming state fields
+        if hasattr(state, "streaming_enabled") and streaming_config:
+            state.streaming_enabled = streaming_config.enabled
+            if streaming_config.redis_channel:
+                state.streaming_channel = streaming_config.redis_channel
+
         # Initialize tracking variables
         is_complete = False
         error = None
@@ -1370,6 +1413,10 @@ class ToolEngine(Engine):
                 if node.options.model:
                     api_kwargs["model"] = node.options.model
 
+                # Use max_tokens from options
+                if node.options.max_tokens and "max_tokens" not in api_kwargs:
+                    api_kwargs["max_tokens"] = node.options.max_tokens
+
                 # Format tool_choice properly for the provider
                 tool_choice_param = None
                 if (
@@ -1397,8 +1444,16 @@ class ToolEngine(Engine):
 
                 # Make the API call with proper parameters
                 content, response = await node.llm_client.generate(
-                    messages=message_dicts, tools=tool_schemas, tool_choice=tool_choice_param, **api_kwargs
+                    messages=message_dicts,
+                    tools=tool_schemas,
+                    tool_choice=tool_choice_param,
+                    streaming_config=streaming_config,
+                    **api_kwargs,
                 )
+
+                # Update last stream timestamp if streaming was enabled
+                if streaming_config and streaming_config.enabled and hasattr(state, "last_stream_timestamp"):
+                    state.last_stream_timestamp = time.time()
 
                 # Check if this is a tool use response
                 is_tool_use = False

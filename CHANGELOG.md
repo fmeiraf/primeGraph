@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.8.0] - 2025-03-22
+
+### Added
+
+- Added Redis-based streaming functionality for real-time event processing
+- New `StreamingConfig` and `StreamingEventType` classes for configuring streaming capabilities
+- Support for multiple event types including text fragments and content block delimiters
+- Comprehensive Redis integration for streaming LLM responses
+- Added examples for consuming streaming events from Redis
+
+### Changed
+
+- Enhanced documentation for setting up and using Redis with primeGraph
+- Updated Docker configuration to better support streaming features
+
+### Fixed
+
+- N/A
+
 # [1.7.2] - 2025-03-20
 
 ### Added

@@ -10,9 +10,10 @@ dependencies = [
     "fastapi<1.0.0,>=0.110.0",
     "uvicorn<1.0.0,>=0.27.0",
     "websockets<11.0,>=10.0",
+    "redis>=5.2.1",
 ]
 name = "primeGraph"
-version = "1.7.2"
+version = "1.8.0"
 description = "A lightweight graph approach to LLM workflows."
 readme = "README.md"
 

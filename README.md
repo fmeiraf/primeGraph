@@ -4,7 +4,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Package Version](https://img.shields.io/badge/package-1.7.2-blue.svg)](https://pypi.org/project/primegraph/)
+[![Package Version](https://img.shields.io/badge/package-1.8.0-blue.svg)](https://pypi.org/project/primegraph/)
 
 ---
 
@@ -35,6 +35,7 @@ _Note from the author: This project came to life through my experience creating 
 - **Flow Control**: Supports human-in-the-loop interactions by pausing and resuming workflows.
 - **Visualization**: Generate visual representations of your workflows with minimal effort.
 - **Web Integration**: Integrate with FastAPI and WebSockets for interactive workflows.
+- **Streaming Support**: Stream LLM outputs in real-time with Redis-based event streaming.
 
 ## Installation
 
@@ -880,3 +881,55 @@ if new_graph.state.is_paused:
     # Resume execution from the paused state
     await new_graph.resume(execute_tool=True)  # approve
 ```
+
+### Streaming with Redis
+
+primeGraph supports real-time streaming of LLM responses using Redis, allowing you to build responsive applications that process AI outputs as they're generated.
+
+```python
+from primeGraph.graph.llm_clients import StreamingConfig, StreamingEventType
+
+# Configure streaming with Redis
+streaming_config = StreamingConfig(
+    enabled=True,
+    event_types={StreamingEventType.TEXT, StreamingEventType.CONTENT_BLOCK_STOP},
+    redis_host="localhost",  # Docker-exposed Redis host
+    redis_port=6379,         # Default Redis port
+    redis_channel="my_stream_channel"  # Custom channel name
+)
+
+# Use the streaming config with your LLM-based workflows
+# ...
+```
+
+You can consume these streaming events from any service or application that can connect to Redis:
+
+```python
+import redis
+import json
+
+# Connect to Redis
+r = redis.Redis(host="localhost", port=6379)
+pubsub = r.pubsub()
+
+# Subscribe to your stream channel
+pubsub.subscribe("my_stream_channel")
+
+# Process incoming messages
+for message in pubsub.listen():
+    if message["type"] == "message":
+        event = json.loads(message["data"])
+        print(f"Received event: {event['type']}")
+
+        if event["type"] == "text":
+            print(event["text"], end="", flush=True)
+```
+
+This streaming capability is particularly useful for:
+
+- Building responsive UIs that show real-time LLM thinking or generation
+- Processing outputs incrementally without waiting for complete responses
+- Creating multi-user applications where outputs need to be broadcast to multiple clients
+- Implementing custom monitoring or logging of LLM interactions
+
+For setting up Redis locally, refer to the [Docker setup instructions](docker/README.md).

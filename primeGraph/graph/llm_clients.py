@@ -10,9 +10,15 @@ import json
 import os
 import time
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar, Union
 
 import openai
+from pydantic import BaseModel, Field
+
+# Type definitions for Anthropic
+# This helps with mypy's type checking without requiring the dependency
+MessageParam = Dict[str, Any]  # Type alias for Anthropic message parameters
+MessageParamT = TypeVar("MessageParamT", bound=MessageParam)
 
 
 class Provider(str, Enum):
@@ -21,6 +27,44 @@ class Provider(str, Enum):
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     GOOGLE = "google"
+
+
+class StreamingEventType(str, Enum):
+    """Types of streaming events"""
+
+    TEXT = "text"
+    INPUT_JSON = "input_json"
+    MESSAGE_STOP = "message_stop"
+    CONTENT_BLOCK_STOP = "content_block_stop"
+    TOOL_USE = "tool_use"
+    ALL = "all"
+
+
+class StreamingConfig(BaseModel):
+    """Configuration for streaming responses"""
+
+    enabled: bool = False
+    event_types: Set[StreamingEventType] = Field(default_factory=lambda: {StreamingEventType.TEXT})
+    redis_host: Optional[str] = None
+    redis_port: int = 6379
+    redis_channel: Optional[str] = None
+    callback: Optional[Callable[[Dict[str, Any]], None]] = None
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    def __init__(self, **data: Any) -> None:
+        super().__init__(**data)
+        # Handle ALL event type
+        if StreamingEventType.ALL in self.event_types:
+            self.event_types = set(StreamingEventType)
+            self.event_types.remove(StreamingEventType.ALL)
+
+        # Validate configuration
+        if self.enabled and not ((self.redis_channel and self.redis_host) or self.callback):
+            raise ValueError(
+                "When streaming is enabled, you must provide either redis_host and redis_channel "
+                "or a callback function"
+            )
 
 
 class LLMClientBase:
@@ -44,6 +88,7 @@ class LLMClientBase:
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Union[str, bool, Dict[str, Any]]] = None,
+        streaming_config: Optional[StreamingConfig] = None,
         **kwargs: Any,
     ) -> Tuple[Any, Any]:
         """
@@ -53,6 +98,7 @@ class LLMClientBase:
             messages: List of messages for the conversation
             tools: Optional list of tool definitions
             tool_choice: Optional specification for tool choice behavior
+            streaming_config: Optional configuration for streaming responses
             **kwargs: Additional parameters for the API
 
         Returns:
@@ -103,6 +149,7 @@ class OpenAIClient(LLMClientBase):
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Union[str, bool, Dict[str, Any]]] = None,
+        streaming_config: Optional[StreamingConfig] = None,
         **kwargs: Any,
     ) -> Tuple[Any, Any]:
         """Generate a response using OpenAI's API."""
@@ -174,18 +221,147 @@ class AnthropicClient(LLMClientBase):
             import anthropic  # type: ignore
 
             self.client = anthropic.Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
+            self.async_client = anthropic.AsyncAnthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
         except ImportError:
             self.client = None  # type: ignore
+            self.async_client = None  # type: ignore
+
+    async def _publish_event(self, event: Dict[str, Any], streaming_config: StreamingConfig) -> None:
+        """
+        Publish a streaming event using the configured method (Redis or callback).
+
+        Args:
+            event: The event data to publish
+            streaming_config: The streaming configuration
+        """
+        # Add timestamp
+        event["timestamp"] = time.time()
+
+        # Use callback if provided
+        if streaming_config.callback:
+            try:
+                streaming_config.callback(event)
+            except Exception as e:
+                print(f"Error in streaming callback: {e}")
+
+        # Publish to Redis if configured
+        if streaming_config.redis_host and streaming_config.redis_channel:
+            try:
+                import redis
+
+                r = redis.Redis(host=streaming_config.redis_host, port=streaming_config.redis_port)
+
+                r.publish(streaming_config.redis_channel, json.dumps(event))
+            except ImportError:
+                print("Redis package not installed. Install with 'pip install redis'")
+            except Exception as e:
+                print(f"Error publishing to Redis: {e}")
+
+    async def _handle_stream(self, stream: Any, streaming_config: StreamingConfig) -> Tuple[str, Any]:
+        """
+        Handle streaming response from Anthropic.
+
+        Args:
+            stream: The message stream from Anthropic
+            streaming_config: Streaming configuration
+
+        Returns:
+            Tuple of (content, full_response)
+        """
+        content_parts = []
+
+        async for event in stream:
+            # Process based on event type
+            if event.type == "text" and StreamingEventType.TEXT in streaming_config.event_types:
+                content_parts.append(event.text)
+                await self._publish_event(
+                    {
+                        "type": "text",
+                        "text": event.text,
+                        "snapshot": event.snapshot,
+                    },
+                    streaming_config,
+                )
+
+            elif (
+                event.type == "content_block_stop"
+                and StreamingEventType.CONTENT_BLOCK_STOP in streaming_config.event_types
+            ):
+                await self._publish_event(
+                    {
+                        "type": "content_block_stop",
+                        "content_block": {
+                            "type": getattr(event.content_block, "type", None),
+                            "text": getattr(event.content_block, "text", None)
+                            if hasattr(event.content_block, "text")
+                            else None,
+                        },
+                    },
+                    streaming_config,
+                )
+
+            elif event.type == "message_stop" and StreamingEventType.MESSAGE_STOP in streaming_config.event_types:
+                await self._publish_event(
+                    {
+                        "type": "message_stop",
+                        "message": {
+                            "id": getattr(event.message, "id", None),
+                            "role": getattr(event.message, "role", None),
+                        },
+                    },
+                    streaming_config,
+                )
+
+            elif event.type == "input_json" and StreamingEventType.INPUT_JSON in streaming_config.event_types:
+                await self._publish_event(
+                    {
+                        "type": "input_json",
+                        "partial_json": event.partial_json,
+                        "snapshot": event.snapshot,
+                    },
+                    streaming_config,
+                )
+
+            elif event.type == "tool_use" and StreamingEventType.TOOL_USE in streaming_config.event_types:
+                await self._publish_event(
+                    {
+                        "type": "tool_use",
+                        "tool_use": {
+                            "id": getattr(event, "id", None),
+                            "name": getattr(event, "name", None),
+                            "input": getattr(event, "input", {}),
+                        },
+                    },
+                    streaming_config,
+                )
+
+        # Get accumulated message
+        full_response = await stream.get_final_message()
+
+        # Extract content text
+        content = ""
+        if hasattr(full_response, "content") and full_response.content:
+            if isinstance(full_response.content, list):
+                content = "".join(
+                    block.text if hasattr(block, "text") else str(block)
+                    for block in full_response.content
+                    if getattr(block, "type", None) != "tool_use"
+                )
+            else:
+                content = full_response.content
+
+        return content, full_response
 
     async def generate(
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Union[str, bool, Dict[str, Any]]] = None,
+        streaming_config: Optional[StreamingConfig] = None,
         **kwargs: Any,
     ) -> Tuple[Any, Any]:
         """Generate a response using Anthropic's API."""
-        if self.client is None:
+        if self.client is None or self.async_client is None:
             raise ImportError("Anthropic package is not installed. Install it with 'pip install anthropic'")
 
         # Anthropic requires system messages to be passed separately
@@ -247,8 +423,26 @@ class AnthropicClient(LLMClientBase):
         if "max_tokens" not in api_kwargs:
             api_kwargs["max_tokens"] = 4096
 
-        # Call the API in a non-blocking way
-        response = await asyncio.to_thread(self.client.messages.create, messages=anthropic_messages, **api_kwargs)  # type: ignore
+        # Handle streaming if enabled
+        if streaming_config and streaming_config.enabled:
+            # Type ignoring arg-type error because mypy
+            # can't verify that our message format matches Anthropic's expected format
+            async with self.async_client.messages.stream(
+                messages=anthropic_messages,  # type: ignore[arg-type]
+                **api_kwargs,
+            ) as stream:
+                return await self._handle_stream(stream, streaming_config)
+
+        # Non-streaming path (existing implementation)
+        # Use a more direct approach that mypy can handle better
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: self.client.messages.create(
+                messages=anthropic_messages,  # type: ignore[arg-type]
+                **api_kwargs,
+            ),
+        )
 
         # Extract and join text from response content blocks
         content = ""
