@@ -188,7 +188,12 @@ async def main():
             },
             redis_host=redis_host,
             redis_port=redis_port,
-            redis_channel=channel
+            redis_channel=channel,
+            event_type_mapping={
+                StreamingEventType.TEXT: "CUSTOM_TEXT",
+                StreamingEventType.TOOL_USE: "CUSTOM_TOOL",
+                StreamingEventType.MESSAGE_STOP: "CUSTOM_STOP"
+            }
         )
         
         # Create a tool loop options object with streaming configuration

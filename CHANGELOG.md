@@ -2,7 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
-# [1.8.0] - 2025-03-22
+# [1.8.1] - 2025-03-31
+
+### Added
+
+- N/A
+
+### Changed
+
+- Allowed the user the change the `type` value for the Redis message object.
+
+### Fixed
+
+- N/A
+
+# [1.8.0] - 2025-03-30
 
 ### Added
 

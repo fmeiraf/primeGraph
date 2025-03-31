@@ -49,6 +49,7 @@ class StreamingConfig(BaseModel):
     redis_port: int = 6379
     redis_channel: Optional[str] = None
     callback: Optional[Callable[[Dict[str, Any]], None]] = None
+    event_type_mapping: Dict[str, str] = Field(default_factory=dict)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -237,6 +238,10 @@ class AnthropicClient(LLMClientBase):
         # Add timestamp
         event["timestamp"] = time.time()
 
+        # Apply custom event type mapping if configured
+        if streaming_config.event_type_mapping and event.get("type") in streaming_config.event_type_mapping:
+            event["type"] = streaming_config.event_type_mapping[event["type"]]
+
         # Use callback if provided
         if streaming_config.callback:
             try:
@@ -250,7 +255,6 @@ class AnthropicClient(LLMClientBase):
                 import redis
 
                 r = redis.Redis(host=streaming_config.redis_host, port=streaming_config.redis_port)
-
                 r.publish(streaming_config.redis_channel, json.dumps(event))
             except ImportError:
                 print("Redis package not installed. Install with 'pip install redis'")
