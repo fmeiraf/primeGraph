@@ -85,7 +85,7 @@ async def main():
         print("-" * 50)
         
         # Call the API with streaming enabled
-        content, response = await client.generate(
+        content, _ = await client.generate(
             messages=messages,
             model="claude-3-7-sonnet-latest",
             max_tokens=300,

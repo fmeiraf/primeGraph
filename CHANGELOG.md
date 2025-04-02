@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.8.2] - 2025-04-01
+
+### Added
+
+- N/A
+
+### Changed
+
+- Added new event to `StreamingType` : `message_start`
+
+### Fixed
+
+- N/A
+
 # [1.8.1] - 2025-03-31
 
 ### Added

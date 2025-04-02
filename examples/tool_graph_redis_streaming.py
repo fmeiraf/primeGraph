@@ -181,6 +181,7 @@ async def main():
         streaming_config = StreamingConfig(
             enabled=True,
             event_types={
+                StreamingEventType.MESSAGE_START,
                 StreamingEventType.TEXT, 
                 StreamingEventType.CONTENT_BLOCK_STOP,
                 StreamingEventType.MESSAGE_STOP,

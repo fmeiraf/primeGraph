@@ -37,6 +37,7 @@ class StreamingEventType(str, Enum):
     MESSAGE_STOP = "message_stop"
     CONTENT_BLOCK_STOP = "content_block_stop"
     TOOL_USE = "tool_use"
+    MESSAGE_START = "message_start"
     ALL = "all"
 
 
@@ -273,10 +274,43 @@ class AnthropicClient(LLMClientBase):
             Tuple of (content, full_response)
         """
         content_parts = []
+        full_response_metadata = {}  # To store metadata from message_start
 
         async for event in stream:
             # Process based on event type
-            if event.type == "text" and StreamingEventType.TEXT in streaming_config.event_types:
+            if event.type == "message_start" and StreamingEventType.MESSAGE_START in streaming_config.event_types:
+                # Extract serializable usage data
+                usage_data = {}
+                if hasattr(event.message, "usage") and event.message.usage:
+                    # Attempt to convert usage object to dict
+                    if hasattr(event.message.usage, "_asdict"):
+                        usage_data = event.message.usage._asdict()
+                    elif isinstance(event.message.usage, dict):
+                        usage_data = event.message.usage
+                    else:
+                        try:
+                            # Fallback conversion if needed
+                            usage_data = dict(event.message.usage)
+                        except TypeError:
+                            usage_data = {"raw": str(event.message.usage)}  # Store as string if fails
+
+                # Store metadata for potential later use, though response might overwrite it
+                full_response_metadata = {
+                    "id": getattr(event.message, "id", None),
+                    "model": getattr(event.message, "model", None),
+                    "role": getattr(event.message, "role", None),
+                    "type": getattr(event.message, "type", None),
+                    "usage": usage_data,
+                }
+                await self._publish_event(
+                    {
+                        "type": "message_start",
+                        "message": full_response_metadata,  # Publish the extracted metadata
+                    },
+                    streaming_config,
+                )
+
+            elif event.type == "text" and StreamingEventType.TEXT in streaming_config.event_types:
                 content_parts.append(event.text)
                 await self._publish_event(
                     {
@@ -331,9 +365,9 @@ class AnthropicClient(LLMClientBase):
                     {
                         "type": "tool_use",
                         "tool_use": {
-                            "id": getattr(event, "id", None),
-                            "name": getattr(event, "name", None),
-                            "input": getattr(event, "input", {}),
+                            "id": getattr(event.tool_use, "id", None),  # Corrected attribute access
+                            "name": getattr(event.tool_use, "name", None),  # Corrected attribute access
+                            "input": getattr(event.tool_use, "input", {}),  # Corrected attribute access
                         },
                     },
                     streaming_config,
@@ -341,6 +375,24 @@ class AnthropicClient(LLMClientBase):
 
         # Get accumulated message
         full_response = await stream.get_final_message()
+
+        # If message_start data wasn't overwritten by final message, merge it
+        if hasattr(full_response, "id") and not full_response.id and "id" in full_response_metadata:
+            full_response.id = full_response_metadata["id"]
+        if hasattr(full_response, "model") and not full_response.model and "model" in full_response_metadata:
+            full_response.model = full_response_metadata["model"]
+        if hasattr(full_response, "role") and not full_response.role and "role" in full_response_metadata:
+            full_response.role = full_response_metadata["role"]
+        if hasattr(full_response, "type") and not full_response.type and "type" in full_response_metadata:
+            full_response.type = full_response_metadata["type"]
+        if hasattr(full_response, "usage") and not full_response.usage and "usage" in full_response_metadata:
+            # Attempt to reconstruct Usage object if possible, otherwise keep dict
+            try:
+                from anthropic.types import Usage  # Local import
+
+                full_response.usage = Usage(**full_response_metadata["usage"])  # type: ignore
+            except (ImportError, TypeError):
+                full_response.usage = full_response_metadata["usage"]  # Keep as dict if Usage class unavailable/fails
 
         # Extract content text
         content = ""
