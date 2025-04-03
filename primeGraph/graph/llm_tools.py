@@ -92,6 +92,7 @@ class LLMMessage(BaseModel):
     content: str
     tool_calls: Optional[List[Dict[str, Any]]] = None
     tool_call_id: Optional[str] = None
+    id: Optional[str] = None
     should_show_to_user: bool = True  # Flag to indicate if this message should be shown to the user
 
     model_config = {
@@ -1472,8 +1473,18 @@ class ToolEngine(Engine):
                         # Extract only the basic properties that we need and ensure they're serializable
                         serializable_response = {
                             "timestamp": time.time(),
-                            "provider": getattr(response, "provider", "unknown"),
-                            "model": getattr(response, "model", None),
+                            "provider": getattr(response, "provider", "unknown")
+                            if not isinstance(response, dict)
+                            else response.get("provider", "unknown"),
+                            "id": getattr(response, "id", None)
+                            if not isinstance(response, dict)
+                            else response.get("id"),
+                            "role": getattr(response, "role", None)
+                            if not isinstance(response, dict)
+                            else response.get("role"),
+                            "model": getattr(response, "model", None)
+                            if not isinstance(response, dict)
+                            else response.get("model"),
                             "content_summary": content[:100] + "..." if len(content) > 100 else content,
                         }
 
@@ -1529,7 +1540,11 @@ class ToolEngine(Engine):
                     print(f"Extracted {len(tool_calls)} tool calls")
 
                     # Create assistant message - without actual tool_calls attached
-                    assistant_message = LLMMessage(role="assistant", content=content)
+                    assistant_message = LLMMessage(
+                        role="assistant",
+                        content=content,
+                        id=getattr(response, "id", None) if not isinstance(response, dict) else response.get("id"),
+                    )
 
                     # For OpenAI, we need to add the tool_calls field to the message
                     # This is needed for the OpenAI API to properly associate tool responses
@@ -1750,7 +1765,12 @@ class ToolEngine(Engine):
                     print("Response does not contain tool calls, finishing")
 
                     # Create assistant message for final response
-                    assistant_message = LLMMessage(role="assistant", content=content, should_show_to_user=True)
+                    assistant_message = LLMMessage(
+                        role="assistant",
+                        content=content,
+                        should_show_to_user=True,
+                        id=getattr(response, "id", None) if not isinstance(response, dict) else response.get("id"),
+                    )
 
                     # Add to messages
                     state.messages.append(assistant_message)

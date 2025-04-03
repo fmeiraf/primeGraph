@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.8.3] - 2025-04-02
+
+### Added
+
+- N/A
+
+### Changed
+
+- Added id and other fields to `raw_response_history` and `LLLMessage`.
+
+### Fixed
+
+- N/A
+
 # [1.8.2] - 2025-04-01
 
 ### Added

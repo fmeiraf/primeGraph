@@ -38,6 +38,7 @@ import sys
 from typing import Any, Dict
 
 from pydantic import Field
+from rich import print as rprint
 
 from primeGraph import END, START
 from primeGraph.buffer.factory import LastValue
@@ -254,6 +255,8 @@ async def main():
         print("-" * 60)
         print("\nTool graph execution complete.")
         print(f"Chain ID: {chain_id}")
+
+        rprint(state)
         
         # Display final state information
         if state.user_location:
