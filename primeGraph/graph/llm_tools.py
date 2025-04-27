@@ -571,9 +571,32 @@ class ToolGraph(Graph):
 
         self._clean_graph_variables()
 
-        # Update state from serialized data
+        # Create a new state instance from serialized data
         if self.initial_state:
-            self.state = self.initial_state.__class__.model_validate_json(checkpoint.data)
+            try:
+                # First attempt to create a new state from JSON data
+                new_state = self.initial_state.__class__.model_validate_json(checkpoint.data)
+                self.state = new_state
+
+                # Store original state data for direct access during engine load_full_state
+                if isinstance(checkpoint.engine_state, dict):
+                    checkpoint.engine_state["data"] = checkpoint.data
+            except Exception as e:
+                print(f"[ToolGraph.load_from_checkpoint] Error recreating state: {str(e)}")
+                print("[ToolGraph.load_from_checkpoint] Falling back to field-by-field restoration")
+
+                # Fallback: Keep original state instance and update fields manually
+                try:
+                    import json
+
+                    state_dict = json.loads(checkpoint.data)
+
+                    # Iterate through fields and set values from state_dict
+                    for field_name, value in state_dict.items():
+                        if hasattr(self.state, field_name):
+                            setattr(self.state, field_name, value)
+                except Exception as e2:
+                    print(f"[ToolGraph.load_from_checkpoint] Fallback restoration failed: {str(e2)}")
 
         # Update buffers with current state values
         for field_name, buffer in self.buffers.items():
@@ -746,6 +769,33 @@ class ToolEngine(Engine):
         if not tool_node:
             raise ValueError("Cannot find any tool node in the graph to resume execution")
 
+        # Ensure tool_calls and messages are properly converted to objects, not dictionaries
+        if hasattr(state, "tool_calls") and isinstance(state.tool_calls, list):
+            fixed_tool_calls = []
+            for tc in state.tool_calls:
+                if isinstance(tc, dict) and "id" in tc and "tool_name" in tc:
+                    try:
+                        fixed_tool_calls.append(ToolCallLog(**tc))
+                    except Exception as e:
+                        print(f"[ToolEngine.resume] Error converting tool call: {str(e)}")
+                        fixed_tool_calls.append(tc)  # Keep original if conversion fails
+                else:
+                    fixed_tool_calls.append(tc)
+            state.tool_calls = fixed_tool_calls
+
+        if hasattr(state, "messages") and isinstance(state.messages, list):
+            fixed_messages = []
+            for msg in state.messages:
+                if isinstance(msg, dict) and "role" in msg:
+                    try:
+                        fixed_messages.append(LLMMessage(**msg))
+                    except Exception as e:
+                        print(f"[ToolEngine.resume] Error converting message: {str(e)}")
+                        fixed_messages.append(msg)  # Keep original if conversion fails
+                else:
+                    fixed_messages.append(msg)
+            state.messages = fixed_messages
+
         # Execute the tool if requested
         if execute_tool:
             if state.paused_after_execution:
@@ -787,45 +837,24 @@ class ToolEngine(Engine):
 
                     # Add the result to tool calls
                     if hasattr(state, "tool_calls"):
-                        # Ensure tool_calls is a list of ToolCallLog objects, not dictionaries
+                        # Just append the tool result to the existing list
                         if isinstance(state.tool_calls, list):
-                            # It's already a list, just append the new result
                             state.tool_calls.append(tool_result)
                         else:
-                            # It's not a list, create a new list with existing items and the new result
-                            # Note: this handles the case where it's a dict or other type
-                            existing_calls = []
-                            if hasattr(state.tool_calls, "items"):
-                                # It's a dict-like object, try to convert each item
-                                for k, v in state.tool_calls.items():
-                                    if isinstance(v, ToolCallLog):
-                                        existing_calls.append(v)
-                                    elif isinstance(v, dict) and "id" in v and "tool_name" in v:
-                                        # Try to convert dict to ToolCallLog
-                                        existing_calls.append(ToolCallLog(**v))
-                            elif hasattr(state.tool_calls, "__iter__"):
-                                # It's an iterable, try to convert each item
-                                for item in state.tool_calls:
-                                    if isinstance(item, ToolCallLog):
-                                        existing_calls.append(item)
-                                    elif isinstance(item, dict) and "id" in item and "tool_name" in item:
-                                        # Try to convert dict to ToolCallLog
-                                        existing_calls.append(ToolCallLog(**item))
+                            # If not a list, initialize a new list
+                            state.tool_calls = [tool_result]
 
-                            # Add the new tool result
-                            existing_calls.append(tool_result)
-                            # Replace the tool_calls attribute with our new list
-                            state.tool_calls = existing_calls
+                    # Special handling for custom fields from subclasses
+                    # Add result to processing_results if this is a process_payment tool
+                    if state.paused_tool_name == "process_payment" and hasattr(state, "processing_results"):
+                        if isinstance(state.processing_results, list):
+                            print(f"[ToolEngine.resume] Adding result to processing_results: {tool_result.result}")
+                            state.processing_results.append(tool_result.result)
 
-                    #     # Special handling for cancel_order tool - add to cancelled_orders list
-                    #     if state.paused_tool_name == "cancel_order" and hasattr(state, "cancelled_orders"):
-                    #         if isinstance(state.cancelled_orders, list) and "order_id" in state.paused_tool_arguments:
-                    #             state.cancelled_orders.append(state.paused_tool_arguments["order_id"])
-
-                    # # Add result to processing_results if this is a process_payment tool and state has that attribute
-                    # if state.paused_tool_name == "process_payment" and hasattr(state, "processing_results"):
-                    #     if isinstance(state.processing_results, list):
-                    #         state.processing_results.append(tool_result.result)
+                    # Special handling for cancel_order tool
+                    if state.paused_tool_name == "cancel_order" and hasattr(state, "cancelled_orders"):
+                        if isinstance(state.cancelled_orders, list) and "order_id" in state.paused_tool_arguments:
+                            state.cancelled_orders.append(state.paused_tool_arguments["order_id"])
 
                     # Add a tool result message
                     if hasattr(state, "messages"):
@@ -997,6 +1026,35 @@ class ToolEngine(Engine):
                 state["tool_state_current_trace"] = self.graph.state.current_trace
             if hasattr(self.graph.state, "raw_response_history"):
                 state["tool_state_raw_response_history"] = self.graph.state.raw_response_history
+
+            # NEW: Save all custom fields from the state
+            # Get all fields from the state class
+            if "model_fields" in dir(self.graph.state):
+                # Pydantic v2
+                state_fields = list(self.graph.state.model_fields.keys())
+            else:
+                # Fallback to checking all non-private, non-callable attributes
+                state_fields = [
+                    f
+                    for f in dir(self.graph.state)
+                    if not f.startswith("_") and not callable(getattr(self.graph.state, f))
+                ]
+
+            # Add custom fields to state dictionary
+            for field_name in state_fields:
+                # Skip fields we've already handled
+                if field_name.startswith("_") or field_name in state:
+                    continue
+
+                try:
+                    # Get field value
+                    field_value = getattr(self.graph.state, field_name)
+                    # Only save if not None and not a method
+                    if field_value is not None and not callable(field_value):
+                        state[field_name] = field_value
+                        print(f"[ToolEngine.get_full_state] Saving custom field: {field_name}")
+                except Exception as e:
+                    print(f"[ToolEngine.get_full_state] Error saving field {field_name}: {str(e)}")
 
             # Make sure the pause state is also set in each execution frame
             if "execution_frames" in state and state["execution_frames"]:
@@ -1174,6 +1232,49 @@ class ToolEngine(Engine):
                 self.graph.state.current_trace = saved_state["tool_state_current_trace"]
             if hasattr(self.graph.state, "raw_response_history") and "tool_state_raw_response_history" in saved_state:
                 self.graph.state.raw_response_history = saved_state["tool_state_raw_response_history"]
+
+            # NEW: Check for custom fields from the original state in the checkpoint data
+            # This is the key change to restore custom fields from ToolState subclasses
+            print("[ToolEngine.load_full_state] Checking for custom fields in checkpoint data")
+            state_dict = None
+            if "model_dump" in dir(self.graph.state):
+                # Pydantic v2 approach to get model fields
+                field_names = list(self.graph.state.model_fields.keys())
+                try:
+                    # Try to get the serialized state from checkpoint data
+                    if "data" in saved_state and saved_state["data"]:
+                        import json
+
+                        state_dict = json.loads(saved_state["data"])
+                    elif "state_json" in saved_state and saved_state["state_json"]:
+                        state_dict = json.loads(saved_state["state_json"])
+                except Exception as e:
+                    print(f"[ToolEngine.load_full_state] Error parsing state JSON: {str(e)}")
+            else:
+                # Pydantic v1 or other approach
+                field_names = [
+                    f
+                    for f in dir(self.graph.state)
+                    if not f.startswith("_") and not callable(getattr(self.graph.state, f))
+                ]
+
+            # If we couldn't get fields from model, try direct attributes
+            if not field_names:
+                field_names = [
+                    f
+                    for f in dir(self.graph.state)
+                    if not f.startswith("_") and not callable(getattr(self.graph.state, f))
+                ]
+
+            # Check for custom fields directly in saved_state
+            for field_name in field_names:
+                if field_name in saved_state and hasattr(self.graph.state, field_name):
+                    print(f"[ToolEngine.load_full_state] Restoring custom field from saved_state: {field_name}")
+                    setattr(self.graph.state, field_name, saved_state[field_name])
+                # If we have parsed state dict, check there too
+                elif state_dict and field_name in state_dict and hasattr(self.graph.state, field_name):
+                    print(f"[ToolEngine.load_full_state] Restoring custom field from state dict: {field_name}")
+                    setattr(self.graph.state, field_name, state_dict[field_name])
 
             # In case the pause state wasn't properly set in any of the above methods,
             # Check if the frame state has the is_paused attribute and try to restore from there
@@ -1657,37 +1758,14 @@ class ToolEngine(Engine):
                         # Execute the tool and capture the result
                         tool_result = await node.execute_tool(tool_func, arguments, tool_id, state)
 
-                        # Add to tool call history
+                        # Add the result to tool calls
                         if hasattr(state, "tool_calls"):
-                            # Ensure tool_calls is a list of ToolCallLog objects, not dictionaries
+                            # Just append the tool result to the existing list
                             if isinstance(state.tool_calls, list):
-                                # It's already a list, just append the new result
                                 state.tool_calls.append(tool_result)
                             else:
-                                # It's not a list, create a new list with existing items and the new result
-                                # Note: this handles the case where it's a dict or other type
-                                existing_calls = []
-                                if hasattr(state.tool_calls, "items"):
-                                    # It's a dict-like object, try to convert each item
-                                    for k, v in state.tool_calls.items():
-                                        if isinstance(v, ToolCallLog):
-                                            existing_calls.append(v)
-                                        elif isinstance(v, dict) and "id" in v and "tool_name" in v:
-                                            # Try to convert dict to ToolCallLog
-                                            existing_calls.append(ToolCallLog(**v))
-                                elif hasattr(state.tool_calls, "__iter__"):
-                                    # It's an iterable, try to convert each item
-                                    for item in state.tool_calls:
-                                        if isinstance(item, ToolCallLog):
-                                            existing_calls.append(item)
-                                        elif isinstance(item, dict) and "id" in item and "tool_name" in item:
-                                            # Try to convert dict to ToolCallLog
-                                            existing_calls.append(ToolCallLog(**item))
-
-                                # Add the new tool result
-                                existing_calls.append(tool_result)
-                                # Replace the tool_calls attribute with our new list
-                                state.tool_calls = existing_calls
+                                # If not a list, initialize a new list
+                                state.tool_calls = [tool_result]
 
                         # Special handling for cancel_order tool - add to cancelled_orders list
                         if tool_name == "cancel_order" and hasattr(state, "cancelled_orders"):

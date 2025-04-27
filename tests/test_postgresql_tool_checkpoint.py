@@ -659,13 +659,23 @@ async def test_state_persistence_through_checkpoint(postgres_storage, tool_tools
     assert len(final_state.processing_results) > 0
     assert final_state.processing_results[0]["order_id"] == "O1"
     assert final_state.processing_results[0]["amount"] == 19.99
+    assert final_state.customer_data["name"] == "John Doe"
+    assert first_state.order_data[0]["id"] == "O1"
     
     # Print all tool calls for verification
     print("\nFinal tool calls:")
     for tc in final_state.tool_calls:
-        print(f"- {tc.tool_name}: {tc.arguments}")
+        if hasattr(tc, 'tool_name'):
+            print(f"- {tc.tool_name}: {tc.arguments}")
+        elif isinstance(tc, dict) and 'tool_name' in tc:
+            print(f"- {tc['tool_name']}: {tc['arguments']}")
+        else:
+            print(f"- Unknown format: {tc}")
     
     # Print messages
     print("\nMessages:")
     for i, msg in enumerate(final_state.messages):
-        print(f"{i}: [{msg.role}] {msg.content[:50]}...")
+        if hasattr(msg, 'role') and hasattr(msg, 'content'):
+            print(f"{i}: [{msg.role}] {msg.content[:50]}...")
+        elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+            print(f"{i}: [{msg['role']}] {msg['content'][:50]}...")
