@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.8.4] - 2025-04-27
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Fixed `ToolState` inheritance not loading checkpoint data correctly on load.
+
 # [1.8.3] - 2025-04-02
 
 ### Added
