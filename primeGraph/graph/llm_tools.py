@@ -571,32 +571,44 @@ class ToolGraph(Graph):
 
         self._clean_graph_variables()
 
-        # Create a new state instance from serialized data
-        if self.initial_state:
+        # Create a new state instance from serialized data using Pydantic's validation
+        if self.state_class:  # Use self.state_class instead of self.initial_state
             try:
-                # First attempt to create a new state from JSON data
-                new_state = self.initial_state.__class__.model_validate_json(checkpoint.data)
-                self.state = new_state
+                print(
+                    f"[ToolGraph.load_from_checkpoint] Attempting to validate "
+                    f"JSON data for state: {checkpoint.data[:200]}..."
+                )
+                # --- DEBUG: Print the full JSON data being parsed ---
+                print(f"[ToolGraph.load_from_checkpoint] Full JSON data:\n{checkpoint.data}")
+                # --- END DEBUG ---
+                # Rely on Pydantic to reconstruct the entire state, including nested models
+                # Use self.state_class which should hold the correct state type
+                self.state = self.state_class.model_validate_json(checkpoint.data)
+                print(
+                    f"[ToolGraph.load_from_checkpoint] State successfully recreated "
+                    f"via model_validate_json. Type: {type(self.state)}"
+                )
+                # Add specific check for metadata if it exists
+                if hasattr(self.state, "metadata"):
+                    print(
+                        f"[ToolGraph.load_from_checkpoint] Metadata type after validation: "
+                        f"{type(getattr(self.state, 'metadata', None))}"
+                    )
 
                 # Store original state data for direct access during engine load_full_state
+                # This might be needed if engine relies on the raw dict still
                 if isinstance(checkpoint.engine_state, dict):
                     checkpoint.engine_state["data"] = checkpoint.data
+
             except Exception as e:
-                print(f"[ToolGraph.load_from_checkpoint] Error recreating state: {str(e)}")
-                print("[ToolGraph.load_from_checkpoint] Falling back to field-by-field restoration")
-
-                # Fallback: Keep original state instance and update fields manually
-                try:
-                    import json
-
-                    state_dict = json.loads(checkpoint.data)
-
-                    # Iterate through fields and set values from state_dict
-                    for field_name, value in state_dict.items():
-                        if hasattr(self.state, field_name):
-                            setattr(self.state, field_name, value)
-                except Exception as e2:
-                    print(f"[ToolGraph.load_from_checkpoint] Fallback restoration failed: {str(e2)}")
+                # If model_validate_json fails, log the error and re-raise it
+                # This makes the failure explicit during testing
+                print(
+                    f"[ToolGraph.load_from_checkpoint] CRITICAL: Error recreating state via "
+                    f"model_validate_json: {str(e)}"
+                )
+                print(f"[ToolGraph.load_from_checkpoint] Failing data: {checkpoint.data}")
+                raise  # Re-raise the exception to halt execution and see the traceback
 
         # Update buffers with current state values
         for field_name, buffer in self.buffers.items():
@@ -616,6 +628,9 @@ class ToolGraph(Graph):
 
         if self.verbose:
             self.logger.debug(f"Loaded checkpoint {checkpoint_id} for chain {self.chain_id}")
+
+    # REMOVE _discover_custom_models and _convert_state_complex_types methods
+    # Pydantic's model_validate_json should handle type reconstruction.
 
     def _save_checkpoint(self, node_name: str, engine_state: Dict[str, Any]) -> None:
         """
@@ -1216,6 +1231,53 @@ class ToolEngine(Engine):
                         messages.append(item)
 
                 self.graph.state.messages = messages
+                print(
+                    f"[ToolEngine.load_full_state] First message type after conversion: "
+                    f"{type(messages[0]) if messages else 'None'}"
+                )
+
+            # CRITICAL: Handle direct state messages field directly from the state
+            if hasattr(self.graph.state, "messages") and isinstance(self.graph.state.messages, list):
+                messages = self.graph.state.messages
+                if messages and isinstance(messages[0], dict) and "role" in messages[0]:
+                    print("[ToolEngine.load_full_state] Converting messages directly in state object")
+                    fixed_messages = []
+                    for msg in messages:
+                        if isinstance(msg, dict) and "role" in msg:
+                            try:
+                                fixed_messages.append(LLMMessage(**msg))
+                            except Exception as e:
+                                print(f"[ToolEngine.load_full_state] Error converting message: {str(e)}")
+                                fixed_messages.append(msg)
+                        else:
+                            fixed_messages.append(msg)
+                    self.graph.state.messages = fixed_messages
+
+            # Apply message conversion from any serialized data
+            try:
+                if isinstance(saved_state, dict) and "data" in saved_state and saved_state["data"]:
+                    import json
+
+                    state_dict = json.loads(saved_state["data"])
+                    if "messages" in state_dict and isinstance(state_dict["messages"], list):
+                        messages = state_dict["messages"]
+                        print(f"[ToolEngine.load_full_state] Found messages in state data: {len(messages)}")
+                        if messages and isinstance(messages[0], dict) and "role" in messages[0]:
+                            fixed_messages = []
+                            for msg in messages:
+                                if isinstance(msg, dict) and "role" in msg:
+                                    try:
+                                        fixed_messages.append(LLMMessage(**msg))
+                                    except Exception as e:
+                                        print(
+                                            f"[ToolEngine.load_full_state] Error converting message from data: {str(e)}"
+                                        )
+                                        fixed_messages.append(msg)
+                                else:
+                                    fixed_messages.append(msg)
+                            self.graph.state.messages = fixed_messages
+            except Exception as e:
+                print(f"[ToolEngine.load_full_state] Error processing state data: {str(e)}")
 
             # Restore additional ToolState properties
             if hasattr(self.graph.state, "current_iteration") and "tool_state_current_iteration" in saved_state:
@@ -1233,78 +1295,23 @@ class ToolEngine(Engine):
             if hasattr(self.graph.state, "raw_response_history") and "tool_state_raw_response_history" in saved_state:
                 self.graph.state.raw_response_history = saved_state["tool_state_raw_response_history"]
 
-            # NEW: Check for custom fields from the original state in the checkpoint data
-            # This is the key change to restore custom fields from ToolState subclasses
-            print("[ToolEngine.load_full_state] Checking for custom fields in checkpoint data")
-            state_dict = None
-            if "model_dump" in dir(self.graph.state):
-                # Pydantic v2 approach to get model fields
-                field_names = list(self.graph.state.model_fields.keys())
-                try:
-                    # Try to get the serialized state from checkpoint data
-                    if "data" in saved_state and saved_state["data"]:
-                        import json
+            # REMOVED: Section that manually checked/restored custom fields using setattr.
+            # The self.graph.state object is assumed to be correctly reconstructed by
+            # ToolGraph.load_from_checkpoint using model_validate_json.
+            # We only need to restore engine-specific state here.
 
-                        state_dict = json.loads(saved_state["data"])
-                    elif "state_json" in saved_state and saved_state["state_json"]:
-                        state_dict = json.loads(saved_state["state_json"])
-                except Exception as e:
-                    print(f"[ToolEngine.load_full_state] Error parsing state JSON: {str(e)}")
-            else:
-                # Pydantic v1 or other approach
-                field_names = [
-                    f
-                    for f in dir(self.graph.state)
-                    if not f.startswith("_") and not callable(getattr(self.graph.state, f))
-                ]
-
-            # If we couldn't get fields from model, try direct attributes
-            if not field_names:
-                field_names = [
-                    f
-                    for f in dir(self.graph.state)
-                    if not f.startswith("_") and not callable(getattr(self.graph.state, f))
-                ]
-
-            # Check for custom fields directly in saved_state
-            for field_name in field_names:
-                if field_name in saved_state and hasattr(self.graph.state, field_name):
-                    print(f"[ToolEngine.load_full_state] Restoring custom field from saved_state: {field_name}")
-                    setattr(self.graph.state, field_name, saved_state[field_name])
-                # If we have parsed state dict, check there too
-                elif state_dict and field_name in state_dict and hasattr(self.graph.state, field_name):
-                    print(f"[ToolEngine.load_full_state] Restoring custom field from state dict: {field_name}")
-                    setattr(self.graph.state, field_name, state_dict[field_name])
-
-            # In case the pause state wasn't properly set in any of the above methods,
-            # Check if the frame state has the is_paused attribute and try to restore from there
-            if "execution_frames" in saved_state and saved_state["execution_frames"]:
-                for frame in saved_state["execution_frames"]:
-                    if frame and hasattr(frame, "state") and frame.state and hasattr(frame.state, "is_paused"):
-                        print(f"[ToolEngine.load_full_state] Found frame with is_paused: {frame.state.is_paused}")
-                        if frame.state.is_paused:
-                            self.graph.state.is_paused = frame.state.is_paused
-                            if hasattr(frame.state, "paused_tool_id"):
-                                self.graph.state.paused_tool_id = frame.state.paused_tool_id
-                            if hasattr(frame.state, "paused_tool_name"):
-                                self.graph.state.paused_tool_name = frame.state.paused_tool_name
-                            if hasattr(frame.state, "paused_tool_arguments"):
-                                self.graph.state.paused_tool_arguments = frame.state.paused_tool_arguments
-                            if hasattr(frame.state, "paused_after_execution"):
-                                self.graph.state.paused_after_execution = frame.state.paused_after_execution
-                            if hasattr(frame.state, "paused_tool_result"):
-                                self.graph.state.paused_tool_result = frame.state.paused_tool_result
-                            break
-
+            # Restore pause state information from saved_state if necessary
+            # (Ideally, pause state should also be part of the GraphState model)
             if self.graph.state.is_paused:
                 print(
-                    f"[ToolEngine.load_full_state] Restored pause state: paused={self.graph.state.is_paused}, "
+                    f"[ToolEngine.load_full_state] Restored pause state from GraphState: "
+                    f"paused={self.graph.state.is_paused}, "
                     f"tool={self.graph.state.paused_tool_name}"
                 )
                 # Ensure chain status is set to PAUSE
                 self.graph._update_chain_status(ChainStatus.PAUSE)
             else:
-                print("[ToolEngine.load_full_state] Restored tool state (not paused)")
+                print("[ToolEngine.load_full_state] Restored tool state (not paused) from GraphState")
 
     async def execute(self) -> Any:
         """

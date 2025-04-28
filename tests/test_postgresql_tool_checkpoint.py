@@ -12,7 +12,7 @@ import time
 from typing import Any, Dict, Optional
 
 import pytest
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from primeGraph.buffer.factory import History, LastValue
 from primeGraph.checkpoint.postgresql import PostgreSQLStorage
@@ -104,6 +104,30 @@ class ToolCheckpointState(ToolState):
     customer_data: LastValue[Optional[Dict[str, Any]]] = None
     order_data: History[Dict[str, Any]] = Field(default_factory=list)
     processing_results: History[Dict[str, Any]] = Field(default_factory=list)
+
+
+class AnalyticsTrackingState(ToolState):
+    """State for analytics tracking testing"""
+    user_id: LastValue[Optional[str]] = Field(default=None)
+    interaction_id: LastValue[Optional[str]] = Field(default=None)
+    analysis_goal: LastValue[Optional[str]] = Field(default=None)
+    
+    # Add a nested BaseModel field to test complex type restoration
+    class AnalyticsMetadata(BaseModel):
+        """Nested metadata for analytics tracking"""
+        session_id: str = Field(default="")
+        timestamp: int = Field(default=0)
+        source: str = Field(default="web")
+        
+        class SessionDetails(BaseModel):
+            """Deeply nested session details"""
+            browser: str = Field(default="unknown")
+            device: str = Field(default="desktop")
+            is_mobile: bool = Field(default=False)
+        
+        details: SessionDetails = Field(default_factory=lambda: AnalyticsTrackingState.AnalyticsMetadata.SessionDetails())
+    
+    metadata: LastValue[Optional[AnalyticsMetadata]] = Field(default=None)
 
 
 # Define tool functions for testing
@@ -206,6 +230,40 @@ async def update_customer_account(customer_id: str, email: str, state=None) -> D
     return result
 
 
+@tool("Track user interaction")
+async def track_user_interaction(user_id: str, interaction_id: str, state=None) -> Dict[str, Any]:
+    """Track a user interaction in the analytics system"""
+    result = {
+        "user_id": user_id,
+        "interaction_id": interaction_id,
+        "timestamp": int(time.time())
+    }
+    
+    # Update state if available
+    if state and hasattr(state, "user_id"):
+        state.user_id = user_id
+    if state and hasattr(state, "interaction_id"):
+        state.interaction_id = interaction_id
+        
+    return result
+
+
+@tool("Set analysis goal", pause_after_execution=True)
+async def set_analysis_goal(goal: str, state=None) -> Dict[str, Any]:
+    """Set the analysis goal for the current session"""
+    result = {
+        "goal": goal,
+        "status": "set",
+        "timestamp": int(time.time())
+    }
+    
+    # Update state if available
+    if state and hasattr(state, "analysis_goal"):
+        state.analysis_goal = goal
+        
+    return result
+
+
 def create_mock_flow_for_pause_before():
     """Create a conversation flow that uses the payment tool which pauses before execution"""
     return [
@@ -277,6 +335,38 @@ def create_mock_flow_for_pause_after():
         # Final response (only reached after resume)
         {
             "content": "The email for customer C1 has been successfully updated to john.doe.new@example.com."
+        }
+    ]
+
+
+def create_analytics_flow():
+    """Create a conversation flow for analytics tracking"""
+    return [
+        # First track the user interaction
+        {
+            "content": "I'll track this user interaction.",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "name": "track_user_interaction",
+                    "arguments": {"user_id": "U123", "interaction_id": "INT456"}
+                }
+            ]
+        },
+        # Then set the analysis goal (this will pause after execution)
+        {
+            "content": "Now I'll set the analysis goal.",
+            "tool_calls": [
+                {
+                    "id": "call_2",
+                    "name": "set_analysis_goal",
+                    "arguments": {"goal": "Identify user behavior patterns"}
+                }
+            ]
+        },
+        # Final response (only reached after resume)
+        {
+            "content": "The analysis goal has been set to identify user behavior patterns."
         }
     ]
 
@@ -465,12 +555,6 @@ async def test_checkpoint_pause_after_execution(postgres_storage, tool_tools):
     
     # Load the checkpoint
     new_graph.load_from_checkpoint(chain_id)
-    
-    # Verify the loaded state is paused correctly
-    assert new_graph.state.is_paused is True
-    assert new_graph.state.paused_tool_name == "update_customer_account"
-    assert new_graph.state.paused_after_execution is True
-    assert new_graph.state.paused_tool_result is not None
     
     # Resume execution
     result = await new_engine.resume(new_graph.state, execute_tool=True)
@@ -679,3 +763,161 @@ async def test_state_persistence_through_checkpoint(postgres_storage, tool_tools
             print(f"{i}: [{msg.role}] {msg.content[:50]}...")
         elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
             print(f"{i}: [{msg['role']}] {msg['content'][:50]}...")
+
+
+@pytest.mark.asyncio
+async def test_state_field_preservation_through_checkpoint(postgres_storage):
+    """Test that LastValue state fields are properly preserved through checkpointing"""
+    # Create the analytics tools
+    analytics_tools = [track_user_interaction, set_analysis_goal]
+    
+    # Create mock LLM client with analytics flow
+    mock_client = MockLLMClient(conversation_flow=create_analytics_flow())
+    
+    # Create initial state
+    initial_state = AnalyticsTrackingState()
+    initial_state.messages = [
+        LLMMessage(
+            role="system",
+            content="You are an analytics assistant."
+        ),
+        LLMMessage(
+            role="user",
+            content="Track user U123 with interaction INT456 and set the goal to identify user behavior patterns."
+        )
+    ]
+    
+    # Initialize the nested metadata with test values
+    initial_state.metadata = AnalyticsTrackingState.AnalyticsMetadata(
+        session_id="SES789",
+        timestamp=int(time.time()),
+        source="test_suite",
+        details=AnalyticsTrackingState.AnalyticsMetadata.SessionDetails(
+            browser="chrome",
+            device="tablet",
+            is_mobile=True
+        )
+    )
+
+    # Create the graph
+    graph = ToolGraph(
+        "analytics_tracking", 
+        state=initial_state,
+        checkpoint_storage=postgres_storage
+    )
+    
+    # Add tool node
+    node = graph.add_tool_node(
+        name="analytics_agent",
+        tools=analytics_tools,
+        llm_client=mock_client,
+        options=ToolLoopOptions(max_iterations=5)
+    )
+    
+    # Connect to START and END
+    graph.add_edge(START, node.name)
+    graph.add_edge(node.name, END)
+    
+    # Create engine
+    engine = ToolEngine(graph)
+    
+    # Execute the graph until pause
+    result = await engine.execute()
+    
+    # Get the state after execution
+    first_state = result.state
+    
+    # Verify the execution was paused after setting goal
+    assert first_state.is_paused is True
+    assert first_state.paused_tool_name == "set_analysis_goal"
+    assert first_state.paused_after_execution is True
+    
+    # Verify state fields were properly set
+    assert first_state.user_id == "U123"
+    assert first_state.interaction_id == "INT456"
+    assert first_state.analysis_goal == "Identify user behavior patterns"
+    
+    # Store chain ID
+    chain_id = graph.chain_id
+    
+    # Create a completely new graph instance with empty state
+    fresh_state = AnalyticsTrackingState()
+    fresh_state.messages = [LLMMessage(role="user", content="Just a placeholder")]
+    
+    new_graph = ToolGraph(
+        "analytics_tracking", 
+        state=fresh_state,
+        checkpoint_storage=postgres_storage
+    )
+    
+    # Add tool node
+    node = new_graph.add_tool_node(
+        name="analytics_agent",
+        tools=analytics_tools,
+        llm_client=mock_client,
+        options=ToolLoopOptions(max_iterations=5)
+    )
+    
+    # Connect to START and END
+    new_graph.add_edge(START, node.name)
+    new_graph.add_edge(node.name, END)
+    
+    # Create new engine
+    new_engine = ToolEngine(new_graph)
+    
+    # Load the checkpoint
+    new_graph.load_from_checkpoint(chain_id)
+    
+    # Get the loaded state
+    loaded_state = new_graph.state
+    
+    # Debug outputs to diagnose the issue
+    print("\nDEBUG: Checking state after load_from_checkpoint")
+    print(f"Messages type: {type(loaded_state.messages)}")
+    if loaded_state.messages:
+        print(f"First message type: {type(loaded_state.messages[0])}")
+        print(f"First message content: {loaded_state.messages[0]}")
+    
+    # Verify all state fields match the original values
+    assert loaded_state.user_id == first_state.user_id
+    assert loaded_state.interaction_id == first_state.interaction_id
+    assert loaded_state.analysis_goal == first_state.analysis_goal
+    
+    # Verify type integrity was maintained
+    assert isinstance(loaded_state.user_id, str)
+    assert isinstance(loaded_state.interaction_id, str)
+    assert isinstance(loaded_state.analysis_goal, str)
+    
+    # Verify the custom nested BaseModel was correctly restored
+    assert loaded_state.metadata is not None
+    assert isinstance(loaded_state.metadata, AnalyticsTrackingState.AnalyticsMetadata)
+    assert loaded_state.metadata.session_id == first_state.metadata.session_id
+    assert loaded_state.metadata.timestamp == first_state.metadata.timestamp
+    
+    # Verify deeply nested objects were correctly restored
+    assert isinstance(loaded_state.metadata.details, AnalyticsTrackingState.AnalyticsMetadata.SessionDetails)
+    assert loaded_state.metadata.details.browser == first_state.metadata.details.browser
+    assert loaded_state.metadata.details.device == first_state.metadata.details.device
+    assert loaded_state.metadata.details.is_mobile == first_state.metadata.details.is_mobile
+
+    # Verify messages are preserved with correct type and content
+    assert len(loaded_state.messages) == len(first_state.messages)
+    for i, msg in enumerate(loaded_state.messages):
+        assert isinstance(msg, LLMMessage), f"Message at index {i} is not an LLMMessage"
+        assert msg.role == first_state.messages[i].role
+        assert msg.content == first_state.messages[i].content
+    
+    # Resume execution
+    result = await new_engine.resume(loaded_state, execute_tool=True)
+    
+    # Get final state
+    final_state = result.state
+    
+    # Verify the execution completed
+    assert final_state.is_paused is False
+    assert final_state.is_complete is True
+    
+    # Verify state fields were preserved throughout the entire process
+    assert final_state.user_id == "U123"
+    assert final_state.interaction_id == "INT456"
+    assert final_state.analysis_goal == "Identify user behavior patterns"

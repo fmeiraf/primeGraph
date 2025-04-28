@@ -494,84 +494,67 @@ class Engine:
 
     def load_full_state(self, saved_state: Dict[str, Any]) -> None:
         """
-        Load the full state from a saved checkpoint.
+        Load the engine's internal execution state from a saved checkpoint.
+        NOTE: This method *only* loads the engine's internal state (frames, visited nodes, etc.).
+        The actual graph state (self.graph.state) should be loaded separately, typically
+        before calling this method (e.g., in Graph.load_from_checkpoint).
 
         Args:
-            saved_state: The state dictionary from a checkpoint
+            saved_state: The state dictionary from a checkpoint, containing engine state.
         """
-        # Get the state class
-        state_class = type(self.graph.state) if self.graph.state is not None else None
+        # --- Load Engine-Specific State ---
+        # Restore execution frames, visited nodes, etc. from saved_state
+        # Ensure we handle potential missing keys gracefully
 
-        # Extract default values from the current state for required fields
-        default_values: Dict[str, Any] = {}
+        # Restore execution frames
+        # TODO: ExecutionFrame needs proper serialization/deserialization if it contains complex objects
+        self.execution_frames = saved_state.get("execution_frames", [])
 
-        # Handle specific known classes with required fields
-        if state_class is None:
-            print("[Engine.load_full_state] Cannot initialize state: state is None")
-            return
-        if state_class.__name__ == "StateForTestWithHistory":
-            # This class requires execution_order to be initialized
-            default_values["execution_order"] = []
-        else:
-            # General approach for other classes
-            for field_name, field_info in getattr(state_class, "__annotations__", {}).items():
-                # Check if it's a History field - which needs to be initialized with an empty list
-                if (
-                    hasattr(field_info, "__origin__")
-                    and isinstance(field_info.__origin__, list)
-                    or str(field_info).startswith("History[")
-                ):
-                    default_values[field_name] = []
+        # Restore visited nodes
+        self._visited_nodes = set(saved_state.get("visited_nodes", set()))
 
-        # Create a new state object of the same class with default values
-        if state_class is type(None):
-            # Handle case where state_class is NoneType
-            print("[Engine.load_full_state] Cannot initialize state: state is None")
-            return
+        # Restore node execution count
+        self._node_execution_count = saved_state.get("node_execution_count", {})
 
-        new_state = state_class(**default_values)
+        # Restore branch counter
+        self._branch_counter = saved_state.get("branch_counter", 0)
 
-        if not hasattr(saved_state, "items"):
-            print(f"[Engine.load_full_state] Invalid saved_state format: {type(saved_state)}")
-            return
+        # Restore active branches (convert list back to set)
+        self._active_branches = {k: set(v) for k, v in saved_state.get("active_branches", {}).items()}
 
-        # First step: get chain status
-        chain_status = saved_state.get("chain_status", ChainStatus.DONE)
-        print(f"[Engine.load_full_state] Chain status from checkpoint: {chain_status}")
+        # Restore interrupted frames
+        # TODO: Need proper serialization/deserialization for interrupted frames
+        self._interrupted_frames = saved_state.get("interrupted_frames", {})
 
-        is_paused = saved_state.get("is_paused", False)
-        print(f"[Engine.load_full_state] Is paused: {is_paused}")
+        # --- DO NOT OVERWRITE self.graph.state ---
+        # The graph state (self.graph.state) is assumed to be loaded
+        # by the Graph subclass (e.g., ToolGraph.load_from_checkpoint)
+        # using its specific deserialization logic (like Pydantic's model_validate_json).
+        # We explicitly avoid overwriting it here.
 
-        # For tool nodes, we need special handling of the paused_tool_result field
-        if is_paused and "paused_tool_result" in saved_state and saved_state["paused_tool_result"]:
-            from primeGraph.graph.llm_tools import ToolCallLog
+        # --- Restore Chain Status (but don't rely on is_paused from engine state) ---
+        # Get chain status from the saved engine state if present
+        chain_status_value = saved_state.get("chain_status", ChainStatus.DONE.value)
+        try:
+            chain_status = ChainStatus(chain_status_value)
+        except ValueError:
+            print(
+                f"[Engine.load_full_state] Warning: "
+                f"Invalid chain_status value '{chain_status_value}', defaulting to DONE."
+            )
+            chain_status = ChainStatus.DONE
 
-            paused_tool_result = saved_state["paused_tool_result"]
-            if (
-                isinstance(paused_tool_result, dict)
-                and "id" in paused_tool_result
-                and "tool_name" in paused_tool_result
-            ):
-                try:
-                    # Convert dict to ToolCallLog
-                    saved_state["paused_tool_result"] = ToolCallLog(**paused_tool_result)
-                except Exception as e:
-                    print(f"[Engine.load_full_state] Error converting paused_tool_result: {str(e)}")
+        # Update the graph's chain status based *only* on the engine state's record.
+        # Do not infer based on is_paused, as that belongs to the GraphState.
+        self.graph.chain_status = chain_status
+        print(f"[Engine.load_full_state] Restored engine state. Graph chain_status set to: {chain_status}")
 
-        # Second step: Apply everything to our state
-        field_names = [name for name in dir(self.graph.state) if not name.startswith("_")]
-
-        for key, value in saved_state.items():
-            if key in field_names:
-                if hasattr(self.graph.state, key):
-                    setattr(new_state, key, value)
-
-        # Apply version if it exists both in the serialized data and our class
-        if "version" in saved_state and hasattr(self.graph.state, "version"):
-            new_state.version = saved_state["version"]
-
-        # Replace the state
-        self.graph.state = new_state
+        # --- REMOVED ---
+        # - Creation of `new_state`
+        # - Loop setting attributes on `new_state`
+        # - Assignment `self.graph.state = new_state`
+        # - Logic relying on `is_paused` from `saved_state`
+        # - Conversion logic for `paused_tool_result` (should be handled by GraphState deserialization)
 
     def _get_node_parents(self, node_id: str) -> Set[str]:
         """Get all parent nodes that have edges leading to the given node."""

@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.8.5] - 2025-04-28
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Fixed `ToolState` inheritance not loading converting pydantic models of new added fields.
+
 # [1.8.4] - 2025-04-27
 
 ### Added
