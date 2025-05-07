@@ -823,3 +823,101 @@ async def test_pause_before_execution(tool_graph_with_payment):
     payment_calls = [call for call in tool_graph_with_payment.state.tool_calls if call.tool_name == "process_payment"]
     assert len(payment_calls) > 0
     assert payment_calls[0].success == True
+
+
+# Add this new tool definition before the test fixtures
+@tool(
+    "Process a secure payment",
+    hidden_params=["api_key", "secret"]
+)
+async def process_secure_payment(amount: float, currency: str, api_key: str, secret: str) -> Dict[str, Any]:
+    """Process a payment with secure credentials"""
+    # This would normally interact with a payment gateway
+    # but for testing it just returns a confirmation
+    return {
+        "amount": amount,
+        "currency": currency,
+        "status": "processed",
+        "transaction_id": f"TX-{int(time.time())}"
+    }
+
+@pytest.fixture
+def secure_payment_tools():
+    """Fixture providing tools including one with hidden parameters"""
+    return [process_secure_payment]
+
+@pytest.fixture
+def tool_graph_with_secure_payment(secure_payment_tools, mock_llm_client_for_payment):
+    """Fixture providing a tool graph with secure payment processing"""
+    state = CustomerServiceState()
+    graph = ToolGraph("secure_payment", state=state)
+    
+    options = ToolLoopOptions(
+        max_iterations=5,
+        max_tokens=1024
+    )
+    
+    node = graph.add_tool_node(
+        name="secure_payment_agent",
+        tools=secure_payment_tools,
+        llm_client=mock_llm_client_for_payment,
+        options=options
+    )
+    
+    graph.add_edge(START, node.name)
+    graph.add_edge(node.name, END)
+    
+    return graph
+
+@pytest.mark.asyncio
+async def test_hidden_parameters(tool_graph_with_secure_payment):
+    """Test that hidden parameters are excluded from schema but still required for execution"""
+    # Get the tool node
+    node = tool_graph_with_secure_payment.nodes["secure_payment_agent"]
+    
+    # Get the tool schemas
+    schemas = node.get_tool_schemas()
+    
+    # Find the secure payment tool schema
+    secure_payment_schema = next(
+        (s for s in schemas if s.get("function", {}).get("name") == "process_secure_payment"),
+        None
+    )
+    
+    assert secure_payment_schema is not None, "Secure payment tool schema not found"
+    
+    # Get the parameters from the schema
+    parameters = secure_payment_schema.get("function", {}).get("parameters", {})
+    properties = parameters.get("properties", {})
+    required = parameters.get("required", [])
+    
+    # Verify hidden parameters are not in the schema
+    assert "api_key" not in properties, "api_key should be hidden from schema"
+    assert "secret" not in properties, "secret should be hidden from schema"
+    assert "api_key" not in required, "api_key should not be in required list"
+    assert "secret" not in required, "secret should not be in required list"
+    
+    # Verify visible parameters are in the schema
+    assert "amount" in properties, "amount should be visible in schema"
+    assert "currency" in properties, "currency should be visible in schema"
+    assert "amount" in required, "amount should be required"
+    assert "currency" in required, "currency should be required"
+    
+    # Verify the tool still requires all parameters for execution
+    tool_func = node.find_tool_by_name("process_secure_payment")
+    assert tool_func is not None, "Tool function not found"
+    
+    # Get the tool definition
+    tool_def = tool_func._tool_definition
+    
+    # Verify all parameters are in the tool definition
+    assert "api_key" in tool_def.parameters, "api_key should be in tool parameters"
+    assert "secret" in tool_def.parameters, "secret should be in tool parameters"
+    assert "amount" in tool_def.parameters, "amount should be in tool parameters"
+    assert "currency" in tool_def.parameters, "currency should be in tool parameters"
+    
+    # Verify hidden parameters are marked as hidden
+    assert "api_key" in tool_def.hidden_params, "api_key should be marked as hidden"
+    assert "secret" in tool_def.hidden_params, "secret should be marked as hidden"
+    assert "amount" not in tool_def.hidden_params, "amount should not be marked as hidden"
+    assert "currency" not in tool_def.hidden_params, "currency should not be marked as hidden"

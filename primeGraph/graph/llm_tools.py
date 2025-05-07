@@ -53,6 +53,7 @@ class ToolDefinition(BaseModel):
     type: ToolType = ToolType.FUNCTION
     parameters: Dict[str, Any] = {}
     required_params: List[str] = []
+    hidden_params: List[str] = []  # List of parameter names to hide from schema
     func: Optional[Callable] = None
     pause_before_execution: bool = False  # Flag to pause execution before this tool runs
     pause_after_execution: bool = False  # Flag to pause execution after this tool runs
@@ -151,6 +152,7 @@ def tool(
     tool_type: ToolType = ToolType.FUNCTION,
     pause_before_execution: bool = False,
     pause_after_execution: bool = False,
+    hidden_params: Optional[List[str]] = None,
 ) -> Callable:
     """
     Decorator for tool functions.
@@ -164,6 +166,7 @@ def tool(
         tool_type: Type of tool (function, action, retrieval).
         pause_before_execution: Whether to pause before executing the tool.
         pause_after_execution: Whether to pause after executing the tool.
+        hidden_params: List of parameter names to hide from the schema.
 
     Returns:
         Decorated function with tool metadata.
@@ -212,6 +215,7 @@ def tool(
             type=tool_type,
             parameters=parameters,
             required_params=required_params,
+            hidden_params=hidden_params or [],  # Use empty list if None
             func=func,
             pause_before_execution=pause_before_execution,
             pause_after_execution=pause_after_execution,
@@ -318,11 +322,15 @@ class ToolNode(Node):
             tool_def = tool_func._tool_definition
 
             # Create parameter schema for JSON schema format
-            json_schema = {"type": "object", "properties": {}, "required": tool_def.required_params}
+            json_schema = {"type": "object", "properties": {}, "required": []}
 
-            # Add each parameter to the JSON schema
+            # Add each parameter to the JSON schema, excluding hidden ones
             for param_name, param_info in tool_def.parameters.items():
-                json_schema["properties"][param_name] = param_info
+                if param_name not in tool_def.hidden_params:
+                    json_schema["properties"][param_name] = param_info
+                    # Only add to required if it's required and not hidden
+                    if param_name in tool_def.required_params:
+                        json_schema["required"].append(param_name)
 
             # Format for provider
             if provider and provider.lower() == "anthropic":

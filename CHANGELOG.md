@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.9.0] - 2025-04-28
+
+### Added
+
+- Option to hide parameters from `tool` function schema.
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- N/A
+
 # [1.8.5] - 2025-04-28
 
 ### Added
