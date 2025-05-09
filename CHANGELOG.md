@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.9.1] - 2025-04-28
+
+### Added
+
+- Added more logging on how message history is being passed to the `ToolGraph` on each run.
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Fixed case where empty strings ("") where being added to message history on `ToolGraph` loops.
+
+# [1.8.5] - 2025-04-28
+
 # [1.9.0] - 2025-04-28
 
 ### Added

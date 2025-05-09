@@ -1506,6 +1506,7 @@ class ToolEngine(Engine):
             try:
                 # Call LLM with current messages and tools
                 print(f"Calling LLM generate with {len(state.messages)} messages and {len(tool_schemas)} tools")
+                print(f"State messages: {state.messages}")
 
                 # Convert LLMMessage objects to dictionaries
                 message_dicts = []
@@ -1567,6 +1568,8 @@ class ToolEngine(Engine):
                     streaming_config=streaming_config,
                     **api_kwargs,
                 )
+
+                print(f"LLM raw response: {response}")
 
                 # Update last stream timestamp if streaming was enabled
                 if streaming_config and streaming_config.enabled and hasattr(state, "last_stream_timestamp"):
@@ -1656,57 +1659,61 @@ class ToolEngine(Engine):
                     print(f"Extracted {len(tool_calls)} tool calls")
 
                     # Create assistant message - without actual tool_calls attached
-                    assistant_message = LLMMessage(
-                        role="assistant",
-                        content=content,
-                        id=getattr(response, "id", None) if not isinstance(response, dict) else response.get("id"),
-                    )
-
-                    # For OpenAI, we need to add the tool_calls field to the message
-                    # This is needed for the OpenAI API to properly associate tool responses
-                    if (
-                        hasattr(node.llm_client, "client")
-                        and node.llm_client.client
-                        and hasattr(node.llm_client.client, "__class__")
-                        and "openai" in node.llm_client.client.__class__.__module__
-                    ):
-                        # Extract tool_calls from the response
-
-                        if hasattr(response, "choices") and response.choices:
-                            message = response.choices[0].message
-                            if hasattr(message, "tool_calls") and message.tool_calls:
-                                # Store the raw tool_calls in a format that can be serialized
-                                tool_calls_data = []
-                                for tc in message.tool_calls:
-                                    tool_calls_data.append(
-                                        {
-                                            "id": tc.id,
-                                            "type": tc.type,
-                                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                                        }
-                                    )
-                                # Store the serializable version
-                                assistant_message.tool_calls = tool_calls_data
-                                # Tool calls are internal messages to the LLM, not user-facing
-                                assistant_message.should_show_to_user = not bool(
-                                    tool_calls_data
-                                )  # Only show to user if no tool calls
-
-                    state.messages.append(assistant_message)
-
-                    # Call the on_message callback for the assistant message with tool calls
-                    if hasattr(node, "on_message") and node.on_message:
-                        node.on_message(
-                            {
-                                "message_type": "assistant",
-                                "content": content,
-                                "raw_response": response,
-                                "has_tool_calls": True,
-                                "is_final": False,
-                                "iteration": current_iteration,
-                                "timestamp": time.time(),
-                            }
+                    if content and content.strip():  # Only add if content is not empty
+                        assistant_message = LLMMessage(
+                            role="assistant",
+                            content=content,
+                            id=getattr(response, "id", None) if not isinstance(response, dict) else response.get("id"),
                         )
+
+                        # For OpenAI, we need to add the tool_calls field to the message
+                        # This is needed for the OpenAI API to properly associate tool responses
+                        if (
+                            hasattr(node.llm_client, "client")
+                            and node.llm_client.client
+                            and hasattr(node.llm_client.client, "__class__")
+                            and "openai" in node.llm_client.client.__class__.__module__
+                        ):
+                            # Extract tool_calls from the response
+
+                            if hasattr(response, "choices") and response.choices:
+                                message = response.choices[0].message
+                                if hasattr(message, "tool_calls") and message.tool_calls:
+                                    # Store the raw tool_calls in a format that can be serialized
+                                    tool_calls_data = []
+                                    for tc in message.tool_calls:
+                                        tool_calls_data.append(
+                                            {
+                                                "id": tc.id,
+                                                "type": tc.type,
+                                                "function": {
+                                                    "name": tc.function.name,
+                                                    "arguments": tc.function.arguments,
+                                                },
+                                            }
+                                        )
+                                    # Store the serializable version
+                                    assistant_message.tool_calls = tool_calls_data
+                                    # Tool calls are internal messages to the LLM, not user-facing
+                                    assistant_message.should_show_to_user = not bool(
+                                        tool_calls_data
+                                    )  # Only show to user if no tool calls
+
+                        state.messages.append(assistant_message)
+
+                        # Call the on_message callback for the assistant message with tool calls
+                        if hasattr(node, "on_message") and node.on_message:
+                            node.on_message(
+                                {
+                                    "message_type": "assistant",
+                                    "content": content,
+                                    "raw_response": response,
+                                    "has_tool_calls": True,
+                                    "is_final": False,
+                                    "iteration": current_iteration,
+                                    "timestamp": time.time(),
+                                }
+                            )
 
                     if not tool_calls:
                         error_msg = "Failed to extract tool calls from response"
@@ -1817,39 +1824,41 @@ class ToolEngine(Engine):
                             client_module = node.llm_client.client.__class__.__module__
                             anthropic_client = "anthropic" in client_module
 
-                        if anthropic_client:
-                            # For Anthropic, use a simpler format
-                            tool_message = LLMMessage(
-                                role="user",
-                                content=f"Tool result for {tool_name}: {str(tool_result.result)}",
-                                should_show_to_user=False,
-                            )
-                        else:
-                            # For OpenAI, use the standard format
-                            tool_message = LLMMessage(
-                                role="tool",
-                                content=str(tool_result.result),
-                                tool_call_id=tool_id,
-                                should_show_to_user=False,
-                            )
+                        result_str = str(tool_result.result)
+                        if result_str and result_str.strip():  # Only add if result is not empty
+                            if anthropic_client:
+                                # For Anthropic, use a simpler format
+                                tool_message = LLMMessage(
+                                    role="user",
+                                    content=f"Tool result for {tool_name}: {result_str}",
+                                    should_show_to_user=False,
+                                )
+                            else:
+                                # For OpenAI, use the standard format
+                                tool_message = LLMMessage(
+                                    role="tool",
+                                    content=result_str,
+                                    tool_call_id=tool_id,
+                                    should_show_to_user=False,
+                                )
 
-                        # Add tool result to messages and tool call entries
-                        state.messages.append(tool_message)
-                        tool_call_entries.append(tool_result)
+                            # Add tool result to messages and tool call entries
+                            state.messages.append(tool_message)
+                            tool_call_entries.append(tool_result)
 
-                        # Call the on_message callback for the tool result message
-                        if hasattr(node, "on_message") and node.on_message:
-                            node.on_message(
-                                {
-                                    "message_type": "tool",
-                                    "content": str(tool_result.result),
-                                    "tool_id": tool_id,
-                                    "tool_name": tool_name,
-                                    "is_final": False,
-                                    "iteration": current_iteration,
-                                    "timestamp": time.time(),
-                                }
-                            )
+                            # Call the on_message callback for the tool result message
+                            if hasattr(node, "on_message") and node.on_message:
+                                node.on_message(
+                                    {
+                                        "message_type": "tool",
+                                        "content": result_str,
+                                        "tool_id": tool_id,
+                                        "tool_name": tool_name,
+                                        "is_final": False,
+                                        "iteration": current_iteration,
+                                        "timestamp": time.time(),
+                                    }
+                                )
 
                         # Add to buffer updates
                         buffer_updates["tool_calls"] = tool_call_entries
@@ -1858,65 +1867,66 @@ class ToolEngine(Engine):
                     print("Response does not contain tool calls, finishing")
 
                     # Create assistant message for final response
-                    assistant_message = LLMMessage(
-                        role="assistant",
-                        content=content,
-                        should_show_to_user=True,
-                        id=getattr(response, "id", None) if not isinstance(response, dict) else response.get("id"),
-                    )
-
-                    # Add to messages
-                    state.messages.append(assistant_message)
-
-                    # Call the on_message callback if provided
-                    if hasattr(node, "on_message") and node.on_message:
-                        node.on_message(
-                            {
-                                "message_type": "assistant",
-                                "content": content,
-                                "raw_response": response,
-                                "has_tool_calls": False,
-                                "is_final": True,
-                                "iteration": current_iteration,
-                                "timestamp": time.time(),
-                            }
+                    if content and content.strip():  # Only add if content is not empty
+                        assistant_message = LLMMessage(
+                            role="assistant",
+                            content=content,
+                            should_show_to_user=True,
+                            id=getattr(response, "id", None) if not isinstance(response, dict) else response.get("id"),
                         )
 
-                    # Mark as complete with final output
-                    if hasattr(state, "final_output"):
-                        state.final_output = content
-                    if hasattr(state, "is_complete"):
-                        state.is_complete = True
-                    is_complete = True
-                    buffer_updates["is_complete"] = True
-                    buffer_updates["final_output"] = content
+                        # Add to messages
+                        state.messages.append(assistant_message)
 
-                    # Save the raw response
-                    if hasattr(state, "current_trace"):
-                        # Create a safely serializable trace object
-                        try:
-                            trace_data = {"timestamp": time.time(), "content": content, "is_final": True}
+                        # Call the on_message callback if provided
+                        if hasattr(node, "on_message") and node.on_message:
+                            node.on_message(
+                                {
+                                    "message_type": "assistant",
+                                    "content": content,
+                                    "raw_response": response,
+                                    "has_tool_calls": False,
+                                    "is_final": True,
+                                    "iteration": current_iteration,
+                                    "timestamp": time.time(),
+                                }
+                            )
 
-                            # Try to extract useful serializable properties
-                            if hasattr(response, "model"):
-                                trace_data["model"] = response.model
-                            if hasattr(response, "usage") and response.usage:
-                                try:
-                                    trace_data["usage"] = (
-                                        response.usage._asdict()
-                                        if hasattr(response.usage, "_asdict")
-                                        else dict(response.usage)
-                                    )
-                                except Exception:
-                                    trace_data["usage"] = str(response.usage)
+                        # Mark as complete with final output
+                        if hasattr(state, "final_output"):
+                            state.final_output = content
+                        if hasattr(state, "is_complete"):
+                            state.is_complete = True
+                        is_complete = True
+                        buffer_updates["is_complete"] = True
+                        buffer_updates["final_output"] = content
 
-                            state.current_trace = trace_data
-                        except Exception as e:
-                            print(f"Error creating trace data: {str(e)}")
-                            state.current_trace = {"error": str(e), "timestamp": time.time()}
+                        # Save the raw response
+                        if hasattr(state, "current_trace"):
+                            # Create a safely serializable trace object
+                            try:
+                                trace_data = {"timestamp": time.time(), "content": content, "is_final": True}
 
-                    buffer_updates["current_trace"] = state.current_trace
-                    break
+                                # Try to extract useful serializable properties
+                                if hasattr(response, "model"):
+                                    trace_data["model"] = response.model
+                                if hasattr(response, "usage") and response.usage:
+                                    try:
+                                        trace_data["usage"] = (
+                                            response.usage._asdict()
+                                            if hasattr(response.usage, "_asdict")
+                                            else dict(response.usage)
+                                        )
+                                    except Exception:
+                                        trace_data["usage"] = str(response.usage)
+
+                                state.current_trace = trace_data
+                            except Exception as e:
+                                print(f"Error creating trace data: {str(e)}")
+                                state.current_trace = {"error": str(e), "timestamp": time.time()}
+
+                        buffer_updates["current_trace"] = state.current_trace
+                        break
             except Exception as e:
                 # Record error
                 error = str(e)
@@ -1929,7 +1939,7 @@ class ToolEngine(Engine):
                 buffer_updates["is_complete"] = True
 
                 # Add error message to state
-                if hasattr(state, "messages"):
+                if hasattr(state, "messages") and error and error.strip():  # Only add if error is not empty
                     state.messages.append(
                         LLMMessage(role="system", content=f"Error: {error}", should_show_to_user=False)
                     )
@@ -1980,7 +1990,9 @@ class ToolEngine(Engine):
 
             # Add a system message about max iterations
             if hasattr(state, "messages"):
-                state.messages.append(LLMMessage(role="system", content=max_iter_message, should_show_to_user=True))
+                max_iter_message = f"Reached maximum iterations ({max_iterations})"
+                if max_iter_message and max_iter_message.strip():  # Only add if message is not empty
+                    state.messages.append(LLMMessage(role="system", content=max_iter_message, should_show_to_user=True))
 
         # Save final checkpoint
         self._capture_state_checkpoint(node_name, state)

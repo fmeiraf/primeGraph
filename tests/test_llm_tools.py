@@ -921,3 +921,92 @@ async def test_hidden_parameters(tool_graph_with_secure_payment):
     assert "secret" in tool_def.hidden_params, "secret should be marked as hidden"
     assert "amount" not in tool_def.hidden_params, "amount should not be marked as hidden"
     assert "currency" not in tool_def.hidden_params, "currency should not be marked as hidden"
+
+@pytest.mark.asyncio
+async def test_empty_messages_not_added(tool_graph_with_mock):
+    """Test that empty messages are not added to the message history during tool execution"""
+    # Create a mock LLM client that returns empty messages
+    mock_client = MockLLMClient(conversation_flow=[
+        # First response with empty content
+        {
+            "content": "",  # Empty content
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "name": "get_customer_info",
+                    "arguments": {"customer_id": "C1"}
+                }
+            ]
+        },
+        # Second response with whitespace content
+        {
+            "content": "   ",  # Whitespace only
+            "tool_calls": [
+                {
+                    "id": "call_2",
+                    "name": "get_order_details",
+                    "arguments": {"order_id": "O1"}
+                }
+            ]
+        },
+        # Third response with None content
+        {
+            "content": None,  # None content
+            "tool_calls": [
+                {
+                    "id": "call_3",
+                    "name": "cancel_order",
+                    "arguments": {"order_id": "O1"}
+                }
+            ]
+        },
+        # Final response with valid content
+        {
+            "content": "This is a valid final response"
+        }
+    ])
+    
+    # Replace the mock client in the graph
+    tool_graph_with_mock.nodes["customer_service_agent"].llm_client = mock_client
+    
+    # Set up initial messages
+    tool_graph_with_mock.state.messages = [
+        LLMMessage(
+            role="system",
+            content="You are a helpful customer service assistant."
+        ),
+        LLMMessage(
+            role="user",
+            content="Please help me with my order."
+        )
+    ]
+    
+    # Get initial message count
+    initial_message_count = len(tool_graph_with_mock.state.messages)
+    
+    # Execute the graph
+    await tool_graph_with_mock.execute()
+    
+    # Get final message count
+    final_message_count = len(tool_graph_with_mock.state.messages)
+    
+    # Verify that only the valid final message was added as an assistant message
+    # and that tool result messages were added
+    assistant_messages = [msg for msg in tool_graph_with_mock.state.messages if msg.role == "assistant"]
+    tool_messages = [msg for msg in tool_graph_with_mock.state.messages if msg.role == "tool"]
+    
+    # We should have only one assistant message (the final one)
+    assert len(assistant_messages) == 1, \
+        "Only one assistant message (the final one) should be added"
+    
+    # The last assistant message should be the valid one
+    assert assistant_messages[0].content == "This is a valid final response", \
+        "The last assistant message should be the valid final response"
+    
+    # We should have tool result messages for each tool call
+    assert len(tool_messages) == 3, \
+        "Three tool result messages should be added (one for each tool call)"
+    
+    # Verify tool calls were still executed
+    assert len(tool_graph_with_mock.state.tool_calls) == 3, \
+        "Tool calls should still be executed even with empty messages"
