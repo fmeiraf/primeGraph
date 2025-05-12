@@ -13,7 +13,7 @@ dependencies = [
     "redis>=5.2.1",
 ]
 name = "primeGraph"
-version = "1.9.1"
+version = "1.9.2"
 description = "A lightweight graph approach to LLM workflows."
 readme = "README.md"
 

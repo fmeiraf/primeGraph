@@ -771,18 +771,18 @@ async def test_pause_after_execution(tool_graph_with_account_update):
     await tool_graph_with_account_update.execute()
     
     # Check state
-    assert tool_graph_with_account_update.state.is_paused == True
-    assert tool_graph_with_account_update.state.paused_after_execution == True
+    assert tool_graph_with_account_update.state.is_paused
+    assert tool_graph_with_account_update.state.paused_after_execution
     assert tool_graph_with_account_update.state.paused_tool_name == "update_customer_account"
     assert tool_graph_with_account_update.state.paused_tool_result is not None
-    assert tool_graph_with_account_update.state.paused_tool_result.success == True
+    assert tool_graph_with_account_update.state.paused_tool_result.success
     
     # Resume execution
     await tool_graph_with_account_update.resume(execute_tool=True)
     
     # Check final state
-    assert tool_graph_with_account_update.state.is_paused == False
-    assert tool_graph_with_account_update.state.is_complete == True
+    assert not tool_graph_with_account_update.state.is_paused
+    assert tool_graph_with_account_update.state.is_complete
     assert tool_graph_with_account_update.state.final_output is not None
 
 
@@ -805,8 +805,8 @@ async def test_pause_before_execution(tool_graph_with_payment):
     await tool_graph_with_payment.execute()
     
     # Check state
-    assert tool_graph_with_payment.state.is_paused == True
-    assert tool_graph_with_payment.state.paused_after_execution == False
+    assert tool_graph_with_payment.state.is_paused
+    assert not tool_graph_with_payment.state.paused_after_execution
     assert tool_graph_with_payment.state.paused_tool_name == "process_payment"
     assert tool_graph_with_payment.state.paused_tool_arguments is not None
     assert tool_graph_with_payment.state.paused_tool_arguments["order_id"] == "O1"
@@ -815,14 +815,14 @@ async def test_pause_before_execution(tool_graph_with_payment):
     await tool_graph_with_payment.resume(execute_tool=True)
     
     # Check final state
-    assert tool_graph_with_payment.state.is_paused == False
-    assert tool_graph_with_payment.state.is_complete == True
+    assert not tool_graph_with_payment.state.is_paused
+    assert tool_graph_with_payment.state.is_complete
     assert tool_graph_with_payment.state.final_output is not None
     
     # The tool result should be in tool_calls now
     payment_calls = [call for call in tool_graph_with_payment.state.tool_calls if call.tool_name == "process_payment"]
     assert len(payment_calls) > 0
-    assert payment_calls[0].success == True
+    assert payment_calls[0].success
 
 
 # Add this new tool definition before the test fixtures
@@ -981,14 +981,10 @@ async def test_empty_messages_not_added(tool_graph_with_mock):
         )
     ]
     
-    # Get initial message count
-    initial_message_count = len(tool_graph_with_mock.state.messages)
     
     # Execute the graph
     await tool_graph_with_mock.execute()
     
-    # Get final message count
-    final_message_count = len(tool_graph_with_mock.state.messages)
     
     # Verify that only the valid final message was added as an assistant message
     # and that tool result messages were added

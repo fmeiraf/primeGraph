@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.9.2] - 2025-04-28
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Fixed the parameters type checking on `tool` runtime.
+
 # [1.9.1] - 2025-04-28
 
 ### Added
@@ -15,8 +29,6 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - Fixed case where empty strings ("") where being added to message history on `ToolGraph` loops.
-
-# [1.8.5] - 2025-04-28
 
 # [1.9.0] - 2025-04-28
 

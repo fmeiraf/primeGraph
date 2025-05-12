@@ -24,6 +24,7 @@ from primeGraph.graph.base import Node
 from primeGraph.graph.engine import Engine, ExecutionFrame
 from primeGraph.graph.executable import Graph
 from primeGraph.graph.llm_clients import StreamingConfig, StreamingEventType
+from primeGraph.graph.tool_validation import validate_tool_args
 from primeGraph.models.state import GraphState
 from primeGraph.types import ChainStatus
 
@@ -364,18 +365,28 @@ class ToolNode(Node):
         tool_name = getattr(tool_func, "__name__", "unknown")
 
         try:
+            # Validate arguments before execution
+            validated_args = validate_tool_args(tool_func, arguments)
+
             # Check if the tool can accept a state parameter
             sig = inspect.signature(tool_func)
             if "state" in sig.parameters and state is not None:
                 # Pass the current state along with other arguments
-                result = await tool_func(state=state, **arguments)
+                result = await tool_func(state=state, **validated_args)
             else:
                 # Call without state
-                result = await tool_func(**arguments)
+                result = await tool_func(**validated_args)
 
             success = True
             error = None
+        except ValueError as e:
+            # Handle validation errors
+            result = None
+            success = False
+            error = f"Validation error for tool {tool_name}: {str(e)}"
+            traceback.print_exc()
         except Exception as e:
+            # Handle other execution errors
             result = None
             success = False
             error = f"Error executing tool {tool_name}: {str(e)}"
@@ -386,7 +397,7 @@ class ToolNode(Node):
         return ToolCallLog(
             id=tool_id,
             tool_name=tool_name,
-            arguments=arguments,
+            arguments=arguments,  # Keep original arguments for logging
             result=result,
             success=success,
             timestamp=start_time,
