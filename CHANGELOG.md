@@ -2,7 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
-# [1.9.2] - 2025-04-28
+# [1.9.3] - 2025-04-12
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Improved type checking on `tool` signature param check.
+
+# [1.9.2] - 2025-05-12
 
 ### Added
 

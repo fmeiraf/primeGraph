@@ -1651,19 +1651,32 @@ class ToolEngine(Engine):
                             if hasattr(message, "tool_calls") and message.tool_calls:
                                 for tc in message.tool_calls:
                                     try:
-                                        args = json.loads(tc.function.arguments)
+                                        # The arguments are already parsed by json.loads in the client
+                                        args = tc.function.arguments
+                                        if isinstance(args, str):
+                                            args = json.loads(args)
                                     except Exception as e:
+                                        print(f"Error parsing tool arguments: {str(e)}")
                                         args = {"input": tc.function.arguments}
 
                                     tool_calls.append({"id": tc.id, "name": tc.function.name, "arguments": args})
                         elif hasattr(response, "content") and isinstance(response.content, list):
                             for block in response.content:
                                 if getattr(block, "type", None) == "tool_use":
+                                    # For Anthropic, the input is already a dict
+                                    args = getattr(block, "input", {})
+                                    if isinstance(args, str):
+                                        try:
+                                            args = json.loads(args)
+                                        except Exception as e:
+                                            print(f"Error parsing tool arguments: {str(e)}")
+                                            args = {"input": args}
+
                                     tool_calls.append(
                                         {
                                             "id": getattr(block, "id", f"tool_{int(time.time())}"),
                                             "name": getattr(block, "name", ""),
-                                            "arguments": getattr(block, "input", {}),
+                                            "arguments": args,
                                         }
                                     )
 
@@ -1686,7 +1699,6 @@ class ToolEngine(Engine):
                             and "openai" in node.llm_client.client.__class__.__module__
                         ):
                             # Extract tool_calls from the response
-
                             if hasattr(response, "choices") and response.choices:
                                 message = response.choices[0].message
                                 if hasattr(message, "tool_calls") and message.tool_calls:
@@ -1706,9 +1718,7 @@ class ToolEngine(Engine):
                                     # Store the serializable version
                                     assistant_message.tool_calls = tool_calls_data
                                     # Tool calls are internal messages to the LLM, not user-facing
-                                    assistant_message.should_show_to_user = not bool(
-                                        tool_calls_data
-                                    )  # Only show to user if no tool calls
+                                    assistant_message.should_show_to_user = not bool(tool_calls_data)
 
                         state.messages.append(assistant_message)
 
@@ -1789,6 +1799,7 @@ class ToolEngine(Engine):
                             return {"state": state}
 
                         # Execute the tool and capture the result
+                        # The validate_tool_args function will handle the string-serialized arguments
                         tool_result = await node.execute_tool(tool_func, arguments, tool_id, state)
 
                         # Add the result to tool calls
