@@ -7,13 +7,10 @@ dependencies = [
     "pydantic<3.0.0,>=2.9.2",
     "rich<14.0.0,>=13.9.4",
     "psycopg2-binary<3.0.0,>=2.9.10",
-    "fastapi<1.0.0,>=0.110.0",
-    "uvicorn<1.0.0,>=0.27.0",
-    "websockets<11.0,>=10.0",
     "redis>=5.2.1",
 ]
 name = "primeGraph"
-version = "1.9.3"
+version = "1.9.4"
 description = "A lightweight graph approach to LLM workflows."
 readme = "README.md"
 
@@ -37,6 +34,9 @@ dev = [
     "ipykernel>=6.29.5",
     "python-dotenv>=1.0.1",
     "anthropic>=0.49.0",
+    "fastapi<1.0.0,>=0.110.0",
+    "uvicorn<1.0.0,>=0.27.0",
+    "websockets<11.0,>=10.0",
 ]
 
 [build-system]

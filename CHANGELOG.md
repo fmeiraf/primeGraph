@@ -2,7 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
-# [1.9.3] - 2025-04-12
+# [1.9.4] - 2025-05-12
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Removed uncessary dependencies from the core list.
+
+# [1.9.3] - 2025-05-12
 
 ### Added
 
