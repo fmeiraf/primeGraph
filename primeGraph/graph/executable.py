@@ -157,8 +157,6 @@ class Graph(BaseGraph):
         """
         if chain_id:
             self.chain_id = chain_id
-        else:
-            self.chain_id = f"chain_{uuid.uuid4()}"
 
         if not timeout:
             timeout = self.execution_timeout

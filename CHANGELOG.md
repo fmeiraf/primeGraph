@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.9.5] - 2025-05-29
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Fixed random chain_id assigment on graph execution.
+
 # [1.9.4] - 2025-05-12
 
 ### Added
