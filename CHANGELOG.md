@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.9.6] - 2025-06-06
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Added more defensive checks against `dict` conversion to `LLMessages`.
+
 # [1.9.5] - 2025-05-29
 
 ### Added

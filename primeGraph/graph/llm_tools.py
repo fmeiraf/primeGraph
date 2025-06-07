@@ -974,9 +974,15 @@ class ToolEngine(Engine):
                 if hasattr(state, "messages") and state.messages:
                     # Get the last assistant message as final output
                     for msg in reversed(state.messages):
-                        if msg.role == "assistant" and msg.content:
-                            state.final_output = msg.content
-                            break
+                        # Handle both LLMMessage objects and dictionaries
+                        if isinstance(msg, dict):
+                            if msg.get("role") == "assistant" and msg.get("content"):
+                                state.final_output = msg.get("content")
+                                break
+                        elif hasattr(msg, "role") and hasattr(msg, "content"):
+                            if msg.role == "assistant" and msg.content:
+                                state.final_output = msg.content
+                                break
 
             print("[ToolEngine.resume] Execution completed successfully")
         except Exception as e:
@@ -1402,6 +1408,22 @@ class ToolEngine(Engine):
         print(f"State type: {type(state)}")
         print(f"State fields: {state.model_fields.keys() if hasattr(state, 'model_fields') else 'No model_fields'}")
 
+        # Add message type debugging
+        if hasattr(state, "messages") and state.messages:
+            print(f"Found {len(state.messages)} messages")
+            for i, msg in enumerate(state.messages):
+                if isinstance(msg, dict):
+                    print(f"  Message {i}: DICT - role={msg.get('role')}, content_len={len(msg.get('content', ''))}")
+                elif hasattr(msg, "role"):
+                    print(
+                        f"  Message {i}: OBJECT - role={msg.role}, \
+                        content_len={len(msg.content) if hasattr(msg, 'content') else 0}"
+                    )
+                else:
+                    print(f"  Message {i}: UNKNOWN TYPE - {type(msg)}")
+        else:
+            print("No messages found in state")
+
         # Check if the node is a ToolNode
         if not isinstance(node, ToolNode):
             error_msg = f"Expected ToolNode, got {type(node)}"
@@ -1528,13 +1550,27 @@ class ToolEngine(Engine):
                     elif hasattr(msg, "dict"):
                         # For older pydantic versions
                         message_dicts.append(msg.dict())
+                    elif isinstance(msg, dict):
+                        # Handle already-dictionary messages
+                        message_dicts.append(msg)
                     else:
-                        # Fallback to manual conversion
-                        msg_dict = {"role": msg.role, "content": msg.content}
-                        if msg.tool_calls is not None:
-                            msg_dict["tool_calls"] = msg.tool_calls
-                        if msg.tool_call_id is not None:
-                            msg_dict["tool_call_id"] = msg.tool_call_id
+                        # Fallback to manual conversion - handle both objects and dicts
+                        if isinstance(msg, dict):
+                            msg_dict = {"role": msg.get("role", ""), "content": msg.get("content", "")}
+                            if msg.get("tool_calls") is not None:
+                                msg_dict["tool_calls"] = msg.get("tool_calls")
+                            if msg.get("tool_call_id") is not None:
+                                msg_dict["tool_call_id"] = msg.get("tool_call_id")
+                        elif hasattr(msg, "role") and hasattr(msg, "content"):
+                            msg_dict = {"role": msg.role, "content": msg.content}
+                            if hasattr(msg, "tool_calls") and msg.tool_calls is not None:
+                                msg_dict["tool_calls"] = msg.tool_calls
+                            if hasattr(msg, "tool_call_id") and msg.tool_call_id is not None:
+                                msg_dict["tool_call_id"] = msg.tool_call_id
+                        else:
+                            # Skip invalid messages
+                            print(f"Warning: Skipping invalid message: {msg}")
+                            continue
                         message_dicts.append(msg_dict)
 
                 # Get API kwargs, ensuring model is included if specified in options
