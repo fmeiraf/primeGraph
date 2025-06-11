@@ -878,18 +878,6 @@ class ToolEngine(Engine):
                             # If not a list, initialize a new list
                             state.tool_calls = [tool_result]
 
-                    # Special handling for custom fields from subclasses
-                    # Add result to processing_results if this is a process_payment tool
-                    if state.paused_tool_name == "process_payment" and hasattr(state, "processing_results"):
-                        if isinstance(state.processing_results, list):
-                            print(f"[ToolEngine.resume] Adding result to processing_results: {tool_result.result}")
-                            state.processing_results.append(tool_result.result)
-
-                    # Special handling for cancel_order tool
-                    if state.paused_tool_name == "cancel_order" and hasattr(state, "cancelled_orders"):
-                        if isinstance(state.cancelled_orders, list) and "order_id" in state.paused_tool_arguments:
-                            state.cancelled_orders.append(state.paused_tool_arguments["order_id"])
-
                     # Add a tool result message
                     if hasattr(state, "messages"):
                         # Convert the result to a string
