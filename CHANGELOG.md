@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.9.7] - 2025-06-11
+
+### Added
+
+- N/A
+
+### Changed
+
+- N/A
+
+### Fixed
+
+- Added more fiels to `LLMessage` type.
+- Removed useless checks on `tool` engine.
+
 # [1.9.6] - 2025-06-06
 
 ### Added

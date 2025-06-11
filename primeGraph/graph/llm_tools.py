@@ -96,6 +96,8 @@ class LLMMessage(BaseModel):
     tool_call_id: Optional[str] = None
     id: Optional[str] = None
     should_show_to_user: bool = True  # Flag to indicate if this message should be shown to the user
+    type: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
 
     model_config = {
         "extra": "allow"  # Allow additional fields not specified in the model
