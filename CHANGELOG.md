@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.9.9] - 2025-06-13
+
+### Added
+
+- N/A
+
+### Changed
+
+- Made `abort_after_execution` end message as default `False`.
+
 # [1.9.8] - 2025-06-13
 
 ### Added

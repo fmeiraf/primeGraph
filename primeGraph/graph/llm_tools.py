@@ -11,6 +11,7 @@ import inspect
 import json
 import time
 import traceback
+import uuid
 from enum import Enum
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Set, Type, Union
@@ -95,7 +96,8 @@ class LLMMessage(BaseModel):
     content: str
     tool_calls: Optional[List[Dict[str, Any]]] = None
     tool_call_id: Optional[str] = None
-    id: Optional[str] = None
+    id: Optional[str] = Field(default_factory=lambda: f"msg_{uuid.uuid4().hex[:12]}")
+    # Alternative timestamp-based ID: Field(default_factory=lambda: f"msg_{int(time.time() * 1000)}")
     should_show_to_user: bool = True  # Flag to indicate if this message should be shown to the user
     type: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
@@ -1887,7 +1889,7 @@ class ToolEngine(Engine):
                             completion_message = LLMMessage(
                                 role="assistant",
                                 content=f"Task completed with tool {tool_name}.",
-                                should_show_to_user=True,
+                                should_show_to_user=False,
                             )
                             state.messages.append(completion_message)
 
