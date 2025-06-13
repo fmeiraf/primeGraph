@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.9.8] - 2025-06-13
+
+### Added
+
+- Added test version of `abort_after_execution`
+
+### Changed
+
+- N/A
+
 # [1.9.7] - 2025-06-11
 
 ### Added

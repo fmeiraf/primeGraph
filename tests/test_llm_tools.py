@@ -86,6 +86,20 @@ async def process_payment(order_id: str, amount: float) -> Dict[str, Any]:
     }
 
 
+# Add a tool with abort_after_execution flag set to True
+@tool("Finalize order", abort_after_execution=True)
+async def finalize_order(order_id: str, confirmation_code: str) -> Dict[str, Any]:
+    """Finalize an order and complete the process immediately"""
+    # This tool represents a final action that should terminate the loop
+    return {
+        "order_id": order_id,
+        "confirmation_code": confirmation_code,
+        "status": "finalized",
+        "timestamp": int(time.time()),
+        "message": f"Order {order_id} has been finalized with confirmation {confirmation_code}"
+    }
+
+
 @tool("Get order details")
 async def get_order_details(order_id: str) -> Dict[str, Any]:
     """Get order details by ID"""
@@ -348,6 +362,38 @@ def create_tool_flow_for_account_update():
     ]
 
 
+def create_tool_flow_for_finalize_order():
+    """Create a conversation flow that uses the finalize order tool which aborts after execution"""
+    return [
+        # First get customer info
+        {
+            "content": "I'll help you finalize the order for customer C1. Let me look up their information first.",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "name": "get_customer_info",
+                    "arguments": {"customer_id": "C1"}
+                }
+            ]
+        },
+        # Then finalize order (this will abort execution immediately after)
+        {
+            "content": "I found the customer. Let me finalize their order now.",
+            "tool_calls": [
+                {
+                    "id": "call_2",
+                    "name": "finalize_order",
+                    "arguments": {"order_id": "O1", "confirmation_code": "CONF-123"}
+                }
+            ]
+        },
+        # This response should NEVER be reached because execution aborts after finalize_order
+        {
+            "content": "This message should never appear because execution should have aborted!"
+        }
+    ]
+
+
 @pytest.fixture
 def customer_tools():
     """Fixture providing customer service tools"""
@@ -362,6 +408,12 @@ def customer_tools_with_payment():
 def customer_tools_with_account_update():
     """Fixture providing customer service tools including the account update tool that pauses after execution"""
     return [get_customer_info, get_order_details, cancel_order, update_customer_account]
+
+
+@pytest.fixture
+def customer_tools_with_finalize():
+    """Fixture providing customer service tools including the finalize order tool that aborts after execution"""
+    return [get_customer_info, get_order_details, cancel_order, finalize_order]
 
 
 @pytest.fixture
@@ -385,6 +437,12 @@ def mock_llm_client_for_payment():
 def mock_llm_client_for_account_update():
     """Fixture providing a mock client for account update scenario with pausing after execution"""
     return MockLLMClient(conversation_flow=create_tool_flow_for_account_update())
+
+
+@pytest.fixture
+def mock_llm_client_for_finalize():
+    """Fixture providing a mock client for finalize order scenario with aborting after execution"""
+    return MockLLMClient(conversation_flow=create_tool_flow_for_finalize_order())
 
 
 @pytest.fixture
@@ -460,6 +518,34 @@ def tool_graph_with_account_update(customer_tools_with_account_update, mock_llm_
         name="account_update_agent",
         tools=customer_tools_with_account_update,
         llm_client=mock_llm_client_for_account_update,
+        options=options
+    )
+    
+    # Connect to START and END
+    graph.add_edge(START, node.name)
+    graph.add_edge(node.name, END)
+    
+    return graph
+
+
+@pytest.fixture
+def tool_graph_with_finalize(customer_tools_with_finalize, mock_llm_client_for_finalize):
+    """Fixture providing a tool graph with finalize order that aborts after execution"""
+    # Create state instance
+    state = CustomerServiceState()
+    
+    # Create graph with state instance
+    graph = ToolGraph("finalize_order", state=state)
+    
+    options = ToolLoopOptions(
+        max_iterations=5,
+        max_tokens=1024
+    )
+    
+    node = graph.add_tool_node(
+        name="finalize_agent",
+        tools=customer_tools_with_finalize,
+        llm_client=mock_llm_client_for_finalize,
         options=options
     )
     
@@ -823,6 +909,285 @@ async def test_pause_before_execution(tool_graph_with_payment):
     payment_calls = [call for call in tool_graph_with_payment.state.tool_calls if call.tool_name == "process_payment"]
     assert len(payment_calls) > 0
     assert payment_calls[0].success
+
+
+@pytest.mark.asyncio
+async def test_abort_after_execution(tool_graph_with_finalize):
+    """Test the abort after execution functionality with the finalize order tool"""
+    # Set up messages in the graph's state
+    tool_graph_with_finalize.state.messages = [
+        LLMMessage(
+            role="system",
+            content="You are a helpful customer service assistant. Be concise."
+        ),
+        LLMMessage(
+            role="user",
+            content="Please finalize order O1 for customer C1 with confirmation code CONF-123."
+        )
+    ]
+    
+    # Execute the graph - should abort after finalize order tool
+    await tool_graph_with_finalize.execute()
+    
+    # Check final state
+    assert tool_graph_with_finalize.state.is_complete
+    assert not tool_graph_with_finalize.state.is_paused  # Should not be paused, just complete
+    assert tool_graph_with_finalize.state.final_output is not None
+    
+    # Verify the finalize order tool was called
+    finalize_calls = [call for call in tool_graph_with_finalize.state.tool_calls if call.tool_name == "finalize_order"]
+    assert len(finalize_calls) == 1
+    assert finalize_calls[0].success
+    assert finalize_calls[0].arguments["order_id"] == "O1"
+    assert finalize_calls[0].arguments["confirmation_code"] == "CONF-123"
+    
+    # Verify that the final output contains information about the tool execution
+    assert "finalize_order" in tool_graph_with_finalize.state.final_output
+    
+    # Verify that the completion message was added
+    assistant_messages = [msg for msg in tool_graph_with_finalize.state.messages if msg.role == "assistant"]
+    completion_messages = [msg for msg in assistant_messages if "Task completed with tool finalize_order" in msg.content]
+    assert len(completion_messages) >= 1
+    
+    # Verify that the mock client did NOT reach the third response 
+    # (the one that should never appear)
+    mock_client = tool_graph_with_finalize.nodes["finalize_agent"].llm_client
+    # The mock client should have been called exactly 2 times (not 3)
+    # because execution aborted after the finalize_order tool
+    assert mock_client.call_count == 2
+    
+    # Verify no message contains the "should never appear" text
+    all_message_content = " ".join([msg.content for msg in tool_graph_with_finalize.state.messages])
+    assert "should never appear" not in all_message_content
+
+
+@pytest.mark.asyncio
+async def test_abort_after_execution_with_callback():
+    """Test that abort after execution triggers the on_message callback correctly"""
+    callback_calls = []
+    
+    def on_message_callback(message_data):
+        callback_calls.append(message_data)
+        print(f"Callback received: {message_data}")
+    
+    # Create a custom graph with callback
+    state = CustomerServiceState()
+    graph = ToolGraph("finalize_with_callback", state=state)
+    
+    mock_client = MockLLMClient(conversation_flow=create_tool_flow_for_finalize_order())
+    
+    node = graph.add_tool_node(
+        name="finalize_callback_agent",
+        tools=[get_customer_info, finalize_order],
+        llm_client=mock_client,
+        options=ToolLoopOptions(max_iterations=5, max_tokens=1024),
+        on_message=on_message_callback
+    )
+    
+    graph.add_edge(START, node.name)
+    graph.add_edge(node.name, END)
+    
+    # Set up messages
+    graph.state.messages = [
+        LLMMessage(role="system", content="You are helpful."),
+        LLMMessage(role="user", content="Finalize order O1 with code CONF-123.")
+    ]
+    
+    # Execute
+    await graph.execute()
+    
+    # Verify completion
+    assert graph.state.is_complete
+    
+    # Verify callback was called for the completion message
+    completion_callbacks = [
+        call for call in callback_calls 
+        if call.get("message_type") == "assistant" and call.get("is_final") == True and 
+           "Task completed with tool finalize_order" in call.get("content", "")
+    ]
+    assert len(completion_callbacks) >= 1
+    
+    # Verify the completion callback has the right properties
+    completion_callback = completion_callbacks[0]
+    assert completion_callback["is_final"] is True
+    assert "finalize_order" in completion_callback["content"]
+
+
+@pytest.mark.asyncio
+async def test_abort_after_execution_mid_workflow():
+    """Test that abort after execution works correctly when called mid-workflow"""
+    # Create a custom flow that calls multiple tools before the abort tool
+    custom_flow = [
+        # First get customer info
+        {
+            "content": "Let me get customer information first.",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "name": "get_customer_info",
+                    "arguments": {"customer_id": "C1"}
+                }
+            ]
+        },
+        # Then get order details
+        {
+            "content": "Now let me get the order details.",
+            "tool_calls": [
+                {
+                    "id": "call_2",
+                    "name": "get_order_details",
+                    "arguments": {"order_id": "O1"}
+                }
+            ]
+        },
+        # Then finalize (this should abort execution)
+        {
+            "content": "Now I'll finalize the order.",
+            "tool_calls": [
+                {
+                    "id": "call_3",
+                    "name": "finalize_order",
+                    "arguments": {"order_id": "O1", "confirmation_code": "CONF-456"}
+                }
+            ]
+        },
+        # This should never be reached
+        {
+            "content": "This should never be reached due to abort.",
+            "tool_calls": [
+                {
+                    "id": "call_4",
+                    "name": "cancel_order",
+                    "arguments": {"order_id": "O1"}
+                }
+            ]
+        }
+    ]
+    
+    # Create custom graph
+    state = CustomerServiceState()
+    graph = ToolGraph("mid_workflow_abort", state=state)
+    
+    mock_client = MockLLMClient(conversation_flow=custom_flow)
+    
+    node = graph.add_tool_node(
+        name="mid_workflow_agent",
+        tools=[get_customer_info, get_order_details, finalize_order, cancel_order],
+        llm_client=mock_client,
+        options=ToolLoopOptions(max_iterations=10, max_tokens=1024)
+    )
+    
+    graph.add_edge(START, node.name)
+    graph.add_edge(node.name, END)
+    
+    # Set up messages
+    graph.state.messages = [
+        LLMMessage(role="system", content="You are helpful."),
+        LLMMessage(role="user", content="Process customer C1's order O1.")
+    ]
+    
+    # Execute
+    await graph.execute()
+    
+    # Verify completion
+    assert graph.state.is_complete
+    assert not graph.state.is_paused
+    
+    # Verify all tools before finalize_order were called
+    tool_names = [call.tool_name for call in graph.state.tool_calls]
+    assert "get_customer_info" in tool_names
+    assert "get_order_details" in tool_names
+    assert "finalize_order" in tool_names
+    
+    # Verify cancel_order was NOT called (execution should have aborted)
+    assert "cancel_order" not in tool_names
+    
+    # Verify exactly 3 tool calls were made (not 4)
+    assert len(graph.state.tool_calls) == 3
+    
+    # Verify mock client was called exactly 3 times (not 4)
+    assert mock_client.call_count == 3
+    
+    # Verify the finalize_order tool was the last one called
+    assert graph.state.tool_calls[-1].tool_name == "finalize_order"
+    assert graph.state.tool_calls[-1].success
+    
+    # Verify final output mentions finalize_order
+    assert "finalize_order" in graph.state.final_output
+
+
+@pytest.mark.asyncio
+async def test_abort_after_execution_vs_normal_execution():
+    """Test that normal tools work correctly and don't interfere with abort functionality"""
+    # Create a flow that uses normal tools (no abort)
+    normal_flow = [
+        {
+            "content": "Let me get customer information.",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "name": "get_customer_info",
+                    "arguments": {"customer_id": "C1"}
+                }
+            ]
+        },
+        {
+            "content": "Now let me get order details.",
+            "tool_calls": [
+                {
+                    "id": "call_2",
+                    "name": "get_order_details",
+                    "arguments": {"order_id": "O1"}
+                }
+            ]
+        },
+        # Final response without abort tool
+        {
+            "content": "I have gathered all the information about customer C1 and order O1."
+        }
+    ]
+    
+    # Create graph with normal tools (no abort tool)
+    state = CustomerServiceState()
+    graph = ToolGraph("normal_execution", state=state)
+    
+    mock_client = MockLLMClient(conversation_flow=normal_flow)
+    
+    node = graph.add_tool_node(
+        name="normal_agent",
+        tools=[get_customer_info, get_order_details, cancel_order],  # No finalize_order
+        llm_client=mock_client,
+        options=ToolLoopOptions(max_iterations=5, max_tokens=1024)
+    )
+    
+    graph.add_edge(START, node.name)
+    graph.add_edge(node.name, END)
+    
+    # Set up messages
+    graph.state.messages = [
+        LLMMessage(role="system", content="You are helpful."),
+        LLMMessage(role="user", content="Get info about customer C1 and order O1.")
+    ]
+    
+    # Execute
+    await graph.execute()
+    
+    # Verify completion
+    assert graph.state.is_complete
+    assert not graph.state.is_paused
+    
+    # Verify all tool calls were made normally
+    tool_names = [call.tool_name for call in graph.state.tool_calls]
+    assert "get_customer_info" in tool_names
+    assert "get_order_details" in tool_names
+    assert len(graph.state.tool_calls) == 2
+    
+    # Verify mock client was called all 3 times (normal execution)
+    assert mock_client.call_count == 3
+    
+    # Verify final output is the normal LLM response (not abort message)
+    assert "gathered all the information" in graph.state.final_output
+    assert "Task completed with tool" not in graph.state.final_output  # No abort message
 
 
 # Add this new tool definition before the test fixtures

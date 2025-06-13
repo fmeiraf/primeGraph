@@ -58,6 +58,7 @@ class ToolDefinition(BaseModel):
     func: Optional[Callable] = None
     pause_before_execution: bool = False  # Flag to pause execution before this tool runs
     pause_after_execution: bool = False  # Flag to pause execution after this tool runs
+    abort_after_execution: bool = False  # Flag to abort the loop immediately after this tool runs
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -155,6 +156,7 @@ def tool(
     tool_type: ToolType = ToolType.FUNCTION,
     pause_before_execution: bool = False,
     pause_after_execution: bool = False,
+    abort_after_execution: bool = False,
     hidden_params: Optional[List[str]] = None,
 ) -> Callable:
     """
@@ -169,6 +171,7 @@ def tool(
         tool_type: Type of tool (function, action, retrieval).
         pause_before_execution: Whether to pause before executing the tool.
         pause_after_execution: Whether to pause after executing the tool.
+        abort_after_execution: Whether to abort the loop immediately after executing the tool.
         hidden_params: List of parameter names to hide from the schema.
 
     Returns:
@@ -222,6 +225,7 @@ def tool(
             func=func,
             pause_before_execution=pause_before_execution,
             pause_after_execution=pause_after_execution,
+            abort_after_execution=abort_after_execution,
         )
 
         # Create a wrapper that injects the state parameter if the function supports it
@@ -1860,6 +1864,47 @@ class ToolEngine(Engine):
 
                             # Return early with updated state
                             return {"state": state}
+
+                            # Check for abort_after_execution
+                        if hasattr(tool_func, "_tool_definition") and tool_func._tool_definition.abort_after_execution:
+                            print(f"Aborting execution after tool: {tool_name}")
+
+                            # IMPORTANT: Add the tool result to tool_call_entries before aborting
+                            tool_call_entries.append(tool_result)
+
+                            # Mark loop as complete with the tool result as final output
+                            if hasattr(state, "final_output"):
+                                result_str = str(tool_result.result)
+                                state.final_output = f"Tool {tool_name} executed successfully: {result_str}"
+                            if hasattr(state, "is_complete"):
+                                state.is_complete = True
+                            is_complete = True
+                            buffer_updates["is_complete"] = True
+                            buffer_updates["final_output"] = state.final_output
+                            buffer_updates["tool_calls"] = tool_call_entries
+
+                            # Add a completion message to the conversation
+                            completion_message = LLMMessage(
+                                role="assistant",
+                                content=f"Task completed with tool {tool_name}.",
+                                should_show_to_user=True,
+                            )
+                            state.messages.append(completion_message)
+
+                            # Call the on_message callback for the completion
+                            if hasattr(node, "on_message") and node.on_message:
+                                node.on_message(
+                                    {
+                                        "message_type": "assistant",
+                                        "content": f"Task completed with tool {tool_name}.",
+                                        "is_final": True,
+                                        "iteration": current_iteration,
+                                        "timestamp": time.time(),
+                                    }
+                                )
+
+                            # Break out of the tool loop immediately
+                            break
 
                         # Add tool response to messages
                         anthropic_client = False
