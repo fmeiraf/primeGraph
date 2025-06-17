@@ -944,11 +944,6 @@ async def test_abort_after_execution(tool_graph_with_finalize):
     # Verify that the final output contains information about the tool execution
     assert "finalize_order" in tool_graph_with_finalize.state.final_output
     
-    # Verify that the completion message was added
-    assistant_messages = [msg for msg in tool_graph_with_finalize.state.messages if msg.role == "assistant"]
-    completion_messages = [msg for msg in assistant_messages if "Task completed with tool finalize_order" in msg.content]
-    assert len(completion_messages) >= 1
-    
     # Verify that the mock client did NOT reach the third response 
     # (the one that should never appear)
     mock_client = tool_graph_with_finalize.nodes["finalize_agent"].llm_client
@@ -999,18 +994,28 @@ async def test_abort_after_execution_with_callback():
     # Verify completion
     assert graph.state.is_complete
     
-    # Verify callback was called for the completion message
-    completion_callbacks = [
-        call for call in callback_calls 
-        if call.get("message_type") == "assistant" and call.get("is_final") == True and 
-           "Task completed with tool finalize_order" in call.get("content", "")
-    ]
-    assert len(completion_callbacks) >= 1
+    # Verify that the finalize order tool was executed (no completion message expected anymore)
+    finalize_calls = [call.tool_name for call in graph.state.tool_calls if call.tool_name == "finalize_order"]
+    assert len(finalize_calls) == 1
     
-    # Verify the completion callback has the right properties
-    completion_callback = completion_callbacks[0]
-    assert completion_callback["is_final"] is True
-    assert "finalize_order" in completion_callback["content"]
+    # Verify final output contains information about the finalize order tool
+    assert "finalize_order" in graph.state.final_output
+    
+    # Verify that callbacks were called for assistant messages during the workflow  
+    assistant_callbacks = [
+        call for call in callback_calls
+        if call.get("message_type") == "assistant"
+    ]
+    # Should have assistant callbacks for LLM responses
+    assert len(assistant_callbacks) >= 2  # At least 2 assistant responses before abort
+    
+    # Verify that some tool callbacks were fired (get_customer_info should have fired)
+    tool_callbacks = [
+        call for call in callback_calls
+        if call.get("message_type") == "tool"  
+    ]
+    # Should have at least one tool callback (get_customer_info)
+    assert len(tool_callbacks) >= 1
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.9.10] - 2025-06-16
+
+### Added
+
+- N/A
+
+### Changed
+
+- Removed LLMessage generated after tool abortion.
+
 # [1.9.9] - 2025-06-13
 
 ### Added

@@ -1885,26 +1885,6 @@ class ToolEngine(Engine):
                             buffer_updates["final_output"] = state.final_output
                             buffer_updates["tool_calls"] = tool_call_entries
 
-                            # Add a completion message to the conversation
-                            completion_message = LLMMessage(
-                                role="assistant",
-                                content=f"Task completed with tool {tool_name}.",
-                                should_show_to_user=False,
-                            )
-                            state.messages.append(completion_message)
-
-                            # Call the on_message callback for the completion
-                            if hasattr(node, "on_message") and node.on_message:
-                                node.on_message(
-                                    {
-                                        "message_type": "assistant",
-                                        "content": f"Task completed with tool {tool_name}.",
-                                        "is_final": True,
-                                        "iteration": current_iteration,
-                                        "timestamp": time.time(),
-                                    }
-                                )
-
                             # Break out of the tool loop immediately
                             break
 
