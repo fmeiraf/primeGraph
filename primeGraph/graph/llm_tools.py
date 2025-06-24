@@ -484,6 +484,7 @@ class ToolGraph(Graph):
         options: Optional[ToolLoopOptions] = None,
         on_tool_use: Optional[Callable[[Dict[str, Any]], None]] = None,
         on_message: Optional[Callable[[Dict[str, Any]], None]] = None,
+        auto_connect: bool = True,
     ) -> ToolNode:
         """
         Add a tool node to the graph.
@@ -495,6 +496,7 @@ class ToolGraph(Graph):
             options: Tool loop options
             on_tool_use: Optional callback for tool use
             on_message: Optional callback for non-tool LLM messages
+            auto_connect: Whether to automatically connect this node to START/END if it's the only tool node
 
         Returns:
             The created ToolNode
@@ -514,7 +516,146 @@ class ToolGraph(Graph):
 
         # Add the node directly to the nodes dictionary
         self.nodes[name] = node
+
+        # Auto-connect if requested and this is the only tool node
+        if auto_connect:
+            self._auto_connect_if_single_node(node)
+
         return node
+
+    def add_single_tool_workflow(
+        self,
+        name: str,
+        tools: List[Callable],
+        llm_client: Any,
+        options: Optional[ToolLoopOptions] = None,
+        on_tool_use: Optional[Callable[[Dict[str, Any]], None]] = None,
+        on_message: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> ToolNode:
+        """
+        Convenience method to add a single tool node workflow with automatic START/END connections.
+
+        This method automatically connects START -> tool_node -> END, making it perfect for
+        simple single-node tool workflows.
+
+        Args:
+            name: Name of the node
+            tools: List of tool functions
+            llm_client: LLM client instance for provider API calls
+            options: Tool loop options
+            on_tool_use: Optional callback for tool use
+            on_message: Optional callback for non-tool LLM messages
+
+        Returns:
+            The created ToolNode
+        """
+        # Clear any existing tool nodes to ensure this is truly a single-node workflow
+        tool_nodes = self._get_tool_nodes()
+        if tool_nodes:
+            raise ValueError(
+                f"Cannot create single tool workflow: {len(tool_nodes)} tool nodes already exist. "
+                "Use add_tool_node() instead."
+            )
+
+        # Add the node without auto-connect first
+        node = self.add_tool_node(
+            name=name,
+            tools=tools,
+            llm_client=llm_client,
+            options=options,
+            on_tool_use=on_tool_use,
+            on_message=on_message,
+            auto_connect=False,
+        )
+
+        # Force connection to START and END
+        self.add_edge(START, node.name)
+        self.add_edge(node.name, END)
+
+        return node
+
+    def _get_tool_nodes(self) -> List[ToolNode]:
+        """Get all tool nodes in the graph."""
+        tool_nodes = []
+        for node in self.nodes.values():
+            if hasattr(node, "is_tool_node") and node.is_tool_node:
+                tool_nodes.append(node)
+        return tool_nodes
+
+    def _auto_connect_if_single_node(self, node: ToolNode) -> None:
+        """
+        Automatically connect a node to START and END if it's the only tool node.
+
+        Args:
+            node: The tool node to potentially connect
+        """
+        tool_nodes = self._get_tool_nodes()
+
+        # Only auto-connect if this is the only tool node
+        if len(tool_nodes) == 1:
+            # Check if START and END connections already exist
+            start_children = self.edges_map.get(START, [])
+            node_children = self.edges_map.get(node.name, [])
+
+            # Connect START -> node if not already connected
+            if node.name not in start_children:
+                self.add_edge(START, node.name)
+
+            # Connect node -> END if not already connected
+            if END not in node_children:
+                self.add_edge(node.name, END)
+
+    def ensure_connected_workflow(self) -> None:
+        """
+        Ensure that the tool graph has a connected workflow from START to END.
+
+        This method will automatically connect any unconnected tool nodes:
+        - If there's only one tool node, it connects START -> node -> END
+        - If there are multiple tool nodes, it connects them in a linear chain
+        - If nodes are already connected, it leaves them alone
+
+        Raises:
+            ValueError: If the graph has no tool nodes
+        """
+        tool_nodes = self._get_tool_nodes()
+
+        if not tool_nodes:
+            raise ValueError("Cannot ensure connected workflow: No tool nodes found in graph")
+
+        # Check if START is already connected to something
+        start_children = self.edges_map.get(START, [])
+
+        # Check if any node is already connected to END
+        nodes_to_end = []
+        for node_name, children in self.edges_map.items():
+            if END in children:
+                nodes_to_end.append(node_name)
+
+        if len(tool_nodes) == 1:
+            # Single node workflow
+            node = tool_nodes[0]
+            if node.name not in start_children:
+                self.add_edge(START, node.name)
+            if node.name not in nodes_to_end:
+                self.add_edge(node.name, END)
+        else:
+            # Multiple nodes - create linear chain if not already connected
+            if not start_children:
+                # START is not connected to anything, connect to first tool node
+                self.add_edge(START, tool_nodes[0].name)
+
+            if not nodes_to_end:
+                # No node is connected to END, connect last tool node to END
+                self.add_edge(tool_nodes[-1].name, END)
+
+            # Connect tool nodes in sequence if they're not already connected
+            for i in range(len(tool_nodes) - 1):
+                current_node = tool_nodes[i]
+                next_node = tool_nodes[i + 1]
+
+                current_children = self.edges_map.get(current_node.name, [])
+                if next_node.name not in current_children:
+                    self.add_edge(current_node.name, next_node.name)
 
     def create_linear_tool_flow(
         self,
@@ -693,6 +834,7 @@ class ToolGraph(Graph):
         self,
         timeout: Union[int, None] = None,
         chain_id: Optional[str] = None,
+        auto_connect: bool = True,
     ) -> str:
         """
         Start a new execution of the tool graph.
@@ -700,6 +842,7 @@ class ToolGraph(Graph):
         Args:
             timeout: Optional timeout for the execution.
             chain_id: Optional chain ID for the execution.
+            auto_connect: Whether to automatically ensure workflow connectivity before execution.
 
         Returns:
             The chain ID of the execution.
@@ -709,6 +852,15 @@ class ToolGraph(Graph):
 
         if not timeout:
             timeout = self.execution_timeout
+
+        # Ensure the workflow is properly connected before execution
+        if auto_connect:
+            try:
+                self.ensure_connected_workflow()
+            except ValueError as e:
+                if "No tool nodes found" in str(e):
+                    raise ValueError("Cannot execute ToolGraph: No tool nodes have been added to the graph")
+                raise
 
         self._clean_graph_variables()
 
@@ -1534,8 +1686,9 @@ class ToolEngine(Engine):
 
             try:
                 # Call LLM with current messages and tools
+
                 print(f"Calling LLM generate with {len(state.messages)} messages and {len(tool_schemas)} tools")
-                print(f"State messages: {state.messages}")
+                print(f"Tool schemas: {tool_schemas}")
 
                 # Convert LLMMessage objects to dictionaries
                 message_dicts = []
@@ -1768,21 +1921,26 @@ class ToolEngine(Engine):
                                 }
                             )
 
+                    # If there are no tool calls but is_tool_use_response was True,
+                    # this is likely an empty tool_calls list, which should be treated as a non-tool response
                     if not tool_calls:
-                        error_msg = "Failed to extract tool calls from response"
-                        print(error_msg)
-                        if hasattr(state, "error"):
-                            state.error = error_msg
-                        break
+                        print("No tool calls found in response, treating as non-tool response")
+                        # Handle this as a non-tool response by falling through to the final response handling
+                        is_tool_use = False
 
-                    # Process each tool call
+                    # Process tool calls in parallel
+                    print(f"Processing {len(tool_calls)} tool calls in parallel")
+
+                    # First, validate all tool calls and check for pause_before_execution
+                    valid_tool_calls = []
+                    pause_before_tools = []
+
                     for tc in tool_calls:
-                        # Prepare tool call arguments
                         tool_name = tc.get("name", "")
                         tool_id = tc.get("id", f"call_{int(time.time())}")
                         arguments = tc.get("arguments", {})
 
-                        print(f"Processing tool call: {tool_name}({arguments})")
+                        print(f"Validating tool call: {tool_name}({arguments})")
 
                         # Find the tool by name
                         tool_func = node.find_tool_by_name(tool_name)
@@ -1805,88 +1963,99 @@ class ToolEngine(Engine):
                                         "timestamp": time.time(),
                                     }
                                 )
-                            continue  # Skip to next tool
-
-                        print(f"Executing tool: {tool_name}")
+                            continue  # Skip invalid tool
 
                         # Check for pause_before_execution
                         if hasattr(tool_func, "_tool_definition") and tool_func._tool_definition.pause_before_execution:
-                            print(f"Pausing execution before tool: {tool_name}")
-                            state.is_paused = True
-                            state.paused_tool_id = tool_id
-                            state.paused_tool_name = tool_name
-                            state.paused_tool_arguments = arguments
-                            state.paused_after_execution = False
-                            state.paused_tool_result = None
+                            pause_before_tools.append((tool_func, tool_name, tool_id, arguments))
 
-                            # Update chain status to PAUSE
-                            self.graph._update_chain_status(ChainStatus.PAUSE)
+                        valid_tool_calls.append((tool_func, tool_name, tool_id, arguments))
 
-                            # CRITICAL: Save pause state to checkpoint
-                            self._capture_state_checkpoint(node_name, state)
+                    # If any tool requires pause_before_execution, handle the first one
+                    if pause_before_tools:
+                        tool_func, tool_name, tool_id, arguments = pause_before_tools[0]
+                        print(f"Pausing execution before tool: {tool_name}")
+                        state.is_paused = True
+                        state.paused_tool_id = tool_id
+                        state.paused_tool_name = tool_name
+                        state.paused_tool_arguments = arguments
+                        state.paused_after_execution = False
+                        state.paused_tool_result = None
 
-                            # Return early with updated state
-                            if hasattr(state, "is_complete"):
-                                state.is_complete = False
-                            return {"state": state}
+                        # Update chain status to PAUSE
+                        self.graph._update_chain_status(ChainStatus.PAUSE)
 
-                        # Execute the tool and capture the result
-                        # The validate_tool_args function will handle the string-serialized arguments
-                        tool_result = await node.execute_tool(tool_func, arguments, tool_id, state)
+                        # CRITICAL: Save pause state to checkpoint
+                        self._capture_state_checkpoint(node_name, state)
+
+                        # Return early with updated state
+                        if hasattr(state, "is_complete"):
+                            state.is_complete = False
+                        return {"state": state}
+
+                    if not valid_tool_calls:
+                        print("No valid tool calls to execute")
+                        continue
+
+                    # Execute all valid tool calls in parallel
+                    async def execute_single_tool(tool_data):
+                        tool_func, tool_name, tool_id, arguments = tool_data
+                        print(f"Executing tool: {tool_name}")
+
+                        try:
+                            # Execute the tool and capture the result
+                            tool_result = await node.execute_tool(tool_func, arguments, tool_id, state)
+
+                            return tool_result, tool_func, tool_name, tool_id, arguments
+                        except Exception as e:
+                            print(f"Error executing tool {tool_name}: {str(e)}")
+                            # Create a failed tool result
+                            failed_result = ToolCallLog(
+                                id=tool_id,
+                                tool_name=tool_name,
+                                arguments=arguments,
+                                result=None,
+                                success=False,
+                                timestamp=time.time(),
+                                duration_ms=0.0,
+                                error=str(e),
+                            )
+                            return failed_result, tool_func, tool_name, tool_id, arguments
+
+                    # Execute all tools in parallel
+                    print(f"Executing {len(valid_tool_calls)} tools in parallel")
+                    parallel_results = await asyncio.gather(
+                        *[execute_single_tool(tool_data) for tool_data in valid_tool_calls], return_exceptions=True
+                    )
+
+                    # Process results
+                    pause_after_tools = []
+                    abort_after_tools = []
+
+                    for result in parallel_results:
+                        if isinstance(result, Exception):
+                            print(f"Tool execution failed with exception: {result}")
+                            continue
+
+                        tool_result, tool_func, tool_name, tool_id, arguments = result
 
                         # Add the result to tool calls
                         if hasattr(state, "tool_calls"):
-                            # Just append the tool result to the existing list
                             if isinstance(state.tool_calls, list):
                                 state.tool_calls.append(tool_result)
                             else:
-                                # If not a list, initialize a new list
                                 state.tool_calls = [tool_result]
-
-                        # Special handling for cancel_order tool - add to cancelled_orders list
-                        if tool_name == "cancel_order" and hasattr(state, "cancelled_orders"):
-                            if isinstance(state.cancelled_orders, list) and "order_id" in arguments:
-                                state.cancelled_orders.append(arguments["order_id"])
 
                         # Check for pause_after_execution
                         if hasattr(tool_func, "_tool_definition") and tool_func._tool_definition.pause_after_execution:
-                            print(f"Pausing execution after tool: {tool_name}")
-                            state.is_paused = True
-                            state.paused_tool_id = tool_id
-                            state.paused_tool_name = tool_name
-                            state.paused_tool_arguments = arguments
-                            state.paused_after_execution = True
-                            state.paused_tool_result = tool_result
+                            pause_after_tools.append((tool_result, tool_func, tool_name, tool_id, arguments))
 
-                            # Update chain status to PAUSE
-                            self.graph._update_chain_status(ChainStatus.PAUSE)
-
-                            # CRITICAL: Save pause state to checkpoint
-                            self._capture_state_checkpoint(node_name, state)
-
-                            # Return early with updated state
-                            return {"state": state}
-
-                            # Check for abort_after_execution
+                        # Check for abort_after_execution
                         if hasattr(tool_func, "_tool_definition") and tool_func._tool_definition.abort_after_execution:
-                            print(f"Aborting execution after tool: {tool_name}")
+                            abort_after_tools.append((tool_result, tool_func, tool_name, tool_id, arguments))
 
-                            # IMPORTANT: Add the tool result to tool_call_entries before aborting
-                            tool_call_entries.append(tool_result)
-
-                            # Mark loop as complete with the tool result as final output
-                            if hasattr(state, "final_output"):
-                                result_str = str(tool_result.result)
-                                state.final_output = f"Tool {tool_name} executed successfully: {result_str}"
-                            if hasattr(state, "is_complete"):
-                                state.is_complete = True
-                            is_complete = True
-                            buffer_updates["is_complete"] = True
-                            buffer_updates["final_output"] = state.final_output
-                            buffer_updates["tool_calls"] = tool_call_entries
-
-                            # Break out of the tool loop immediately
-                            break
+                        # Add tool result to tool_call_entries
+                        tool_call_entries.append(tool_result)
 
                         # Add tool response to messages
                         anthropic_client = False
@@ -1917,9 +2086,8 @@ class ToolEngine(Engine):
                                     should_show_to_user=False,
                                 )
 
-                            # Add tool result to messages and tool call entries
+                            # Add tool result to messages
                             state.messages.append(tool_message)
-                            tool_call_entries.append(tool_result)
 
                             # Call the on_message callback for the tool result message
                             if hasattr(node, "on_message") and node.on_message:
@@ -1935,8 +2103,47 @@ class ToolEngine(Engine):
                                     }
                                 )
 
-                        # Add to buffer updates
+                    # Handle abort_after_execution (takes precedence over pause_after_execution)
+                    if abort_after_tools:
+                        tool_result, tool_func, tool_name, tool_id, arguments = abort_after_tools[0]
+                        print(f"Aborting execution after tool: {tool_name}")
+
+                        # Mark loop as complete with the tool result as final output
+                        if hasattr(state, "final_output"):
+                            result_str = str(tool_result.result)
+                            state.final_output = f"Tool {tool_name} executed successfully: {result_str}"
+                        if hasattr(state, "is_complete"):
+                            state.is_complete = True
+                        is_complete = True
+                        buffer_updates["is_complete"] = True
+                        buffer_updates["final_output"] = state.final_output
                         buffer_updates["tool_calls"] = tool_call_entries
+
+                        # Break out of the tool loop immediately
+                        break
+
+                    # Handle pause_after_execution
+                    elif pause_after_tools:
+                        tool_result, tool_func, tool_name, tool_id, arguments = pause_after_tools[0]
+                        print(f"Pausing execution after tool: {tool_name}")
+                        state.is_paused = True
+                        state.paused_tool_id = tool_id
+                        state.paused_tool_name = tool_name
+                        state.paused_tool_arguments = arguments
+                        state.paused_after_execution = True
+                        state.paused_tool_result = tool_result
+
+                        # Update chain status to PAUSE
+                        self.graph._update_chain_status(ChainStatus.PAUSE)
+
+                        # CRITICAL: Save pause state to checkpoint
+                        self._capture_state_checkpoint(node_name, state)
+
+                        # Return early with updated state
+                        return {"state": state}
+
+                    # Add to buffer updates
+                    buffer_updates["tool_calls"] = tool_call_entries
                 else:
                     # No tool use, this is the final response
                     print("Response does not contain tool calls, finishing")
