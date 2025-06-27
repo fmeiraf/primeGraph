@@ -7,8 +7,10 @@ specifically focusing on tool/function calling capabilities.
 
 import asyncio
 import json
+import logging
 import os
 import time
+import uuid
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar, Union
 
@@ -19,6 +21,26 @@ from pydantic import BaseModel, Field
 # This helps with mypy's type checking without requiring the dependency
 MessageParam = Dict[str, Any]  # Type alias for Anthropic message parameters
 MessageParamT = TypeVar("MessageParamT", bound=MessageParam)
+
+logger = logging.getLogger(__name__)
+
+
+class LLMMessage(BaseModel):
+    """Message in an LLM conversation"""
+
+    role: str
+    content: Optional[Union[str, List[Dict[str, Any]]]] = None
+    tool_calls: Optional[List[Dict[str, Any]]] = None
+    tool_call_id: Optional[str] = None
+    id: Optional[str] = Field(default_factory=lambda: f"msg_{uuid.uuid4().hex[:12]}")
+    # Alternative timestamp-based ID: Field(default_factory=lambda: f"msg_{int(time.time() * 1000)}")
+    should_show_to_user: bool = True  # Flag to indicate if this message should be shown to the user
+    type: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+    model_config = {
+        "extra": "allow"  # Allow additional fields not specified in the model
+    }
 
 
 class Provider(str, Enum):
@@ -141,6 +163,7 @@ class OpenAIClient(LLMClientBase):
         super().__init__(api_key)
         # Lazy import to avoid dependency issues if not using OpenAI
         self.client: Optional[openai.OpenAI] = None
+        self.provider = "openai"
         try:
             self.client = openai.OpenAI(api_key=api_key or os.environ.get("OPENAI_API_KEY"))
         except ImportError:
@@ -150,7 +173,6 @@ class OpenAIClient(LLMClientBase):
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, bool, Dict[str, Any]]] = None,
         streaming_config: Optional[StreamingConfig] = None,
         **kwargs: Any,
     ) -> Tuple[Any, Any]:
@@ -158,24 +180,10 @@ class OpenAIClient(LLMClientBase):
         if self.client is None:
             raise ImportError("OpenAI package is not installed. Install it with 'pip install openai'")
 
-        # Process tool_choice into OpenAI format
-        formatted_tool_choice = None
-        if tool_choice is not None:
-            if isinstance(tool_choice, str):
-                # Force use of a specific tool
-                formatted_tool_choice = {"type": "function", "function": {"name": tool_choice}}
-            elif isinstance(tool_choice, bool):
-                # True means "any tool", False means "auto"
-                formatted_tool_choice = {"type": "any" if tool_choice else "auto"}
-            elif isinstance(tool_choice, dict):
-                # Pass through existing tool_choice dictionary
-                formatted_tool_choice = tool_choice
-
         api_kwargs = {**kwargs}
         if tools:
             api_kwargs["tools"] = tools
-        if formatted_tool_choice:
-            api_kwargs["tool_choice"] = formatted_tool_choice
+        api_kwargs["tool_choice"] = "auto"
 
         # Ensure a model is specified - use GPT-4 by default for tool calling
         if "model" not in api_kwargs:
@@ -197,19 +205,33 @@ class OpenAIClient(LLMClientBase):
     def extract_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
         """Extract tool calls from OpenAI response."""
         tool_calls = []
+        tool_objects = []
         message = response.choices[0].message
 
         if hasattr(message, "tool_calls") and message.tool_calls:
             for tool_call in message.tool_calls:
+                tool_objects.append(tool_call.model_dump())
                 # Parse arguments - OpenAI provides them as a JSON string
                 try:
                     args = json.loads(tool_call.function.arguments)
                 except json.JSONDecodeError:
                     args = {"input": tool_call.function.arguments}
 
-                tool_calls.append({"id": tool_call.id, "name": tool_call.function.name, "arguments": args})
+                tool_calls.append(
+                    {
+                        "id": tool_call.id,
+                        "name": tool_call.function.name,
+                        "arguments": args,
+                        "type": tool_call.type,
+                    }
+                )
 
-        return tool_calls
+        tool_message = LLMMessage(
+            role="assistant",
+            tool_calls=tool_objects,
+        )
+
+        return tool_calls, tool_message
 
 
 class AnthropicClient(LLMClientBase):
@@ -219,6 +241,7 @@ class AnthropicClient(LLMClientBase):
         """Initialize the Anthropic client."""
         super().__init__(api_key)
         # Lazy import to avoid dependency issues if not using Anthropic
+        self.provider = "anthropic"
         try:
             import anthropic  # type: ignore
 
@@ -412,7 +435,6 @@ class AnthropicClient(LLMClientBase):
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, bool, Dict[str, Any]]] = None,
         streaming_config: Optional[StreamingConfig] = None,
         **kwargs: Any,
     ) -> Tuple[Any, Any]:
@@ -446,28 +468,14 @@ class AnthropicClient(LLMClientBase):
             if role in ["user", "assistant"]:
                 anthropic_messages.append(clean_msg)
 
-        # Process tool_choice for Anthropic format
-        anthropic_tool_choice = None
-        if tool_choice is not None:
-            if isinstance(tool_choice, str):
-                # Use a specific tool
-                anthropic_tool_choice = tool_choice
-            elif isinstance(tool_choice, bool):
-                # True enables tool use, False/None lets model decide
-                anthropic_tool_choice = tool_choice if tool_choice else None  # type: ignore
-            elif isinstance(tool_choice, dict):
-                if tool_choice.get("type") == "function":
-                    anthropic_tool_choice = tool_choice["function"]["name"]
-                elif tool_choice.get("type") == "any":
-                    anthropic_tool_choice = True  # type: ignore
-                else:
-                    anthropic_tool_choice = None
-
         api_kwargs = {**kwargs}
         if tools:
             api_kwargs["tools"] = tools
-        if anthropic_tool_choice is not None:
-            api_kwargs["tool_choice"] = anthropic_tool_choice
+
+        api_kwargs["tool_choice"] = {
+            "type": "auto",
+        }
+
         if system_content:
             api_kwargs["system"] = system_content
 
@@ -523,9 +531,11 @@ class AnthropicClient(LLMClientBase):
     def extract_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
         """Extract tool calls from Anthropic response."""
         tool_calls = []
+        response_objects = []
 
         if hasattr(response, "content") and isinstance(response.content, list):
             for block in response.content:
+                response_objects.append(block.model_dump())
                 if getattr(block, "type", None) == "tool_use":
                     tool_call = {
                         "id": getattr(block, "id", f"tool_{int(time.time())}"),
@@ -534,7 +544,13 @@ class AnthropicClient(LLMClientBase):
                     }
                     tool_calls.append(tool_call)
 
-        return tool_calls
+        tool_message = LLMMessage(
+            role="assistant",
+            content=response_objects,
+            tool_calls=tool_calls,
+        )
+
+        return tool_calls, tool_message
 
 
 class LLMClientFactory:

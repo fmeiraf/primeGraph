@@ -9,9 +9,9 @@ a separate execution path specifically designed for LLM tool interactions.
 import asyncio
 import inspect
 import json
+import logging
 import time
 import traceback
-import uuid
 from enum import Enum
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Set, Type, Union
@@ -24,10 +24,13 @@ from primeGraph.constants import END, START
 from primeGraph.graph.base import Node
 from primeGraph.graph.engine import Engine, ExecutionFrame
 from primeGraph.graph.executable import Graph
-from primeGraph.graph.llm_clients import StreamingConfig, StreamingEventType
+from primeGraph.graph.llm_clients import LLMMessage, StreamingConfig, StreamingEventType
 from primeGraph.graph.tool_validation import validate_tool_args
 from primeGraph.models.state import GraphState
 from primeGraph.types import ChainStatus
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class ToolType(str, Enum):
@@ -89,24 +92,6 @@ class ToolCallLog(BaseModel):
     error: Optional[str] = None
 
 
-class LLMMessage(BaseModel):
-    """Message in an LLM conversation"""
-
-    role: str
-    content: str
-    tool_calls: Optional[List[Dict[str, Any]]] = None
-    tool_call_id: Optional[str] = None
-    id: Optional[str] = Field(default_factory=lambda: f"msg_{uuid.uuid4().hex[:12]}")
-    # Alternative timestamp-based ID: Field(default_factory=lambda: f"msg_{int(time.time() * 1000)}")
-    should_show_to_user: bool = True  # Flag to indicate if this message should be shown to the user
-    type: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
-
-    model_config = {
-        "extra": "allow"  # Allow additional fields not specified in the model
-    }
-
-
 class ToolLoopOptions(BaseModel):
     """Options for configuring a tool loop execution"""
 
@@ -137,7 +122,7 @@ class ToolState(GraphState):
     current_iteration: LastValue[int] = 0  # type: ignore
     max_iterations: LastValue[int] = 10  # type: ignore
     is_complete: LastValue[bool] = False  # type: ignore
-    final_output: LastValue[Optional[str]] = None  # type: ignore
+    final_output: LastValue[Optional[Any]] = None  # type: ignore
     error: LastValue[Optional[str]] = None  # type: ignore
     current_trace: LastValue[Optional[Dict[str, Any]]] = None  # type: ignore
     raw_response_history: History[Any] = Field(default_factory=lambda: [], exclude=False)  # type: ignore
@@ -365,6 +350,29 @@ class ToolNode(Node):
                 return tool_func
         return None
 
+    def convert_tool_result_to_message(self, tool_results: ToolCallLog) -> Dict[str, Any]:
+        """
+        Get the response from the tool call.
+        """
+        if self.llm_client.provider == "anthropic":
+            return LLMMessage(
+                role="user",
+                content=[
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_results.id,
+                        "content": str(tool_results.result),
+                    }
+                ],
+            )
+        else:
+            # default to openai format
+            return LLMMessage(
+                role="tool",
+                content=str(tool_results.result),
+                tool_call_id=tool_results.id,
+            )
+
     async def execute_tool(
         self, tool_func: Callable, arguments: Dict[str, Any], tool_id: str, state: Optional[GraphState] = None
     ) -> ToolCallLog:
@@ -402,7 +410,7 @@ class ToolNode(Node):
 
         duration_ms = (time.time() - start_time) * 1000
 
-        return ToolCallLog(
+        tool_result = ToolCallLog(
             id=tool_id,
             tool_name=tool_name,
             arguments=arguments,  # Keep original arguments for logging
@@ -412,6 +420,10 @@ class ToolNode(Node):
             duration_ms=duration_ms,
             error=error,
         )
+
+        tool_message = self.convert_tool_result_to_message(tool_result)
+
+        return tool_result, tool_message
 
 
 class ToolGraph(Graph):
@@ -438,29 +450,40 @@ class ToolGraph(Graph):
         execution_timeout: int = 60 * 5,
         max_node_iterations: int = 100,
         verbose: bool = False,
+        output_schema: Optional[Type[BaseModel]] = None,
+        system_prompt: Optional[str] = None,
     ):
         """
         Initialize a tool-specific graph.
 
         Args:
             name: Name of the graph
-            state_class: State class for the graph
+            state: Optional state instance for the graph
             max_iterations: Maximum iterations for tool loops
             checkpoint_storage: Optional storage backend for checkpoints
             execution_timeout: Timeout for execution in seconds
             max_node_iterations: Maximum iterations per node
             verbose: Whether to enable verbose logging
+            output_schema: Optional Pydantic BaseModel class defining expected output format
+            system_prompt: Optional custom system prompt for the LLM
         """
         # Initialize state from the state class
 
         # Set graph name and state class as properties
         self.name = name
-        self.state = state or ToolState()
-        self.state_class = state.__class__ if state else ToolState
+        self.state = state if state is not None else ToolState()
+        self.state_class = state.__class__ if state is not None else ToolState
+
+        # Store schema and prompt settings
+        self.output_schema = output_schema
+        self.system_prompt = system_prompt or ""
+
+        # Build the complete system prompt
+        self._build_system_prompt()
 
         # Call parent constructor with all required parameters
         super().__init__(
-            state=state,
+            state=self.state,
             checkpoint_storage=checkpoint_storage,
             execution_timeout=execution_timeout,
             max_node_iterations=max_node_iterations,
@@ -473,8 +496,83 @@ class ToolGraph(Graph):
         )
 
         self.max_iterations = max_iterations
+        self.final_output = None
 
         # START and END nodes are added in the BaseGraph constructor
+
+    def _build_system_prompt(self) -> None:
+        """Build the complete system prompt with schema instructions if needed."""
+        # Start with user's custom prompt or default
+        if not self.system_prompt.strip():
+            self.system_prompt = "You are a helpful AI assistant that can use tools to accomplish tasks."
+
+        # Add schema instructions if output_schema is provided
+        if self.output_schema:
+            try:
+                # Generate JSON schema from Pydantic model
+                json_schema = self.output_schema.model_json_schema()
+
+                schema_instructions = f"""
+
+                Always respond with a JSON object that's compatible with this schema:
+                {json.dumps(json_schema, indent=2)}
+                Don't include any text or Markdown fencing before or after.
+
+                ALWAYS use the tool shared with you that ends the conversation to send this message."""
+
+                self.system_prompt += schema_instructions
+            except Exception as e:
+                print(f"Warning: Could not generate JSON schema from output_schema: {e}")
+
+    def _create_end_conversation_tool(self) -> Callable:
+        """Create the automatic end_conversation tool."""
+
+        @tool(
+            description="End the conversation with the final output. Use this when you have completed the task and want to provide the final result.",
+            tool_type=ToolType.ACTION,
+            abort_after_execution=True,
+        )
+        async def end_conversation(final_output: str, state=None) -> str:
+            """
+            End the conversation with the final output.
+
+            Args:
+                final_output: The final result/answer to provide
+                state: Optional state parameter (injected automatically)
+
+            Returns:
+                The validated final output
+            """
+            # If we have an output schema, validate the final_output against it
+            if self.output_schema:
+                try:
+                    # Try to parse the final_output as JSON and validate against schema
+                    import json
+
+                    # Parse the JSON string
+                    if isinstance(final_output, str):
+                        try:
+                            parsed_data = json.loads(final_output)
+                        except json.JSONDecodeError as e:
+                            raise ValueError(
+                                "Final output must be valid JSON when output_schema " f"is specified. Error: {e}"
+                            )
+                    else:
+                        parsed_data = final_output
+
+                    # Validate against the schema
+                    validated_result = self.output_schema(**parsed_data)
+
+                    # Convert back to JSON string for consistency
+                    return validated_result.model_dump_json()
+
+                except Exception as e:
+                    raise ValueError(f"Final output validation failed: {e}")
+            else:
+                # No schema validation needed, return as-is
+                return final_output
+
+        return end_conversation
 
     def add_tool_node(
         self,
@@ -504,15 +602,23 @@ class ToolGraph(Graph):
         if options is None:
             options = ToolLoopOptions(max_iterations=self.max_iterations)
 
+        # Create a copy of tools and add the automatic end_conversation tool
+        enhanced_tools = tools.copy()
+        enhanced_tools.append(self._create_end_conversation_tool())
+
         node = ToolNode(
             name=name,
-            tools=tools,
+            tools=enhanced_tools,
             llm_client=llm_client,
             options=options,
             state_class=self.state_class,
             on_tool_use=on_tool_use,
             on_message=on_message,
         )
+
+        # Store reference to system prompt and output schema on the node
+        node.system_prompt = self.system_prompt
+        node.output_schema = self.output_schema
 
         # Add the node directly to the nodes dictionary
         self.nodes[name] = node
@@ -872,6 +978,7 @@ class ToolGraph(Graph):
 
         # Update the graph's state with the execution result state
         self.state = result.state
+        self.final_output = self.execution_engine.final_output
 
         return self.chain_id
 
@@ -1044,14 +1151,14 @@ class ToolEngine(Engine):
                         result_str = str(tool_result.result)
 
                         # Create a tool message
-                        if hasattr(tool_result, "id") and tool_result.id:
-                            # This is critical for OpenAI to associate the tool response with the tool call
-                            tool_message = LLMMessage(
-                                role="tool", content=result_str, tool_call_id=tool_id, should_show_to_user=False
-                            )
-                        else:
-                            # Older format without tool_call_id
-                            tool_message = LLMMessage(role="tool", content=result_str)
+                        # Add tool result as user message instead of tool message
+                        # This avoids OpenAI's requirement for tool messages to follow
+                        # assistant messages with tool_calls
+                        tool_message = LLMMessage(
+                            role="user",
+                            content=f"Tool '{state.paused_tool_name}' result: {result_str}",
+                            should_show_to_user=False,
+                        )
 
                         # Add tool result to messages and tool call entries
                         state.messages.append(tool_message)
@@ -1533,57 +1640,73 @@ class ToolEngine(Engine):
 
         return ExecutionResult(state_to_use)
 
-    async def _execute_tool_node(self, frame: ExecutionFrame) -> Dict[str, Any]:
+    def _validate_message_against_schema(
+        self, content: str, output_schema: Optional[Type[BaseModel]]
+    ) -> tuple[bool, Optional[BaseModel], Optional[str]]:
         """
-        Execute a tool node.
-
-        This is a specialized execution loop for tool nodes that interact with LLMs and tools.
-        It handles the conversation loop with an LLM, gathering tool calls, executing them,
-        and building up the conversation history.
+        Validate a message content against the output schema.
 
         Args:
-            frame: The execution frame with the current node and state
+            content: The message content to validate
+            output_schema: The Pydantic model to validate against
 
         Returns:
-            The updated state after execution
+            Tuple of (is_valid, parsed_model, error_message)
         """
-        node_name = frame.node_id
-        node = self.graph.nodes[node_name]
-        state = frame.state
+        if not output_schema or not content.strip():
+            return False, None, None
 
-        # Debug info
-        print(f"\nExecuting tool node: {node_name}")
-        print(f"State type: {type(state)}")
-        print(f"State fields: {state.model_fields.keys() if hasattr(state, 'model_fields') else 'No model_fields'}")
+        try:
+            # Try to parse as JSON first
+            parsed_data = json.loads(content.strip())
 
-        # Add message type debugging
-        if hasattr(state, "messages") and state.messages:
-            print(f"Found {len(state.messages)} messages")
-            for i, msg in enumerate(state.messages):
-                if isinstance(msg, dict):
-                    print(f"  Message {i}: DICT - role={msg.get('role')}, content_len={len(msg.get('content', ''))}")
-                elif hasattr(msg, "role"):
-                    print(
-                        f"  Message {i}: OBJECT - role={msg.role}, \
-                        content_len={len(msg.content) if hasattr(msg, 'content') else 0}"
-                    )
-                else:
-                    print(f"  Message {i}: UNKNOWN TYPE - {type(msg)}")
-        else:
-            print("No messages found in state")
+            # Validate against schema
+            validated_model = output_schema(**parsed_data)
 
-        # Check if the node is a ToolNode
-        if not isinstance(node, ToolNode):
-            error_msg = f"Expected ToolNode, got {type(node)}"
-            if hasattr(state, "error"):
-                state.error = error_msg
-            return {"error": error_msg}
+            return True, validated_model, None
 
-        # Get options from the node
-        max_iterations = node.options.max_iterations
-        if hasattr(state, "max_iterations"):
-            state.max_iterations = max_iterations
+        except json.JSONDecodeError as e:
+            return False, None, f"Invalid JSON format: {e}"
+        except Exception as e:
+            return False, None, f"Schema validation failed: {e}"
 
+    def _handle_system_prompt(self, node: ToolNode, state: ToolState) -> ToolState:
+        # Ensure system prompt is always present as the first message
+        if not state.messages or state.messages[0].role != "system":
+            system_message = LLMMessage(
+                role="system",
+                content=getattr(
+                    node, "system_prompt", "You are a helpful AI assistant that can use tools to accomplish tasks."
+                ),
+                should_show_to_user=False,
+            )
+            state.messages.insert(0, system_message)
+
+        elif state.messages[0].role == "system":
+            # Update existing system message with current system prompt
+            state.messages[0].content = getattr(node, "system_prompt", state.messages[0].content)
+
+        return state
+
+    def _infer_llm_provider(self, node: ToolNode) -> str:
+        # Determine LLM provider and prepare tools
+        provider = "openai"  # Default
+        if (
+            hasattr(node.llm_client, "client")
+            and node.llm_client.client
+            and hasattr(node.llm_client.client, "__class__")
+        ):
+            # Check if this is an Anthropic client by module name
+            client_module = node.llm_client.client.__class__.__module__
+            if "anthropic" in client_module:
+                # Anthropic doesn't support the "auto" string
+                provider = "anthropic"
+        return provider
+
+    def _set_up_streaming(self, node: ToolNode, state: ToolState) -> StreamingConfig:
+        """
+        Set up streaming configuration for a tool node.
+        """
         # Set up streaming configuration if enabled
         streaming_config = node.options.streaming_config
 
@@ -1612,49 +1735,14 @@ class ToolEngine(Engine):
             if streaming_config.redis_channel:
                 state.streaming_channel = streaming_config.redis_channel
 
-        # Initialize tracking variables
-        is_complete = False
-        error = None
-        buffer_updates = {}
-        tool_call_entries = []
+        return streaming_config
 
-        # Initialize conversation if not already present
-        if hasattr(state, "messages") and state.messages:
-            print(f"    Found {len(state.messages)} messages in state")
-        if not hasattr(state, "messages") or not state.messages:
-            # Set default messages if none exist
-            state.messages = []
-
-        # IMPORTANT: Save the state to ensure initial conditions are captured
-        self._capture_state_checkpoint(node_name, state)
-
-        # Determine LLM provider and prepare tools
-        provider = "openai"  # Default
-        if (
-            hasattr(node.llm_client, "client")
-            and node.llm_client.client
-            and hasattr(node.llm_client.client, "__class__")
-        ):
-            # Check if this is an Anthropic client by module name
-            client_module = node.llm_client.client.__class__.__module__
-            if "anthropic" in client_module:
-                # Anthropic doesn't support the "auto" string
-                provider = "anthropic"
-
-        # Generate tool schemas for the provider
-        tool_schemas = node.get_tool_schemas(provider)
-        print(f"Generated {len(tool_schemas)} tool schemas")
-
-        # Begin conversation loop
-        current_iteration = 0
-        if hasattr(state, "current_iteration"):
-            current_iteration = state.current_iteration
-
+    def _handle_pause_state(self, node: ToolNode, state: ToolState) -> ToolState:
         # Handle pause state, if we're resuming from a pause
         if hasattr(state, "is_paused") and state.is_paused:
-            print(f"Resuming from paused state, tool: {state.paused_tool_name}")
+            logger.info(f"Resuming from paused state, tool: {state.paused_tool_name}")
             if hasattr(state, "paused_after_execution") and state.paused_after_execution:
-                print("We're resuming after a tool has already been executed")
+                logger.info("We're resuming after a tool has already been executed")
                 # Handle tool result that was already executed but paused after
                 # We'll skip straight to the result handling
 
@@ -1669,9 +1757,225 @@ class ToolEngine(Engine):
                 # You might want to handle this result differently...
 
                 # Save this state change to checkpoint
-                self._capture_state_checkpoint(node_name, state)
+                self._capture_state_checkpoint(node.name, state)
             # If not paused after execution, we're paused before execution of a tool
             # Let the normal flow handle this
+
+        return state
+
+    def _convert_model_message_to_dict(self, state: ToolState) -> Dict[str, Any]:
+        """
+        Convert a Pydantic model message to a dictionary.
+        """
+        message_dicts = []
+        for msg in state.messages:
+            if hasattr(msg, "model_dump"):
+                # Use pydantic's model_dump method if available
+                message_dicts.append(msg.model_dump())
+            elif hasattr(msg, "dict"):
+                # For older pydantic versions
+                message_dicts.append(msg.dict())
+            elif isinstance(msg, dict):
+                # Handle already-dictionary messages
+                message_dicts.append(msg)
+            else:
+                # Fallback to manual conversion - handle both objects and dicts
+                if isinstance(msg, dict):
+                    msg_dict = {"role": msg.get("role", ""), "content": msg.get("content", "")}
+                    if msg.get("tool_calls") is not None:
+                        msg_dict["tool_calls"] = msg.get("tool_calls")
+                    if msg.get("tool_call_id") is not None:
+                        msg_dict["tool_call_id"] = msg.get("tool_call_id")
+                elif hasattr(msg, "role") and hasattr(msg, "content"):
+                    msg_dict = {"role": msg.role, "content": msg.content}
+                    if hasattr(msg, "tool_calls") and msg.tool_calls is not None:
+                        msg_dict["tool_calls"] = msg.tool_calls
+                    if hasattr(msg, "tool_call_id") and msg.tool_call_id is not None:
+                        msg_dict["tool_call_id"] = msg.tool_call_id
+                else:
+                    # Skip invalid messages
+                    print(f"Warning: Skipping invalid message: {msg}")
+                    continue
+                message_dicts.append(msg_dict)
+
+        logger.debug(f"Converted {len(message_dicts)} messages to dicts")
+        logger.debug(f"Message dicts: {message_dicts}")
+        return message_dicts
+
+    def _store_raw_response(self, state: ToolState, response: Dict[str, Any], content: str) -> ToolState:
+        if hasattr(state, "raw_response_history"):
+            # Convert the response to a safely serializable format
+            try:
+                # Extract only the basic properties that we need and ensure they're serializable
+                serializable_response = {
+                    "timestamp": time.time(),
+                    "provider": getattr(response, "provider", "unknown")
+                    if not isinstance(response, dict)
+                    else response.get("provider", "unknown"),
+                    "id": getattr(response, "id", None) if not isinstance(response, dict) else response.get("id"),
+                    "role": getattr(response, "role", None) if not isinstance(response, dict) else response.get("role"),
+                    "model": getattr(response, "model", None)
+                    if not isinstance(response, dict)
+                    else response.get("model"),
+                    "content_summary": content[:100] + "..." if len(content) > 100 else content,
+                }
+
+                # Add any other safely serializable properties
+                if hasattr(response, "usage"):
+                    try:
+                        serializable_response["usage"] = (
+                            response.usage._asdict() if hasattr(response.usage, "_asdict") else dict(response.usage)
+                        )
+                    except Exception:
+                        # If usage can't be converted, store a string representation
+                        serializable_response["usage"] = str(response.usage)
+
+                state.raw_response_history.append(serializable_response)
+            except Exception as e:
+                # If conversion fails, store a minimal record instead of the raw response
+                print(f"Error converting response for history: {str(e)}")
+                state.raw_response_history.append({"timestamp": time.time(), "error": str(e)})
+
+    def _handle_tool_choice(self, node: ToolNode, tool_schemas: List[Dict[str, Any]]) -> Dict[str, Any]:
+        tool_choice_param = None
+        if (
+            hasattr(node.llm_client, "client")
+            and node.llm_client.client
+            and hasattr(node.llm_client.client, "__class__")
+        ):
+            # Check if this is an Anthropic client by module name
+            client_module = node.llm_client.client.__class__.__module__
+            if "anthropic" in client_module:
+                # Anthropic uses different parameters
+                tool_choice_param = None
+            elif "openai" in client_module:
+                # For OpenAI, we need to format the tool_choice parameter differently
+                tool_choice_param = {"type": "function"}
+                # For OpenAI, it requires a specific format with a function parameter
+                # If any tools are available, use the first one to avoid "missing tool_choice.function" error
+                if tool_schemas and len(tool_schemas) > 0:
+                    first_tool = tool_schemas[0]
+                    if isinstance(first_tool, dict) and "function" in first_tool:
+                        tool_choice_param = {
+                            "type": "function",
+                            "function": {"name": first_tool["function"]["name"]},
+                        }
+        return tool_choice_param
+
+    def _extract_tool_calls(
+        self, node: ToolNode, response: Dict[str, Any], state: ToolState, content: str
+    ) -> List[Dict[str, Any]]:
+        tool_calls = []
+        try:
+            tool_calls, tool_message = node.llm_client.extract_tool_calls(response)
+            logger.debug(f"Extracted {len(tool_calls)} tool calls. Tool calls: {tool_calls}")
+        except Exception as e:
+            logger.error(f"Error extracting tool calls via client: {str(e)}")
+            # Try manual extraction as fallback
+            if hasattr(response, "choices") and response.choices:
+                message = response.choices[0].message
+                if hasattr(message, "tool_calls") and message.tool_calls:
+                    for tc in message.tool_calls:
+                        try:
+                            # The arguments are already parsed by json.loads in the client
+                            args = tc.function.arguments
+                            if isinstance(args, str):
+                                args = json.loads(args)
+                        except Exception as e:
+                            logger.error(f"Error parsing tool arguments: {str(e)}")
+                            args = {"input": tc.function.arguments}
+
+                        tool_calls.append({"id": tc.id, "name": tc.function.name, "arguments": args})
+            elif hasattr(response, "content") and isinstance(response.content, list):
+                for block in response.content:
+                    if getattr(block, "type", None) == "tool_use":
+                        # For Anthropic, the input is already a dict
+                        args = getattr(block, "input", {})
+                        if isinstance(args, str):
+                            try:
+                                args = json.loads(args)
+                            except Exception as e:
+                                logger.error(f"Error parsing tool arguments: {str(e)}")
+                                args = {"input": args}
+
+                        tool_calls.append(
+                            {
+                                "id": getattr(block, "id", f"tool_{int(time.time())}"),
+                                "name": getattr(block, "name", ""),
+                                "arguments": args,
+                            }
+                        )
+
+        logger.debug(f"Extracted {len(tool_calls)} tool calls")
+
+        return state, tool_calls, tool_message
+
+    def _on_message(self, node: ToolNode, message: Dict[str, Any]) -> None:
+        """
+        Handle the on_message callback for a tool node.
+        """
+        if hasattr(node, "on_message") and node.on_message:
+            node.on_message(message)
+
+    async def _execute_tool_node(self, frame: ExecutionFrame) -> Dict[str, Any]:
+        """
+        Execute a tool node.
+
+        This is a specialized execution loop for tool nodes that interact with LLMs and tools.
+        It handles the conversation loop with an LLM, gathering tool calls, executing them,
+        and building up the conversation history.
+
+        Args:
+            frame: The execution frame with the current node and state
+
+        Returns:
+            The updated state after execution
+        """
+        node_name = frame.node_id
+        node = self.graph.nodes[node_name]
+        state = frame.state
+
+        # Debug info
+        logger.info(f"\nExecuting tool node: {node_name}")
+        logger.info(f"State type: {type(state)}")
+        logger.info(
+            f"State fields: {state.model_fields.keys() if hasattr(state, 'model_fields') else 'No model_fields'}"
+        )
+
+        # Get options from the node
+        max_iterations = node.options.max_iterations
+        if hasattr(state, "max_iterations"):
+            state.max_iterations = max_iterations
+
+        # Set up streaming configuration if enabled
+        streaming_config = self._set_up_streaming(node, state)
+
+        # Initialize tracking variables
+        is_complete = False
+        error = None
+        buffer_updates = {}
+        tool_call_entries = []
+
+        # Ensure system prompt is always present as the first message
+        state = self._handle_system_prompt(node, state)
+
+        # IMPORTANT: Save the state to ensure initial conditions are captured
+        self._capture_state_checkpoint(node_name, state)
+
+        # Determine LLM provider and prepare tools
+        provider = self._infer_llm_provider(node)
+
+        # Generate tool schemas for the provider
+        tool_schemas = node.get_tool_schemas(provider)
+        logger.info(f"Generated {len(tool_schemas)} tool schemas")
+
+        # Begin conversation loop
+        current_iteration = 0
+        if hasattr(state, "current_iteration"):
+            current_iteration = state.current_iteration
+
+        # Handle pause state, if we're resuming from a pause
+        state = self._handle_pause_state(node, state)
 
         # Main tool loop
         while current_iteration < max_iterations and not is_complete and not error:
@@ -1687,40 +1991,12 @@ class ToolEngine(Engine):
             try:
                 # Call LLM with current messages and tools
 
-                print(f"Calling LLM generate with {len(state.messages)} messages and {len(tool_schemas)} tools")
-                print(f"Tool schemas: {tool_schemas}")
+                logger.info(f"Calling LLM generate with {len(state.messages)} messages and {len(tool_schemas)} tools")
+                logger.debug(f"Tool schemas: {tool_schemas}")
+                logger.debug(f"State messages: {state.messages}")
 
                 # Convert LLMMessage objects to dictionaries
-                message_dicts = []
-                for msg in state.messages:
-                    if hasattr(msg, "model_dump"):
-                        # Use pydantic's model_dump method if available
-                        message_dicts.append(msg.model_dump())
-                    elif hasattr(msg, "dict"):
-                        # For older pydantic versions
-                        message_dicts.append(msg.dict())
-                    elif isinstance(msg, dict):
-                        # Handle already-dictionary messages
-                        message_dicts.append(msg)
-                    else:
-                        # Fallback to manual conversion - handle both objects and dicts
-                        if isinstance(msg, dict):
-                            msg_dict = {"role": msg.get("role", ""), "content": msg.get("content", "")}
-                            if msg.get("tool_calls") is not None:
-                                msg_dict["tool_calls"] = msg.get("tool_calls")
-                            if msg.get("tool_call_id") is not None:
-                                msg_dict["tool_call_id"] = msg.get("tool_call_id")
-                        elif hasattr(msg, "role") and hasattr(msg, "content"):
-                            msg_dict = {"role": msg.role, "content": msg.content}
-                            if hasattr(msg, "tool_calls") and msg.tool_calls is not None:
-                                msg_dict["tool_calls"] = msg.tool_calls
-                            if hasattr(msg, "tool_call_id") and msg.tool_call_id is not None:
-                                msg_dict["tool_call_id"] = msg.tool_call_id
-                        else:
-                            # Skip invalid messages
-                            print(f"Warning: Skipping invalid message: {msg}")
-                            continue
-                        message_dicts.append(msg_dict)
+                message_dicts = self._convert_model_message_to_dict(state)
 
                 # Get API kwargs, ensuring model is included if specified in options
                 api_kwargs = node.options.api_kwargs.copy()
@@ -1731,41 +2007,15 @@ class ToolEngine(Engine):
                 if node.options.max_tokens and "max_tokens" not in api_kwargs:
                     api_kwargs["max_tokens"] = node.options.max_tokens
 
-                # Format tool_choice properly for the provider
-                tool_choice_param = None
-                if (
-                    hasattr(node.llm_client, "client")
-                    and node.llm_client.client
-                    and hasattr(node.llm_client.client, "__class__")
-                ):
-                    # Check if this is an Anthropic client by module name
-                    client_module = node.llm_client.client.__class__.__module__
-                    if "anthropic" in client_module:
-                        # Anthropic uses different parameters
-                        tool_choice_param = None
-                    elif "openai" in client_module:
-                        # For OpenAI, we need to format the tool_choice parameter differently
-                        tool_choice_param = {"type": "function"}
-                        # For OpenAI, it requires a specific format with a function parameter
-                        # If any tools are available, use the first one to avoid "missing tool_choice.function" error
-                        if tool_schemas and len(tool_schemas) > 0:
-                            first_tool = tool_schemas[0]
-                            if isinstance(first_tool, dict) and "function" in first_tool:
-                                tool_choice_param = {
-                                    "type": "function",
-                                    "function": {"name": first_tool["function"]["name"]},
-                                }
-
                 # Make the API call with proper parameters
                 content, response = await node.llm_client.generate(
                     messages=message_dicts,
                     tools=tool_schemas,
-                    tool_choice=tool_choice_param,
                     streaming_config=streaming_config,
                     **api_kwargs,
                 )
 
-                print(f"LLM raw response: {response}")
+                logger.debug(f"LLM raw response: {response}")
 
                 # Update last stream timestamp if streaming was enabled
                 if streaming_config and streaming_config.enabled and hasattr(state, "last_stream_timestamp"):
@@ -1776,160 +2026,27 @@ class ToolEngine(Engine):
                 try:
                     is_tool_use = node.llm_client.is_tool_use_response(response)
                 except Exception as e:
-                    print(f"Error checking for tool use: {str(e)}")
+                    logger.error(f"Error checking for tool use: {str(e)}")
                     # Continue with default (False)
 
-                print(f"is_tool_use_response: {is_tool_use}")
+                logger.info(f"is_tool_use_response: {is_tool_use}")
 
                 # Store raw response for debugging/logging if needed
-                if hasattr(state, "raw_response_history"):
-                    # Convert the response to a safely serializable format
-                    try:
-                        # Extract only the basic properties that we need and ensure they're serializable
-                        serializable_response = {
-                            "timestamp": time.time(),
-                            "provider": getattr(response, "provider", "unknown")
-                            if not isinstance(response, dict)
-                            else response.get("provider", "unknown"),
-                            "id": getattr(response, "id", None)
-                            if not isinstance(response, dict)
-                            else response.get("id"),
-                            "role": getattr(response, "role", None)
-                            if not isinstance(response, dict)
-                            else response.get("role"),
-                            "model": getattr(response, "model", None)
-                            if not isinstance(response, dict)
-                            else response.get("model"),
-                            "content_summary": content[:100] + "..." if len(content) > 100 else content,
-                        }
+                self._store_raw_response(state, response, content)
 
-                        # Add any other safely serializable properties
-                        if hasattr(response, "usage"):
-                            try:
-                                serializable_response["usage"] = (
-                                    response.usage._asdict()
-                                    if hasattr(response.usage, "_asdict")
-                                    else dict(response.usage)
-                                )
-                            except Exception:
-                                # If usage can't be converted, store a string representation
-                                serializable_response["usage"] = str(response.usage)
-
-                        state.raw_response_history.append(serializable_response)
-                    except Exception as e:
-                        # If conversion fails, store a minimal record instead of the raw response
-                        print(f"Error converting response for history: {str(e)}")
-                        state.raw_response_history.append({"timestamp": time.time(), "error": str(e)})
-
-                # Handle the assistant message
                 if is_tool_use:
-                    print("Response contains tool calls")
-                    # Extract tool calls - extract manually if needed
-                    tool_calls = []
-                    try:
-                        tool_calls = node.llm_client.extract_tool_calls(response)
-                    except Exception as e:
-                        print(f"Error extracting tool calls via client: {str(e)}")
-                        # Try manual extraction as fallback
-                        if hasattr(response, "choices") and response.choices:
-                            message = response.choices[0].message
-                            if hasattr(message, "tool_calls") and message.tool_calls:
-                                for tc in message.tool_calls:
-                                    try:
-                                        # The arguments are already parsed by json.loads in the client
-                                        args = tc.function.arguments
-                                        if isinstance(args, str):
-                                            args = json.loads(args)
-                                    except Exception as e:
-                                        print(f"Error parsing tool arguments: {str(e)}")
-                                        args = {"input": tc.function.arguments}
-
-                                    tool_calls.append({"id": tc.id, "name": tc.function.name, "arguments": args})
-                        elif hasattr(response, "content") and isinstance(response.content, list):
-                            for block in response.content:
-                                if getattr(block, "type", None) == "tool_use":
-                                    # For Anthropic, the input is already a dict
-                                    args = getattr(block, "input", {})
-                                    if isinstance(args, str):
-                                        try:
-                                            args = json.loads(args)
-                                        except Exception as e:
-                                            print(f"Error parsing tool arguments: {str(e)}")
-                                            args = {"input": args}
-
-                                    tool_calls.append(
-                                        {
-                                            "id": getattr(block, "id", f"tool_{int(time.time())}"),
-                                            "name": getattr(block, "name", ""),
-                                            "arguments": args,
-                                        }
-                                    )
-
-                    print(f"Extracted {len(tool_calls)} tool calls")
-
-                    # Create assistant message - without actual tool_calls attached
-                    if content and content.strip():  # Only add if content is not empty
-                        assistant_message = LLMMessage(
-                            role="assistant",
-                            content=content,
-                            id=getattr(response, "id", None) if not isinstance(response, dict) else response.get("id"),
-                        )
-
-                        # For OpenAI, we need to add the tool_calls field to the message
-                        # This is needed for the OpenAI API to properly associate tool responses
-                        if (
-                            hasattr(node.llm_client, "client")
-                            and node.llm_client.client
-                            and hasattr(node.llm_client.client, "__class__")
-                            and "openai" in node.llm_client.client.__class__.__module__
-                        ):
-                            # Extract tool_calls from the response
-                            if hasattr(response, "choices") and response.choices:
-                                message = response.choices[0].message
-                                if hasattr(message, "tool_calls") and message.tool_calls:
-                                    # Store the raw tool_calls in a format that can be serialized
-                                    tool_calls_data = []
-                                    for tc in message.tool_calls:
-                                        tool_calls_data.append(
-                                            {
-                                                "id": tc.id,
-                                                "type": tc.type,
-                                                "function": {
-                                                    "name": tc.function.name,
-                                                    "arguments": tc.function.arguments,
-                                                },
-                                            }
-                                        )
-                                    # Store the serializable version
-                                    assistant_message.tool_calls = tool_calls_data
-                                    # Tool calls are internal messages to the LLM, not user-facing
-                                    assistant_message.should_show_to_user = not bool(tool_calls_data)
-
-                        state.messages.append(assistant_message)
-
-                        # Call the on_message callback for the assistant message with tool calls
-                        if hasattr(node, "on_message") and node.on_message:
-                            node.on_message(
-                                {
-                                    "message_type": "assistant",
-                                    "content": content,
-                                    "raw_response": response,
-                                    "has_tool_calls": True,
-                                    "is_final": False,
-                                    "iteration": current_iteration,
-                                    "timestamp": time.time(),
-                                }
-                            )
+                    state, tool_calls, tool_message = self._extract_tool_calls(node, response, state, content)
+                    state.messages.append(tool_message)
 
                     # If there are no tool calls but is_tool_use_response was True,
                     # this is likely an empty tool_calls list, which should be treated as a non-tool response
                     if not tool_calls:
-                        print("No tool calls found in response, treating as non-tool response")
+                        logger.debug("No tool calls found in response, treating as non-tool response")
                         # Handle this as a non-tool response by falling through to the final response handling
                         is_tool_use = False
 
                     # Process tool calls in parallel
-                    print(f"Processing {len(tool_calls)} tool calls in parallel")
+                    logger.info(f"Processing {len(tool_calls)} tool calls in parallel")
 
                     # First, validate all tool calls and check for pause_before_execution
                     valid_tool_calls = []
@@ -1940,7 +2057,7 @@ class ToolEngine(Engine):
                         tool_id = tc.get("id", f"call_{int(time.time())}")
                         arguments = tc.get("arguments", {})
 
-                        print(f"Validating tool call: {tool_name}({arguments})")
+                        logger.info(f"Validating tool call: {tool_name}({arguments})")
 
                         # Find the tool by name
                         tool_func = node.find_tool_by_name(tool_name)
@@ -1952,17 +2069,17 @@ class ToolEngine(Engine):
                             state.messages.append(tool_error_message)
 
                             # Call the on_message callback for the error message
-                            if hasattr(node, "on_message") and node.on_message:
-                                node.on_message(
-                                    {
-                                        "message_type": "system",
-                                        "content": f"Error: {error_msg}",
-                                        "is_final": False,
-                                        "is_error": True,
-                                        "iteration": current_iteration,
-                                        "timestamp": time.time(),
-                                    }
-                                )
+                            self._on_message(
+                                node,
+                                {
+                                    "message_type": "system",
+                                    "content": f"Error: {error_msg}",
+                                    "is_final": False,
+                                    "is_error": True,
+                                    "iteration": current_iteration,
+                                    "timestamp": time.time(),
+                                },
+                            )
                             continue  # Skip invalid tool
 
                         # Check for pause_before_execution
@@ -1974,7 +2091,8 @@ class ToolEngine(Engine):
                     # If any tool requires pause_before_execution, handle the first one
                     if pause_before_tools:
                         tool_func, tool_name, tool_id, arguments = pause_before_tools[0]
-                        print(f"Pausing execution before tool: {tool_name}")
+                        logger.info(f"Pausing execution before tool: {tool_name}")
+
                         state.is_paused = True
                         state.paused_tool_id = tool_id
                         state.paused_tool_name = tool_name
@@ -1994,21 +2112,21 @@ class ToolEngine(Engine):
                         return {"state": state}
 
                     if not valid_tool_calls:
-                        print("No valid tool calls to execute")
+                        logger.debug("No valid tool calls to execute")
                         continue
 
                     # Execute all valid tool calls in parallel
                     async def execute_single_tool(tool_data):
                         tool_func, tool_name, tool_id, arguments = tool_data
-                        print(f"Executing tool: {tool_name}")
+                        logger.info(f"Executing tool: {tool_name}")
 
                         try:
                             # Execute the tool and capture the result
-                            tool_result = await node.execute_tool(tool_func, arguments, tool_id, state)
+                            tool_result, tool_message = await node.execute_tool(tool_func, arguments, tool_id, state)
 
-                            return tool_result, tool_func, tool_name, tool_id, arguments
+                            return tool_result, tool_message, tool_func, tool_name, tool_id, arguments
                         except Exception as e:
-                            print(f"Error executing tool {tool_name}: {str(e)}")
+                            logger.error(f"Error executing tool {tool_name}: {str(e)}")
                             # Create a failed tool result
                             failed_result = ToolCallLog(
                                 id=tool_id,
@@ -2020,10 +2138,12 @@ class ToolEngine(Engine):
                                 duration_ms=0.0,
                                 error=str(e),
                             )
-                            return failed_result, tool_func, tool_name, tool_id, arguments
+                            return failed_result, None, tool_func, tool_name, tool_id, arguments
 
                     # Execute all tools in parallel
-                    print(f"Executing {len(valid_tool_calls)} tools in parallel")
+                    logger.info(f"Executing {len(valid_tool_calls)} tools in parallel")
+
+                    # TODO: Add a force break when end_conversation is triggered
                     parallel_results = await asyncio.gather(
                         *[execute_single_tool(tool_data) for tool_data in valid_tool_calls], return_exceptions=True
                     )
@@ -2034,10 +2154,11 @@ class ToolEngine(Engine):
 
                     for result in parallel_results:
                         if isinstance(result, Exception):
-                            print(f"Tool execution failed with exception: {result}")
+                            logger.error(f"Tool execution failed with exception: {result}")
                             continue
 
-                        tool_result, tool_func, tool_name, tool_id, arguments = result
+                        tool_result, tool_message, tool_func, tool_name, tool_id, arguments = result
+                        logger.info(f"Tool result: {tool_result}")
 
                         # Add the result to tool calls
                         if hasattr(state, "tool_calls"):
@@ -2057,51 +2178,24 @@ class ToolEngine(Engine):
                         # Add tool result to tool_call_entries
                         tool_call_entries.append(tool_result)
 
-                        # Add tool response to messages
-                        anthropic_client = False
-                        if (
-                            hasattr(node, "llm_client")
-                            and hasattr(node.llm_client, "client")
-                            and node.llm_client.client
-                            and hasattr(node.llm_client.client, "__class__")
-                        ):
-                            client_module = node.llm_client.client.__class__.__module__
-                            anthropic_client = "anthropic" in client_module
-
-                        result_str = str(tool_result.result)
-                        if result_str and result_str.strip():  # Only add if result is not empty
-                            if anthropic_client:
-                                # For Anthropic, use a simpler format
-                                tool_message = LLMMessage(
-                                    role="user",
-                                    content=f"Tool result for {tool_name}: {result_str}",
-                                    should_show_to_user=False,
-                                )
-                            else:
-                                # For OpenAI, use the standard format
-                                tool_message = LLMMessage(
-                                    role="tool",
-                                    content=result_str,
-                                    tool_call_id=tool_id,
-                                    should_show_to_user=False,
-                                )
-
+                        if tool_message:
                             # Add tool result to messages
                             state.messages.append(tool_message)
 
                             # Call the on_message callback for the tool result message
-                            if hasattr(node, "on_message") and node.on_message:
-                                node.on_message(
-                                    {
-                                        "message_type": "tool",
-                                        "content": result_str,
-                                        "tool_id": tool_id,
-                                        "tool_name": tool_name,
-                                        "is_final": False,
-                                        "iteration": current_iteration,
-                                        "timestamp": time.time(),
-                                    }
-                                )
+                            self._on_message(node, tool_message)
+
+                        if tool_name == "end_conversation":
+                            logger.info("End conversation triggered, breaking out of tool loop")
+                            is_complete = True
+
+                            logger.info(f"Node output schema: {node.output_schema}")
+
+                            buffer_updates["is_complete"] = True
+                            buffer_updates["final_output"] = node.output_schema(**json.loads(tool_result.result))
+                            self.final_output = node.output_schema(**json.loads(tool_result.result))
+                            buffer_updates["tool_calls"] = tool_call_entries
+                            break
 
                     # Handle abort_after_execution (takes precedence over pause_after_execution)
                     if abort_after_tools:
@@ -2110,8 +2204,7 @@ class ToolEngine(Engine):
 
                         # Mark loop as complete with the tool result as final output
                         if hasattr(state, "final_output"):
-                            result_str = str(tool_result.result)
-                            state.final_output = f"Tool {tool_name} executed successfully: {result_str}"
+                            state.final_output = tool_result.result
                         if hasattr(state, "is_complete"):
                             state.is_complete = True
                         is_complete = True
@@ -2146,69 +2239,59 @@ class ToolEngine(Engine):
                     buffer_updates["tool_calls"] = tool_call_entries
                 else:
                     # No tool use, this is the final response
-                    print("Response does not contain tool calls, finishing")
+                    print("Response does not contain tool calls, checking for final response")
+
+                    # Check if we have an output schema and validate against it
+                    output_schema = getattr(node, "output_schema", None)
+
+                    final_content = content.strip() if content else None
+
+                    if output_schema and final_content:
+                        is_valid, validated_model, error_msg = self._validate_message_against_schema(
+                            content, output_schema
+                        )
+                        if is_valid:
+                            state.final_output = validated_model
+                            final_content = validated_model.model_dump_json()
+                        else:
+                            logger.debug(
+                                "LLM message does not validate against output schema, providing feedback to model."
+                            )
+                            assistant_message = LLMMessage(
+                                role="assistant",
+                                content=f"Error: Final message does not contain any tools calls or a valid output schema. "
+                                f"Final message: {final_content}",
+                                should_show_to_user=True,
+                                id=getattr(response, "id", None)
+                                if not isinstance(response, dict)
+                                else response.get("id"),
+                            )
+                            # Add to messages
+                            state.messages.append(assistant_message)
+
+                            # Call the on_message callback if provided
+                            self._on_message(node, assistant_message)
+                            continue
 
                     # Create assistant message for final response
-                    if content and content.strip():  # Only add if content is not empty
+                    if final_content:  # Only add if content is not empty
                         assistant_message = LLMMessage(
                             role="assistant",
-                            content=content,
+                            content=final_content,
                             should_show_to_user=True,
                             id=getattr(response, "id", None) if not isinstance(response, dict) else response.get("id"),
                         )
 
                         # Add to messages
                         state.messages.append(assistant_message)
+                        if not state.final_output:
+                            state.final_output = final_content
 
                         # Call the on_message callback if provided
-                        if hasattr(node, "on_message") and node.on_message:
-                            node.on_message(
-                                {
-                                    "message_type": "assistant",
-                                    "content": content,
-                                    "raw_response": response,
-                                    "has_tool_calls": False,
-                                    "is_final": True,
-                                    "iteration": current_iteration,
-                                    "timestamp": time.time(),
-                                }
-                            )
+                        self._on_message(node, assistant_message)
 
-                        # Mark as complete with final output
-                        if hasattr(state, "final_output"):
-                            state.final_output = content
-                        if hasattr(state, "is_complete"):
-                            state.is_complete = True
-                        is_complete = True
-                        buffer_updates["is_complete"] = True
-                        buffer_updates["final_output"] = content
-
-                        # Save the raw response
-                        if hasattr(state, "current_trace"):
-                            # Create a safely serializable trace object
-                            try:
-                                trace_data = {"timestamp": time.time(), "content": content, "is_final": True}
-
-                                # Try to extract useful serializable properties
-                                if hasattr(response, "model"):
-                                    trace_data["model"] = response.model
-                                if hasattr(response, "usage") and response.usage:
-                                    try:
-                                        trace_data["usage"] = (
-                                            response.usage._asdict()
-                                            if hasattr(response.usage, "_asdict")
-                                            else dict(response.usage)
-                                        )
-                                    except Exception:
-                                        trace_data["usage"] = str(response.usage)
-
-                                state.current_trace = trace_data
-                            except Exception as e:
-                                print(f"Error creating trace data: {str(e)}")
-                                state.current_trace = {"error": str(e), "timestamp": time.time()}
-
-                        buffer_updates["current_trace"] = state.current_trace
                         break
+
             except Exception as e:
                 # Record error
                 error = str(e)
@@ -2227,17 +2310,17 @@ class ToolEngine(Engine):
                     )
 
                 # Call the on_message callback for the error
-                if hasattr(node, "on_message") and node.on_message:
-                    node.on_message(
-                        {
-                            "message_type": "system",
-                            "content": f"Error: {error}",
-                            "is_final": True,
-                            "is_error": True,
-                            "iteration": current_iteration,
-                            "timestamp": time.time(),
-                        }
-                    )
+                self._on_message(
+                    node,
+                    {
+                        "message_type": "system",
+                        "content": f"Error: {error}",
+                        "is_final": True,
+                        "is_error": True,
+                        "iteration": current_iteration,
+                        "timestamp": time.time(),
+                    },
+                )
                 break
 
             # Increment iteration counter
@@ -2258,17 +2341,17 @@ class ToolEngine(Engine):
             buffer_updates["final_output"] = max_iter_message
 
             # Call the on_message callback for the max iterations message
-            if hasattr(node, "on_message") and node.on_message:
-                node.on_message(
-                    {
-                        "message_type": "system",
-                        "content": max_iter_message,
-                        "is_final": True,
-                        "is_error": False,
-                        "iteration": current_iteration,
-                        "timestamp": time.time(),
-                    }
-                )
+            self._on_message(
+                node,
+                {
+                    "message_type": "system",
+                    "content": max_iter_message,
+                    "is_final": True,
+                    "is_error": False,
+                    "iteration": current_iteration,
+                    "timestamp": time.time(),
+                },
+            )
 
             # Add a system message about max iterations
             if hasattr(state, "messages"):
