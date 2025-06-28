@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.9.11] - 2025-06-27
+
+### Added
+
+- N/A
+
+### Changed
+
+- Revamped `ToolGraph` so the loops work better now and you can specify a structured output for the final answer.
+
 # [1.9.10] - 2025-06-16
 
 ### Added

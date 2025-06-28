@@ -142,7 +142,7 @@ class LLMClientBase:
         """
         raise NotImplementedError("Subclasses must implement this method")
 
-    def extract_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
+    def extract_tool_calls(self, response: Any) -> Tuple[List[Dict[str, Any]], LLMMessage]:
         """
         Extract tool calls from the response.
 
@@ -150,7 +150,7 @@ class LLMClientBase:
             response: Raw response from the LLM API
 
         Returns:
-            List of dictionaries with tool call information
+            Tuple of (tool_calls_list, tool_message)
         """
         raise NotImplementedError("Subclasses must implement this method")
 
@@ -173,6 +173,7 @@ class OpenAIClient(LLMClientBase):
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, bool, Dict[str, Any]]] = None,
         streaming_config: Optional[StreamingConfig] = None,
         **kwargs: Any,
     ) -> Tuple[Any, Any]:
@@ -202,7 +203,7 @@ class OpenAIClient(LLMClientBase):
         message = response.choices[0].message
         return hasattr(message, "tool_calls") and message.tool_calls
 
-    def extract_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
+    def extract_tool_calls(self, response: Any) -> Tuple[List[Dict[str, Any]], LLMMessage]:
         """Extract tool calls from OpenAI response."""
         tool_calls = []
         tool_objects = []
@@ -435,6 +436,7 @@ class AnthropicClient(LLMClientBase):
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, bool, Dict[str, Any]]] = None,
         streaming_config: Optional[StreamingConfig] = None,
         **kwargs: Any,
     ) -> Tuple[Any, Any]:
@@ -528,7 +530,7 @@ class AnthropicClient(LLMClientBase):
             return any(getattr(block, "type", None) == "tool_use" for block in response.content)
         return False
 
-    def extract_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
+    def extract_tool_calls(self, response: Any) -> Tuple[List[Dict[str, Any]], LLMMessage]:
         """Extract tool calls from Anthropic response."""
         tool_calls = []
         response_objects = []

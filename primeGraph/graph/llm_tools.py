@@ -528,7 +528,8 @@ class ToolGraph(Graph):
         """Create the automatic end_conversation tool."""
 
         @tool(
-            description="End the conversation with the final output. Use this when you have completed the task and want to provide the final result.",
+            description="End the conversation with the final output. "
+            "Use this when you have completed the task and want to provide the final result.",
             tool_type=ToolType.ACTION,
             abort_after_execution=True,
         )
@@ -1030,6 +1031,10 @@ class ToolEngine(Engine):
 
     This engine should be used for any graph containing ToolNode instances.
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.final_output = None
 
     async def resume(self, state: GraphState, execute_tool: bool = True) -> Any:
         """
@@ -2259,8 +2264,8 @@ class ToolEngine(Engine):
                             )
                             assistant_message = LLMMessage(
                                 role="assistant",
-                                content=f"Error: Final message does not contain any tools calls or a valid output schema. "
-                                f"Final message: {final_content}",
+                                content=f"Error: Final message does not contain any tools "
+                                f"calls or a valid output schema. Final message: {final_content}",
                                 should_show_to_user=True,
                                 id=getattr(response, "id", None)
                                 if not isinstance(response, dict)
